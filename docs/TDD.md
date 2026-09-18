@@ -103,8 +103,8 @@ Every value that reaches JavaScript is below $`2^{32}`$; bit tests are written `
 | Rank / Link Rating | The same `level` column, distinguished only by `TYPE_XYZ` / `TYPE_LINK`. `evaluate` treats Level as undefined for those types even though they are outside the Main Deck population | `ocgcore/card.cpp:876-996` |
 | Link `def` | Holds the link-marker mask, not DEF (EDOPro zeroes it). `evaluate` treats DEF as undefined for `TYPE_LINK` | `gframe/data_manager.cpp:140-144` |
 | `?` ATK/DEF | Stored as `-2`; there is no named constant. EDOPro's numeric filters reject every negative, and so do ours — otherwise `ATK 1500 or less` returns Tragoedia | `gframe/deck_con.cpp:1204-1211` |
-| Setcodes | Up to four non-zero 16-bit codes; zero slots are skipped, not terminators. **Read from the alias target when `alias != 0`**, as both client and core do — 31 alternate-art rows carry `setcode = 0` | `gframe/data_manager.cpp:127-136`, `gframe/deck_con.cpp:1325-1331`, `ocgcore/card.cpp:333` |
-| Archetype match | `(q & 0xfff) == (c & 0xfff) && (q & c) == q` for query `q`, card code `c`: low 12 bits equal and the card's high nibble a **superset** of the query's — the nibble is a bitmask, not an enumerated sub-type (`0x3066` "Magnet Warrior" matches both `0x1066` and `0x2066`). Note the core's parameter order: `match_setcode(set_code, to_match)` takes the *query* first. EDOPro's own deck-editor search uses exact equality and therefore disagrees with the core; we follow the core | `ocgcore/card.h:185-187`, `ocgcore/libcard.cpp:641-645` |
+| Setcodes | Up to four non-zero 16-bit codes; zero slots are skipped, not terminators. **Read from the alias target when `alias != 0`**, as both client and core do — 31 alternate-art rows carry `setcode = 0`. The faithful consequence: a "treated as" card's *own* setcode is ignored (Cyber Harpie Lady `80316585` reports Harpie's `0x64`, not its own `0x93`) — the only such row in BabelCDB | `gframe/data_manager.cpp:127-136`, `gframe/deck_con.cpp:1325-1331`, `ocgcore/card.cpp:333` |
+| Archetype match | `(q & 0xfff) == (c & 0xfff) && (q & c) == q` for query `q`, card code `c`: low 12 bits equal and the card's high nibble a **superset** of the query's — the nibble is a bitmask, not an enumerated sub-type. The rule is **asymmetric**: a card coded `0x3066` ("Magnet Warrior") is matched by the queries `0x1066` and `0x2066`, but a card coded `0x1066` is *not* matched by the query `0x3066`. Note the core's parameter order: `match_setcode(set_code, to_match)` takes the *query* first. EDOPro's own deck-editor search uses exact equality and therefore disagrees with the core; we follow the core | `ocgcore/card.h:185-187`, `ocgcore/libcard.cpp:641-645` |
 
 ### 4.2 Which rows are cards you can put in a Main Deck
 
@@ -131,13 +131,13 @@ On BabelCDB@47fc046 this yields 12,252 rows before alias handling.
 
 Databases are collected as the sibling does — non-empty `cards.cdb`, then `expansions/` and `repositories/` recursively, sorted — and later rows **replace** earlier rows with the same id. This matters more than it looks: one `cards.cdb` is not the card pool. On the examined install the base database is from 2025-04 and `cards.delta.cdb` replaces 879 of its rows and adds 1,027.
 
-One documented deviation: EDOPro loads repositories in the order of its `configs.json`, we load them in sorted path order. The card service counts ids whose rows *differ* between two repositories and reports the count in its status, so a real conflict is visible rather than silent.
+One documented deviation: EDOPro loads repositories in the order of its `configs.json`, we load them in sorted path order. The two orders can only disagree about which of **two different repositories** wins an id, so that — and only that — is a *conflict*: each database source carries the name of the repository it came from (none for `cards.cdb` and `expansions/`), and `status.conflicts` counts ids on which two differently-named repositories carry differing rows. A base row replaced by a repository row is the system working as designed and is reported separately as `status.replacedRows` (821 on the examined install, all from `cards.delta.cdb`); counting those as conflicts, as the first draft of this section did, would make the figure permanently alarming and therefore useless.
 
 ### 4.5 Archetype names
 
 `strings.conf` is layered in the same order and by the same rule as EDOPro — `config/strings.conf`, then `expansions/strings.conf`, then each repository's — with later files overriding same-key entries (`gframe/data_handler.cpp:130-131`, `gframe/game.cpp:2652`). Layering is **required for correctness**, not polish: the delta repository reassigns `0x1066` from "Symphonic Warrior" to "Magnet" and `0x2066` from "Magnet Warrior" to "Warrior", so a base-only table resolves `"Magnet Warrior"` to the wrong code.
 
-Line format, per the client's parser (`gframe/data_manager.cpp:229-266`): lines not starting with `!` are ignored; `!setname <hex> <rest of line>`, single-space delimited, name may contain spaces; malformed lines are skipped silently. A name may hold `|`-separated alternates (`!setname 0x46 Polymerization|Fusion`), each of which resolves to the code. A quoted archetype in a description resolves by normalized exact match over all alternates; no match, or a match to several codes, is a parse error listing candidates. If no `strings.conf` is found, archetype descriptions are unavailable and the status says so (PRD §11).
+Line format, per the client's parser (`gframe/data_manager.cpp:229-266`): lines not starting with `!` are ignored; `!setname <hex> <rest of line>`, single-space delimited, name may contain spaces; malformed lines are skipped silently. A name may hold `|`-separated alternates (`!setname 0x46 Polymerization|Fusion`), each of which resolves to the code. A quoted archetype in a description resolves by normalized exact match over all alternates; no match, or a match to several codes, is a parse error listing the candidates with their codes. Ambiguity is real, not hypothetical — on the examined install `"Warrior"` maps to `0x66` and `0x2066`, and `"Magnet"` to `0x534` and `0x1066` — so the grammar lets a code disambiguate: `"Warrior":0x2066`. Template files always store the code (§19), so ambiguity can only arise while typing. If no `strings.conf` is found, archetype descriptions are unavailable and the status says so (PRD §11).
 
 ### 4.6 `CardRecord` and `CardIndex`
 
@@ -173,7 +173,7 @@ qualifier   := ["non-"] monsterFlag
              | stSubkind
              | "level" levelSpec
              | statSpec
-             | QUOTED                            -- archetype, e.g. "Sky Striker"
+             | QUOTED ( ":" HEXCODE )?           -- archetype, e.g. "Sky Striker", "Warrior":0x2066
 valueList   := VALUE ( "/" VALUE )*              -- FIRE/WATER, Warrior/Beast-Warrior
 levelSpec   := INT ( "or lower" | "or higher" | "-" INT | ( "/" INT )+ )?
 statSpec    := ("ATK"|"DEF") ( INT ( "or less" | "or more" )? | "?" )

@@ -17,7 +17,7 @@ combinatorial probability plus a card-database lookup layer.
 | Milestone | State |
 | --- | --- |
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
-| M0 — de-risk spike (headless) | **In progress**: M0a scaffold |
+| M0 — de-risk spike (headless) | **In progress**: M0a scaffold, M0b card data |
 | M1 — exact engine + optimizer (headless) | Not started |
 | M2 — app MVP | Not started |
 | M3 — polish | Not started |
@@ -38,6 +38,21 @@ npm run typecheck   # whole project, then src/core alone under its purity tsconf
 npm run lint        # biome: lint + format check  (npm run format to fix)
 npm run build       # electron-vite production build into out/
 npm run check:licenses
+```
+
+### Real-data tests
+
+`tests/core/cards/realdata.test.ts` checks `src/core/cards` against real card
+data. It is skipped unless one of these is set, so CI never runs it — run it
+locally before touching `src/core/cards`:
+
+| Variable | Points at | Asserts |
+| --- | --- | --- |
+| `BABELCDB_PATH` | `cards.cdb` in a checkout of [BabelCDB](https://github.com/ProjectIgnis/BabelCDB) at `47fc046` | Population size, row decoding, the three kinds of `alias`, the pre-release layers beside it |
+| `EDOPRO_WORKDIR` | An EDOPro install directory | Layered `strings.conf` archetype names; Type and Attribute names against the client's own |
+
+```sh
+BABELCDB_PATH=~/repos/deps/babelcdb/cards.cdb EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm test
 ```
 
 ### Layout
