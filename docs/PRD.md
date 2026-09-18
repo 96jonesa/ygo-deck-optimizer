@@ -2,7 +2,7 @@
 
 | Status | Author | Date | Tracking | Related |
 | --- | --- | --- | --- | --- |
-| Draft — awaiting decisions D1–D7 (§13) | Andy (with Claude) | 2026-09-17 | TBD (Linear issue pending) | [ygo-combo-solver-gui](https://github.com/96jonesa/ygo-combo-solver-gui) (source of the `CardIndex` reader) |
+| Draft — awaiting decisions D1–D7 (§13) | Andy (with Claude) | 2026-09-17 | [YGO-5](https://linear.app/ygo-deck-optimizer/issue/YGO-5/write-prd-for-the-concept-aware-deck-ratio-optimizer) | [ygo-combo-solver-gui](https://github.com/96jonesa/ygo-combo-solver-gui) (source of the `CardIndex` reader) |
 
 ## 1. Summary
 
