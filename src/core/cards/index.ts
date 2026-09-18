@@ -322,14 +322,29 @@ export class CardIndex {
     return this.byCode.get(code);
   }
 
+  /**
+   * Every record whose whole name equals `name` after normalization, by code.
+   * Names are not unique — "Black Luster Soldier" is two cards (TDD §4.3) — so
+   * a `[Card Name]` reference that gets several back is an error, not a pick.
+   */
+  findByName(name: string): CardRecord[] {
+    const needle = normalize(name.trim());
+    const hits: CardRecord[] = [];
+    const start = partitionPoint(this.alphabetical, (e) => e.normalized < needle);
+    for (let i = start; this.alphabetical[i]?.normalized === needle; i++)
+      hits.push(this.alphabetical[i]!.card);
+    return hits;
+  }
+
   /** Every record, alphabetical by normalized name (ties by code). */
   *all(): IterableIterator<CardRecord> {
     for (const entry of this.alphabetical) yield entry.card;
   }
 
   /**
-   * How many records satisfy `pred`. Takes a predicate until descriptions
-   * arrive (M0c); `count(desc)` then wraps `evaluate` (TDD §5.3).
+   * How many records satisfy `pred`. For a description, pass
+   * `matcher(desc, groups)` from `core/desc/evaluate` (TDD §5.3): `core/desc`
+   * builds on `core/cards`, so the index takes a predicate rather than import it.
    */
   count(pred: (card: CardRecord) => boolean): number {
     let n = 0;

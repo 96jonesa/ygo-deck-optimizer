@@ -3,6 +3,7 @@ import {
   ATTRIBUTE_DARK,
   ATTRIBUTE_DIVINE,
   ATTRIBUTES,
+  CORE_TYPES,
   OFFICIAL_RACES,
   RACE_BEASTWARRIOR,
   RACE_CREATORGOD,
@@ -12,14 +13,42 @@ import {
   RACE_SEASERPENT,
   RACE_WARRIOR,
   RACE_WINGEDBEAST,
+  TYPE_CONTINUOUS,
+  TYPE_COUNTER,
+  TYPE_EQUIP,
+  TYPE_FIELD,
+  TYPE_FUSION,
+  TYPE_LINK,
+  TYPE_MAXIMUM,
+  TYPE_MONSTER,
+  TYPE_QUICKPLAY,
+  TYPE_RITUAL,
+  TYPE_SPELL,
+  TYPE_SPSUMMON,
+  TYPE_SYNCHRO,
+  TYPE_TOKEN,
+  TYPE_TRAP,
+  TYPE_TRAPMONSTER,
+  TYPE_TUNER,
+  TYPE_XYZ,
 } from '../../../src/core/cards/constants';
 import {
   ATTRIBUTE_VOCABULARY,
   attributeFromName,
   attributeName,
+  KIND_VOCABULARY,
+  KINDS,
+  kindEntry,
+  MONSTER_FLAG_VOCABULARY,
+  MONSTER_FLAGS,
+  monsterFlagEntry,
   RACE_VOCABULARY,
   raceFromName,
   raceName,
+  ST_SUBKIND_BITS,
+  ST_SUBKIND_VOCABULARY,
+  ST_SUBKINDS,
+  stSubkindEntry,
   type VocabularyEntry,
 } from '../../../src/core/cards/vocabulary';
 import { normalize } from '../../../src/core/util/normalize';
@@ -141,6 +170,128 @@ describe('attributeFromName', () => {
     expect(attributeFromName('Divine-Beast')).toBeUndefined();
     expect(attributeFromName('Shadow')).toBeUndefined();
   });
+});
+
+describe('KIND_VOCABULARY', () => {
+  it('names each kind once, in canonical order, by its TYPE_* bit', () => {
+    expect(KIND_VOCABULARY.map((entry) => entry.kind)).toEqual([...KINDS]);
+    expect(KIND_VOCABULARY.map((entry) => entry.bit)).toEqual([
+      TYPE_MONSTER,
+      TYPE_SPELL,
+      TYPE_TRAP,
+    ]);
+    expect(KIND_VOCABULARY.map((entry) => entry.name)).toEqual(['Monster', 'Spell', 'Trap']);
+  });
+});
+
+describe('MONSTER_FLAG_VOCABULARY', () => {
+  it('gives every monster flag exactly one entry, in canonical order', () => {
+    expect(MONSTER_FLAG_VOCABULARY.map((entry) => entry.flag)).toEqual([...MONSTER_FLAGS]);
+    expect(MONSTER_FLAGS).toHaveLength(10);
+  });
+
+  it('maps each flag to the TYPE_* constant of the same name', () => {
+    for (const entry of MONSTER_FLAG_VOCABULARY) {
+      const constant = `TYPE_${entry.flag.toUpperCase()}` as keyof typeof CORE_TYPES;
+      expect(entry.bit, entry.flag).toBe(CORE_TYPES[constant]);
+      expect(entry.name.toLowerCase()).toBe(entry.flag);
+    }
+  });
+
+  it('pins a literal, so that a drifted constant cannot hide behind its name', () => {
+    expect(monsterFlagEntry('tuner').bit).toBe(0x1000);
+    expect(monsterFlagEntry('toon').bit).toBe(0x400000);
+  });
+});
+
+describe('ST_SUBKIND_VOCABULARY', () => {
+  it('gives every sub-kind exactly one entry, in canonical order', () => {
+    expect(ST_SUBKIND_VOCABULARY.map((entry) => entry.subkind)).toEqual([...ST_SUBKINDS]);
+    expect(ST_SUBKINDS).toHaveLength(7);
+  });
+
+  it('maps each sub-kind to its TYPE_* bit, and "normal" to none', () => {
+    expect(Object.fromEntries(ST_SUBKIND_VOCABULARY.map((e) => [e.subkind, e.bit]))).toEqual({
+      normal: 0,
+      'quick-play': TYPE_QUICKPLAY,
+      continuous: TYPE_CONTINUOUS,
+      equip: TYPE_EQUIP,
+      field: TYPE_FIELD,
+      ritual: TYPE_RITUAL,
+      counter: TYPE_COUNTER,
+    });
+  });
+
+  it('says which kinds each sub-kind exists for', () => {
+    const spellOnly = ['quick-play', 'equip', 'field', 'ritual'];
+    for (const entry of ST_SUBKIND_VOCABULARY) {
+      const expected = spellOnly.includes(entry.subkind)
+        ? ['spell']
+        : entry.subkind === 'counter'
+          ? ['trap']
+          : ['spell', 'trap'];
+      expect(entry.kinds, entry.subkind).toEqual(expected);
+    }
+  });
+
+  it('spells quick-play with a hyphen, a space, or neither', () => {
+    const entry = stSubkindEntry('quick-play');
+    expect([entry.name, ...entry.synonyms]).toEqual(['Quick-Play', 'Quick Play', 'QuickPlay']);
+  });
+});
+
+describe('ST_SUBKIND_BITS', () => {
+  it('is exactly the bits the sub-kind vocabulary names', () => {
+    const named = ST_SUBKIND_VOCABULARY.reduce((all, entry) => all | entry.bit, 0);
+    expect(ST_SUBKIND_BITS).toBe(named);
+    expect(ST_SUBKIND_BITS).toBe(0x1f0080);
+  });
+});
+
+describe('kindEntry', () => {
+  it('returns the entry of each kind', () => {
+    for (const kind of KINDS) expect(kindEntry(kind).kind).toBe(kind);
+    expect(kindEntry('trap').bit).toBe(TYPE_TRAP);
+  });
+});
+
+describe('monsterFlagEntry', () => {
+  it('returns the entry of each flag', () => {
+    for (const flag of MONSTER_FLAGS) expect(monsterFlagEntry(flag).flag).toBe(flag);
+    expect(monsterFlagEntry('tuner').bit).toBe(TYPE_TUNER);
+  });
+});
+
+describe('stSubkindEntry', () => {
+  it('returns the entry of each sub-kind', () => {
+    for (const subkind of ST_SUBKINDS) expect(stSubkindEntry(subkind).subkind).toBe(subkind);
+    expect(stSubkindEntry('counter').bit).toBe(TYPE_COUNTER);
+  });
+});
+
+// Totality over TYPE_*: a new core type must be given a meaning or an excuse.
+it('every core TYPE_* bit is a kind, a monster flag, a sub-kind, or deliberately outside the language', () => {
+  const outside = [
+    // Extra Deck, outside the population (TDD §5.1).
+    TYPE_FUSION,
+    TYPE_SYNCHRO,
+    TYPE_XYZ,
+    TYPE_LINK,
+    // Not Main Deck cards, or not a property a player describes cards by.
+    TYPE_TOKEN,
+    TYPE_TRAPMONSTER,
+    TYPE_MAXIMUM,
+    TYPE_SPSUMMON,
+  ];
+  const named = [...KIND_VOCABULARY, ...MONSTER_FLAG_VOCABULARY, ...ST_SUBKIND_VOCABULARY]
+    .map((entry) => entry.bit)
+    .filter((bit) => bit !== 0);
+  // TYPE_RITUAL is both a monster flag and a Spell sub-kind; nothing else is shared.
+  expect(named.filter((bit, i) => named.indexOf(bit) !== i)).toEqual([TYPE_RITUAL]);
+  expect([...new Set([...named, ...outside])].sort((a, b) => a - b)).toEqual(
+    Object.values(CORE_TYPES).sort((a, b) => a - b),
+  );
+  expect(named.filter((bit) => outside.includes(bit))).toEqual([]);
 });
 
 it('no race spelling collides with an attribute spelling', () => {

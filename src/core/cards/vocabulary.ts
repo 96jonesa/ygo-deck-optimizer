@@ -33,6 +33,24 @@ import {
   RACE_WINGEDBEAST,
   RACE_WYRM,
   RACE_ZOMBIE,
+  TYPE_CONTINUOUS,
+  TYPE_COUNTER,
+  TYPE_EFFECT,
+  TYPE_EQUIP,
+  TYPE_FIELD,
+  TYPE_FLIP,
+  TYPE_GEMINI,
+  TYPE_MONSTER,
+  TYPE_NORMAL,
+  TYPE_PENDULUM,
+  TYPE_QUICKPLAY,
+  TYPE_RITUAL,
+  TYPE_SPELL,
+  TYPE_SPIRIT,
+  TYPE_TOON,
+  TYPE_TRAP,
+  TYPE_TUNER,
+  TYPE_UNION,
 } from './constants';
 
 /**
@@ -41,7 +59,7 @@ import {
  * synonyms exist for spellings that differ in hyphens or spaces.
  */
 export interface VocabularyEntry {
-  /** The `RACE_*` / `ATTRIBUTE_*` bit this entry names. */
+  /** The `RACE_*` / `ATTRIBUTE_*` / `TYPE_*` bit this entry names. */
   bit: number;
   /** Canonical display name, as printed on English cards. */
   name: string;
@@ -123,4 +141,115 @@ export function attributeName(bit: number): string | undefined {
 /** The `ATTRIBUTE_*` bit a name denotes, normalized. */
 export function attributeFromName(text: string): number | undefined {
   return bitOf(ATTRIBUTE_VOCABULARY, text);
+}
+
+/** The three kinds of Main Deck card (TDD §6.1), in canonical order. */
+export const KINDS = ['monster', 'spell', 'trap'] as const;
+export type Kind = (typeof KINDS)[number];
+
+export interface KindEntry extends VocabularyEntry {
+  kind: Kind;
+}
+
+/** `TYPE_MONSTER` / `TYPE_SPELL` / `TYPE_TRAP`; plurals are synonyms (`level 4 monsters`). */
+export const KIND_VOCABULARY: readonly KindEntry[] = [
+  { kind: 'monster', bit: TYPE_MONSTER, name: 'Monster', synonyms: ['Monsters'] },
+  { kind: 'spell', bit: TYPE_SPELL, name: 'Spell', synonyms: ['Spells'] },
+  { kind: 'trap', bit: TYPE_TRAP, name: 'Trap', synonyms: ['Traps'] },
+];
+
+/**
+ * The monster card-type flags a description can require or negate, in
+ * canonical order. Extra Deck types (Fusion, Synchro, Xyz, Link) are outside
+ * the population and deliberately have no vocabulary (TDD §5.1).
+ */
+export const MONSTER_FLAGS = [
+  'normal',
+  'effect',
+  'tuner',
+  'ritual',
+  'pendulum',
+  'flip',
+  'gemini',
+  'union',
+  'spirit',
+  'toon',
+] as const;
+export type MonsterFlag = (typeof MONSTER_FLAGS)[number];
+
+export interface MonsterFlagEntry extends VocabularyEntry {
+  flag: MonsterFlag;
+}
+
+export const MONSTER_FLAG_VOCABULARY: readonly MonsterFlagEntry[] = [
+  { flag: 'normal', bit: TYPE_NORMAL, name: 'Normal', synonyms: [] },
+  { flag: 'effect', bit: TYPE_EFFECT, name: 'Effect', synonyms: [] },
+  { flag: 'tuner', bit: TYPE_TUNER, name: 'Tuner', synonyms: [] },
+  { flag: 'ritual', bit: TYPE_RITUAL, name: 'Ritual', synonyms: [] },
+  { flag: 'pendulum', bit: TYPE_PENDULUM, name: 'Pendulum', synonyms: [] },
+  { flag: 'flip', bit: TYPE_FLIP, name: 'Flip', synonyms: [] },
+  { flag: 'gemini', bit: TYPE_GEMINI, name: 'Gemini', synonyms: [] },
+  { flag: 'union', bit: TYPE_UNION, name: 'Union', synonyms: [] },
+  { flag: 'spirit', bit: TYPE_SPIRIT, name: 'Spirit', synonyms: [] },
+  { flag: 'toon', bit: TYPE_TOON, name: 'Toon', synonyms: [] },
+];
+
+/** Spell and Trap sub-kinds, in canonical order. */
+export const ST_SUBKINDS = [
+  'normal',
+  'quick-play',
+  'continuous',
+  'equip',
+  'field',
+  'ritual',
+  'counter',
+] as const;
+export type StSubkind = (typeof ST_SUBKINDS)[number];
+
+export interface StSubkindEntry extends VocabularyEntry {
+  subkind: StSubkind;
+  /** The kinds the sub-kind exists for: `counter` is Trap-only, `quick-play` Spell-only. */
+  kinds: readonly Exclude<Kind, 'monster'>[];
+}
+
+/**
+ * `normal` has no bit of its own (`bit: 0`): a Normal Spell or Trap is one
+ * with NONE of `ST_SUBKIND_BITS` set.
+ */
+export const ST_SUBKIND_VOCABULARY: readonly StSubkindEntry[] = [
+  { subkind: 'normal', bit: 0, kinds: ['spell', 'trap'], name: 'Normal', synonyms: [] },
+  {
+    subkind: 'quick-play',
+    bit: TYPE_QUICKPLAY,
+    kinds: ['spell'],
+    name: 'Quick-Play',
+    synonyms: ['Quick Play', 'QuickPlay'],
+  },
+  {
+    subkind: 'continuous',
+    bit: TYPE_CONTINUOUS,
+    kinds: ['spell', 'trap'],
+    name: 'Continuous',
+    synonyms: [],
+  },
+  { subkind: 'equip', bit: TYPE_EQUIP, kinds: ['spell'], name: 'Equip', synonyms: [] },
+  { subkind: 'field', bit: TYPE_FIELD, kinds: ['spell'], name: 'Field', synonyms: [] },
+  { subkind: 'ritual', bit: TYPE_RITUAL, kinds: ['spell'], name: 'Ritual', synonyms: [] },
+  { subkind: 'counter', bit: TYPE_COUNTER, kinds: ['trap'], name: 'Counter', synonyms: [] },
+];
+
+/** Every sub-kind bit; a Spell or Trap with none of them set is "normal". */
+export const ST_SUBKIND_BITS =
+  TYPE_QUICKPLAY | TYPE_CONTINUOUS | TYPE_EQUIP | TYPE_FIELD | TYPE_COUNTER | TYPE_RITUAL;
+
+export function kindEntry(kind: Kind): KindEntry {
+  return KIND_VOCABULARY.find((entry) => entry.kind === kind)!;
+}
+
+export function monsterFlagEntry(flag: MonsterFlag): MonsterFlagEntry {
+  return MONSTER_FLAG_VOCABULARY.find((entry) => entry.flag === flag)!;
+}
+
+export function stSubkindEntry(subkind: StSubkind): StSubkindEntry {
+  return ST_SUBKIND_VOCABULARY.find((entry) => entry.subkind === subkind)!;
 }
