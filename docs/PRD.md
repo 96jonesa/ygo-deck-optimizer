@@ -242,7 +242,7 @@ What the reported number means, precisely:
 
 ### 7.1 What this buys
 
-- The sibling project's scaffold is lifted wholesale: Electron + electron-vite + React 18 + strict TypeScript + vitest + electron-builder, sandboxed renderer behind a typed IPC bridge, EDOPro install probe and settings store, card picker, packaging and signing setup.
+- The sibling project's scaffold is lifted wholesale: Electron + electron-vite + React 18 + strict TypeScript + vitest + electron-builder, sandboxed renderer behind a typed IPC bridge, EDOPro install probe and settings store, card picker, packaging setup. (The sibling builds **unsigned** — signing and notarization are new work here, in M4; see TDD §17.)
 - Card data needs no pipeline at all: `cards.cdb` plus `expansions/` and `repositories/` are read in place, exactly as the sibling does, so the picker always matches what the user sees in EDOPro — including pre-release and custom cards — and archetype names come from the same install's `strings.conf`. Nothing is bundled, pinned, refreshed, or redistributed.
 - Fully offline.
 
@@ -292,7 +292,7 @@ flowchart TB
 
 - Detect or ask for the EDOPro install directory; validate it (non-empty `cards.cdb`) and store it in settings — lifted from the sibling.
 - Show what was loaded: number of databases and cards, and whether archetype names were found. Re-index on demand.
-- Population defaults: Main Deck cards only, official OCG/TCG cards only (no anime/Rush/unofficial `ot` scopes), artwork variants collapsed.
+- Population defaults: Main Deck cards only; official cards only — OCG, TCG, and (by default, with a setting to exclude them) official pre-release cards, which is EDOPro's own definition of "official"; no anime/Rush/unofficial `ot` scopes; artwork variants collapsed (TDD §4.2–4.3).
 
 ### 8.2 Template editor
 
@@ -364,7 +364,7 @@ One PR per slice (M0a, M0b, …) as in the sibling project, stacked where slices
 | M1 | Exact engine + optimizer (headless) | Exact scorer; exhaustive optimizer with reductions, progress and cancel; `optimize template.json` in the harness; differential gate vs Monte Carlo and the lower-bound property test in CI | The harness reproduces the motivating example end to end with exact numbers; all §10 oracles green |
 | M2 | App MVP | EDOPro first-run setup; typed IPC + worker; card picker; template and criteria editors with parse echo, "filled by" / near-miss readouts, warnings; ranked table, plateau, sweep chart; template save/load; CSV/JSON export | The originator can answer their real "how many copies?" question in the app without help |
 | M3 | Polish | `.ydk` import/export; going-first/second blend; `docs/GUIDE.md` | A template file reproduces a result exactly on another machine |
-| M4 | Release | macOS DMG + Windows installer, signing/notarization (sibling's setup), third-party notices, distribution/update channel per F2, `docs/INSTALL.md` | A user outside the project can install and run it |
+| M4 | Release | macOS DMG + Windows installer, signing/notarization (new work — the sibling ships unsigned), third-party notices, distribution/update channel per F2, `docs/INSTALL.md` | A user outside the project can install and run it |
 | Later | Scale and depth | §9, driven by what M2–M3 users actually ask for | — |
 
 ## 13. Decisions
