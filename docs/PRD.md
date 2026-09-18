@@ -2,7 +2,7 @@
 
 | Status | Author | Date | Tracking | Related |
 | --- | --- | --- | --- | --- |
-| Draft — decisions D1–D7 resolved 2026-09-17; follow-ups F1–F2 open (§13) | Andy (with Claude) | 2026-09-17 | [YGO-5](https://linear.app/ygo-deck-optimizer/issue/YGO-5/write-prd-for-the-concept-aware-deck-ratio-optimizer) | [ygo-combo-solver-gui](https://github.com/96jonesa/ygo-combo-solver-gui) (source of the app scaffold and the `CardIndex` reader) |
+| Living — decisions D1–D7 and F1 resolved (amended 2026-09-18); follow-up F2 open (§13) | Andy (with Claude) | 2026-09-17 | [YGO-5](https://linear.app/ygo-deck-optimizer/issue/YGO-5/write-prd-for-the-concept-aware-deck-ratio-optimizer), [YGO-7](https://linear.app/ygo-deck-optimizer/issue/YGO-7/prd-resolve-f1-limits-count-only-cards-known-to-match) | [ygo-combo-solver-gui](https://github.com/96jonesa/ygo-combo-solver-gui) (source of the app scaffold and the `CardIndex` reader) |
 
 ## 1. Summary
 
@@ -19,7 +19,7 @@ It is a standalone desktop app (Electron, macOS and Windows) that reads card dat
 1. Answer "what ratio maximizes my odds of opening a playable hand?" from a template written once, with no manual enumeration.
 2. Be concept-aware: a line or criterion can be a card name or a description over real card fields; a named card's properties come from the card database, so the tool — not the user — knows that card B is a monster.
 3. Be **correct about overlap**: one drawn card fills at most one requirement, and a card that *could* fill several is assigned wherever it makes the hand succeed.
-4. **Never assume what the user did not say.** A template line is known exactly to the specificity it states (§6); reported odds are a guaranteed lower bound, never an optimistic guess.
+4. **Never assume what the user did not say.** A template line is known exactly to the specificity it states (§6): a card matches a description — in a requirement or a limit — only if its line is specific enough to be *known* to match.
 5. Report **exact** probabilities, so that ratios differing by a fraction of a percentage point are ranked by math, not by sampling noise (§4.3).
 6. Make the semantics visible: the user can always see which lines count toward which requirement, and why one does not.
 
@@ -183,7 +183,7 @@ Decided by Andy, 2026-09-17. It settles both the overlap question and what to do
 
 1. **Lines are separate and additive.** `monster [2,3]` and `level 4 FIRE monster [1,2]` mean 2–3 cards known to be monsters, and — totally separately, in addition — 1–2 cards known to be Level 4 FIRE monsters: 3–5 monsters in all. No line is "inside" another, no card is counted by two lines, and line order never matters.
 2. **A line's cards are known exactly to the specificity the line states — no more.** A card on the `monster` line might be Level 4 or Level 8; the tool does not know and never guesses. There is no hidden subtraction either: `monster` does not mean "monsters that are not Level 4", it means "monsters of unstated Level".
-3. **Under-specificity is total ambiguity, and ambiguity never helps.** A `monster` line cannot satisfy any requirement more specific than `monster` — a requirement that mentions Level *at all* is out of its reach.
+3. **Under-specificity is total ambiguity, and an ambiguous card never matches.** A `monster` line cannot satisfy any requirement more specific than `monster` — a requirement that mentions Level *at all* is out of its reach. The same holds for limits (§6.3).
 4. **Named cards are fully known.** Their properties come from the card database, which is where concept-awareness does its work: if card B is a Level 4 FIRE monster, its line fills `monster`, `FIRE monster`, and `level 4 or lower monster` requirements without the user saying so. All copies of a named card live on its own line; generic lines mean cards *other than* the template's named cards, and a requirement that names a card is filled only by that card's line.
 
 ### 6.2 Which line fills which requirement
@@ -202,17 +202,23 @@ The deck is A + B + 5 + (2–3) + (0–3) + (0–7) + (0–3) = 7 to 27 cards fr
 
 **Implication is logical, never statistical.** It uses the description's own content plus game-rule axioms — anything with a Level, ATK, Attribute or Type is a monster; `quick-play` is a spell; `level 4` implies `level 4 or lower` — and never "what happens to be true of today's card pool". If every Level 12 LIGHT Fairy printed so far has 3000+ ATK, a `level 12 LIGHT Fairy monster` line still does not fill `ATK 3000 or more`: ATK was not mentioned. This keeps results predictable and independent of the database version. (The database still validates vocabulary and catches typos, and supplies every named card's properties.)
 
-### 6.3 Limits, under the same principle (follow-up F1)
+### 6.3 Limits use the same rule (follow-up F1 — resolved)
 
-Ambiguity never helps in *either* direction: a line's cards count against `at most n× q` unless the line's description **rules $`q`$ out**. `at most 1x trap` is not threatened by the `monster` line (a monster is not a trap) but is by unspecified cards, which might be traps. Limits on a named card or a user-defined group of named cards — the common case, `at most 1x Brick Card` — are only ever counted against those cards' own lines.
+Decided by Andy, 2026-09-18: **a line's cards count toward `at most n× q` only if the line is specific enough to be known to match $`q`$** — exactly the implication test of §6.2. `at most 1x trap` counts cards from a `trap` or `counter trap` line (and from any named card that is a trap); it does **not** count a generic `card`, the unspecified remainder, or any other line that never says "trap". Limits on a named card or a user-defined group of named cards — the common case, `at most 1x Brick Card` — count only those cards' own lines.
 
-Together, §6.2 and §6.3 give the tool its guarantee: **the reported probability is a lower bound — whatever concrete cards later fill a generic line, true odds are at least this.** The conservative treatment of limits follows from Andy's principle but was not stated by him explicitly, so it is listed for confirmation as F1 (§13).
+So the whole tool has **one matching relation**: a card matches a description, in a requirement or in a limit, iff its line's description logically implies it. Nothing is ever matched "because it might be".
+
+What the reported number means, precisely:
+
+- For criteria **without limits** it is a guaranteed lower bound: whatever concrete cards later fill a generic line, they can only match *more* requirements, so true odds are at least this.
+- For criteria **with limits** it is exact under the stated reading — cards not known to match a limit do not match it. If the user's under-specified cards would in fact match (13 unspecified cards that are really traps, under `at most 1x trap`), true odds are lower than reported. The fix is the user's to make, by stating those cards as a `trap` line; the tool's job is to point at the gap (§6.4), not to guess.
 
 ### 6.4 What the user sees
 
 - Each requirement shows the lines that fill it, and — more importantly — the near misses: "`monster` is not specific enough to count toward `level 4 or lower monster` (Level unstated)", with a one-click "split off a `level 4 or lower monster` line".
 - Read-only derived totals, since lines are additive and nothing states a total: "Known monsters: 7–14 · Known spells: 0–13 · Unspecified: 13–33".
-- Warnings for a criterion naming a card the template lacks, a requirement nothing can fill, or a limit that unspecified cards count against.
+- The same readout for limits: the lines a limit counts, and a notice — not a rule change — when under-specified lines could be hiding matches from it: "`at most 1x trap` ignores 13–33 unspecified cards; if some are traps, give them a `trap` line".
+- Warnings for a criterion naming a card the template lacks, or a requirement nothing can fill.
 
 ### 6.5 Consequences
 
@@ -227,7 +233,8 @@ Together, §6.2 and §6.3 give the tool its guarantee: **the reported probabilit
 | Census constraints (Claude's original recommendation) | Each line bounds a count over the whole deck; a card counts toward every line it matches; "monster [5,5]" = exactly 5 monsters in total | Not what the template means to its author: lines are separate buckets, not overlapping totals. Also brings a constraint system and infeasible templates |
 | Disjoint slots, most-specific-wins | Each card belongs to the most specific matching line; `monster` silently means "monsters not covered elsewhere" | Hidden subtraction and order-dependence; the chosen rule needs neither |
 | Slots plus aggregate limits | Two kinds of line | Two concepts to learn; aggregate caps can be added later without it (§9) |
-| Best-case resolution of ambiguity | Optimizer assumes unstated properties favorably | Inflates odds and produces degenerate optima; contradicts "ambiguity never helps" |
+| Best-case resolution of ambiguity | Optimizer assumes unstated properties favorably | Inflates odds and produces degenerate optima; contradicts "an ambiguous card never matches" |
+| Conservative limits (Claude's F1 recommendation) | A line counts against `at most n× q` unless it *rules $`q`$ out*, so unspecified cards count against `at most 1x trap` | Makes every number a lower bound, but at the price of a second matching relation and of limits that fire on cards the user never said anything about. Rejected: a card not known to be a trap is not counted as one |
 
 ## 7. Delivery shape (decisions D3, D4 — resolved)
 
@@ -329,7 +336,7 @@ The check is built before the thing it checks; each novel layer gets an independ
 | Hand matcher | Brute-force permutation assignment on every small instance |
 | Nested criteria | Expansion to flat criteria vs a direct recursive evaluator of the expression tree (tries every branch choice and assignment), on random expressions and hands |
 | Exact scorer | (1) closed-form anchors, e.g. 3 copies in 40, 5 drawn: $`1 - \binom{37}{5}/\binom{40}{5} \approx 33.76\%`$; (2) **differential test against the Monte Carlo oracle**, which draws concrete cards from a concrete expanded deck and shares no code with the scorer, across randomized templates, agreeing within its binomial interval |
-| Lower-bound guarantee (§6.3) | Property test: fill every generic line with random concrete database cards matching it; the true $`P`$ of that concrete deck is never below the reported one |
+| Lower-bound guarantee (§6.3) | Property test, for criteria **without limits**: fill every generic line with random concrete database cards matching it; the true $`P`$ of that concrete deck is never below the reported one. For criteria **with limits**: the same holds whenever the concrete fill adds no limit matches beyond those the lines already imply — and a deliberately adversarial fill (unspecified cards that are all traps, under `at most 1x trap`) must come out *lower*, pinning the documented gap rather than hiding it |
 | Optimizer | Exhaustive search vs naive score-every-deck on small templates; reductions (irrelevant lines, merged lines) must not change any score |
 | Licensing condition (§4.4) | CI license check fails on any copyleft dependency |
 
@@ -339,7 +346,8 @@ The check is built before the thing it checks; each novel layer gets an independ
 | --- | --- | --- |
 | User expects `monster [5,5]` to mean "5 monsters in total", or expects a `monster` line to count toward a Level requirement | The tool's whole value is a number people act on | Derived totals, per-requirement "filled by" and near-miss readouts with one-click line splitting (§6.4); warnings instead of silent rules |
 | Wrong constant / field decoding (type bits, packed `level`, ATK sentinel) | Named cards get wrong properties; descriptions validate against the wrong cards | Whole-table transcription, pin tests, visible match counts (§10) |
-| Implication logic too weak or too strong for combinators (`or`, `non-`, ranges) | Too weak: valid lines fail to count (odds understated). Too strong: unsound odds | Soundness oracle against the database; explicit must-not-imply cases; err toward weak, which preserves the lower-bound guarantee |
+| Implication logic too weak or too strong for combinators (`or`, `non-`, ranges) | Too weak: valid lines fail to count — odds understated for requirements, *overstated* for limits. Too strong: a line matches what it never stated. Neither direction is a safe default now that limits share the relation | Soundness oracle against the database; explicit must-imply *and* must-not-imply cases covering every §5.2 dimension and combinator, so completeness is tested as deliberately as soundness |
+| A limit silently ignores under-specified cards that really do match it (§6.3) | Reported odds higher than the user's real deck | By design (F1), so the mitigation is visibility: per-limit "counts these lines" readout and the "ignores N unspecified cards" notice (§6.4) |
 | Valid-ratio space explodes for large templates | Exhaustive search stalls | Exact reductions (§5.6); progress + cancel; labeled heuristic search later |
 | Exact scorer subtly wrong | Confidently wrong numbers, invisible by inspection | Independent Monte Carlo differential gate in CI (§10) |
 | EDOPro requirement excludes paper / Master Duel-only players | Smaller audience | Accepted (D3/D4); EDOPro is free and the setup step is one folder pick |
@@ -364,7 +372,8 @@ One PR per slice (M0a, M0b, …) as in the sibling project, stacked where slices
 | # | Decision | Outcome |
 | --- | --- | --- |
 | **D1** | Template overlap semantics | **Resolved (Andy, 2026-09-17): disjoint, additive lines, each known exactly to its stated specificity** (§6). Claude's census recommendation rejected |
-| **D2** | Under-determined cards | **Resolved with D1**: a line fills a requirement only if its description logically implies it; ambiguity never helps |
+| **D2** | Under-determined cards | **Resolved with D1**: a line fills a requirement only if its description logically implies it; an ambiguous card never matches |
+| **F1** | Limits under ambiguity (§6.3) | **Resolved (Andy, 2026-09-18): limits use the same rule** — `at most n× q` counts only cards known to match $`q`$; a generic `card` never counts toward `at most 1x trap`. Claude's conservative "counts unless ruled out" recommendation rejected |
 | **D3** | Delivery shape | **Resolved: Electron, macOS + Windows** (§7). Claude's web-app recommendation rejected |
 | **D4** | Card data sourcing | **Resolved: require EDOPro; read its databases in place.** Nothing bundled |
 | **D5** | Limits (`at most n×`) and user-defined groups in the MVP | **Resolved: yes to both** |
@@ -372,17 +381,16 @@ One PR per slice (M0a, M0b, …) as in the sibling project, stacked where slices
 | **D7** | Exact scoring as the engine, Monte Carlo as the test oracle | **Resolved: yes** |
 | — | License | **Resolved: proprietary for now** (§4.4); no dependency forces otherwise |
 
-Open follow-ups:
+Open follow-up:
 
 | # | Question | Recommendation |
 | --- | --- | --- |
-| **F1** | Limits under ambiguity (§6.3): do a line's cards count against `at most n× q` whenever the line does not rule $`q`$ out? | **Yes** — it is the mirror image of D1 and is what makes the reported number a guaranteed lower bound. Rarely bites in practice, since limits are usually on named cards |
 | **F2** | How do users get builds and updates of a proprietary app from a private repo? | Decide before M4. Options: a separate public releases-only repo, or direct distribution of signed builds with update checks disabled |
 
 ## 14. Success criteria
 
 - The motivating example, entered as written, produces a ranked list of exact probabilities in seconds, with a named card that is a monster filling `monster` requirements without the user doing anything — and the `monster` line visibly *not* filling `level 4 or lower monster`.
 - The originator's real question — the optimal count of a card that bricks in multiples — is answered by one template and one sweep chart, and the answer matches an independent hand calculation on a simplified case.
-- Every probability the tool reports agrees with the independent Monte Carlo oracle within its sampling interval, and is never above the true odds of any concrete deck fitting the template — both enforced in CI.
+- Every probability the tool reports agrees with the independent Monte Carlo oracle within its sampling interval, and — for criteria without limits — is never above the true odds of any concrete deck fitting the template; both enforced in CI.
 - A user can tell, from the screen alone, which lines count toward which requirement and why the others do not — no semantics are silent.
 - A template file reproduces the same numbers on someone else's machine.
