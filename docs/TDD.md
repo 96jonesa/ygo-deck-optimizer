@@ -237,26 +237,29 @@ A Main Deck card is exactly one of:
 | Spell | Spell sub-kind × archetype bools |
 | Trap | Trap sub-kind × archetype bools |
 
+Three domains carry one value beyond what the vocabulary can name — Attribute has **NONE**, Type has **OTHER**, and Level has **OTHER** (a level outside 0–13, or none). They exist so that the model never claims more than is true: without them `non-FIRE monster ⇒ EARTH/WATER/WIND/LIGHT/DARK/DIVINE monster` and `monster ⇒ level 0 or higher monster` would both be asserted, and the second is *false* of a card whose stored level is negative. They cost only implications nobody writes. The model also assumes at most one Attribute bit and one official Type bit per card, ATK/DEF negative only as `?`, and that every Spell or Trap has one of its own kind's sub-kinds — all asserted against the real card pool by an opt-in test (0 offenders).
+
 A **box** is a product of per-dimension allowed sets within one kind. Every clause normalizes to at most three boxes (one per kind it admits), and every description to a finite union of boxes. Normalization is where the game-rule axioms live, and they are the *only* axioms:
 
 1. A **positive** constraint on a monster-only dimension (flag required, Attribute, Type, Level, ATK, DEF) empties the clause's Spell and Trap boxes — "anything with a Level is a monster".
 2. A **negative** constraint on a monster-only dimension (`non-tuner`, `non-FIRE`) leaves Spell and Trap boxes full — a Spell is trivially a non-Tuner.
 3. A Spell/Trap sub-kind constraint empties the Monster box and the box of the other kind where the sub-kind does not exist (`counter` ⇒ Trap, `quick-play` ⇒ Spell).
-4. Requiring a sub-archetype also requires its base archetype, per the set-card comparison of §4.
+4. Requiring an archetype also requires every archetype it refines, per the set-card comparison of §4.1: query $`q'`$ refines $`q`$ when their low 12 bits agree and $`q`$'s bits are a subset of $`q'`$'s. The archetype dimensions of a comparison are the setcodes mentioned by *either* description, and **$`L`$'s boxes are saturated with this rule before subtraction** — otherwise `"Magnet Warrior":0x3066` fails to imply `"Magnet":0x1066`, because subtraction manufactures a "has 0x3066 but not 0x1066" slice that no card can occupy. Saturating $`L`$ alone is sufficient *and* complete: $`q`$ only ever *requires* archetypes, so the least point of a saturated $`L`$ box is a realizable card that escapes $`q`$ whenever any point does. (The model ignores the four-setcode limit of a card row; that is sound and loses only implications from a description requiring five unrelated archetypes at once.)
 5. ATK and DEF domains are the non-negative integers plus the distinguished value `?`; a numeric range never contains `?`.
 
 Modeling the universe as a *union* of kind-specific spaces, rather than one flat product, is what makes `spell ⇒ non-tuner` hold without a special case, and is the reason the relation is complete as well as sound for this vocabulary.
 
 ### 6.2 The algorithm: box subtraction
 
-$`L \Rightarrow q`$ iff $`\mathrm{boxes}(L) \setminus \mathrm{boxes}(q) = \emptyset`$. Subtracting one box from another yields at most one box per dimension (the standard sweep: peel off the part of $`A`$ outside $`B`$ along dimension 1, restrict to $`B`$'s slice, continue along dimension 2, …). Subtract each box of $`q`$ in turn from the working set that starts as $`\mathrm{boxes}(L)`$; if the set empties, the implication holds. This is exact — it proves `level 1-6 monster ⇒ level 1-3 monster or level 4-6 monster`, which clause-by-clause containment would miss — and instances are tiny (≤ ~10 dimensions, a handful of boxes).
+$`L \Rightarrow q`$ iff $`\mathrm{boxes}(L) \setminus \mathrm{boxes}(q) = \emptyset`$. Subtracting one box from another yields at most one box per dimension (the standard sweep: peel off the part of $`A`$ outside $`B`$ along dimension 1, restrict to $`B`$'s slice, continue along dimension 2, …). Subtract each box of $`q`$ in turn from the working set that starts as $`\mathrm{boxes}(L)`$; if the set empties, the implication holds. This is exact — it proves `level 1-6 monster ⇒ level 1-3 monster or level 4-6 monster`, which clause-by-clause containment would miss — and instances are tiny: a call measures about 1–3 µs, so a 30-line × 20-description match matrix is ~2 ms and no precompiled form is needed. The worst case is exponential in the number of mutually overlapping clauses of $`q`$ (a cut on $`m`$ dimensions yields up to $`m`$ pieces per working box); the largest working set seen over 40,000 generated pairs was 121 boxes.
 
 Cards and groups are points, not boxes, and are handled before the box machinery:
 
 | $`L`$ | $`q`$ | $`L \Rightarrow q`$ |
 | --- | --- | --- |
 | card $`c`$ | anything | `evaluate(q, c)` — a named card is fully known (PRD §6.1.4) |
-| group $`G`$ | anything | every member of $`G`$ satisfies `evaluate(q, ·)` |
+| card $`c`$ whose record is missing | anything | true iff $`q`$ names $`c`$ by code — a `card` alternative with that passcode or a `group` containing it — **or** $`q`$'s clauses cover the whole universe (`card`, `tuner or non-tuner`). Nothing else is known about the card, so no narrower clause can be implied; but a template opened on an install that lacks the card must still match its own requirements, and `implies` stays reflexive. `intersects` applies the same rule on both sides, which keeps it monotone ($`L`$ meets $`q_1`$ and $`q_1 \Rightarrow q_2`$ give $`L`$ meets $`q_2`$) and keeps `intersects(d, UNIVERSE)` valid as the satisfiability test |
+| group $`G`$ | anything | every member of $`G`$ satisfies `evaluate(q, ·)` (a missing member by the rule above); an **empty** group implies everything vacuously — `analyze` flags it, using `intersects(d, UNIVERSE)` as the "this line can hold no card" test |
 | generic | card or group | never — a generic line means cards *other than* the template's named cards |
 | mixed `anyOf` | — | every alternative of $`L`$ must imply $`q`$; an alternative implies $`q`$ if it implies the union of $`q`$'s alternatives (points checked pointwise, boxes by subtraction against $`q`$'s boxes) |
 
