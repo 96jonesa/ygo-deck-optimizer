@@ -20,3 +20,40 @@ body {
 .shell .meta {
   color: GrayText;
 }
+
+.shell h2 {
+  margin: 24px 0 8px;
+  font-size: 15px;
+}
+
+.rows {
+  border-collapse: collapse;
+}
+
+.rows th {
+  padding: 2px 16px 2px 0;
+  text-align: left;
+  font-weight: normal;
+  color: GrayText;
+}
+
+.probe.bad,
+.readout.bad {
+  color: #b3261e;
+}
+
+.probe .note {
+  color: GrayText;
+}
+
+.desc {
+  width: 100%;
+  max-width: 560px;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.readout mark {
+  background: #f9dedc;
+  color: inherit;
+}

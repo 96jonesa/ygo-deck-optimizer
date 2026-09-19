@@ -12,6 +12,23 @@
   },
   "overrides": [
     {
+      "includes": ["src/**", "!src/main/index.ts", "!src/preload/index.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "electron": "Electron is imported only by src/main/index.ts and src/preload/index.ts (TDD §3); everything else takes what it needs by injection, so it runs under vitest."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/core/**"],
       "linter": {
         "rules": {
