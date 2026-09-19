@@ -3,12 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { MainApp, type MainAppDeps } from '../../src/main/app';
 import { installLoader } from '../../src/main/services/cards';
 import { SettingsStore } from '../../src/main/store/settings';
-import { IpcChannels } from '../../src/shared/ipc';
-import type { CardStatus } from '../../src/shared/types';
+import { IpcChannels, IpcEvents } from '../../src/shared/ipc';
+import type { CardStatus, RunEvent } from '../../src/shared/types';
 import { ControllableLoader, loadedCards } from '../helpers/card-loader';
 import { SETNAMES, STRINGS_CONF } from '../helpers/desc-context';
 import { FakeIpcMain } from '../helpers/fake-ipc-main';
+import { FAKE_COST, FakeWorkers } from '../helpers/fake-worker';
 import { buildCdb, FIXTURE_ROWS, POPULATION } from '../helpers/fixture-cards';
+import { motivatingCdb, motivatingTemplate } from '../helpers/motivating';
 import { tempDirs } from '../helpers/workdir';
 
 const SQL = await initSqlJs();
@@ -21,12 +23,21 @@ function install(): string {
   });
 }
 
+/** An install that also holds the cards the motivating example names, so that it can be run. */
+function runnableInstall(): string {
+  return temp.workdir({
+    'cards.cdb': motivatingCdb(SQL),
+    'config/strings.conf': STRINGS_CONF,
+  });
+}
+
 /** A `MainApp` over a fake `ipcMain`, recording its windows, its pushes and its log. */
 function harness(overrides: Partial<MainAppDeps> = {}) {
   const ipcMain = new FakeIpcMain();
   const userDataDir = temp.dir();
   const sent: { channel: string; payload: unknown }[] = [];
   const log: string[] = [];
+  const workers = new FakeWorkers();
   let windows = 0;
   const app = new MainApp({
     ipcMain,
@@ -34,6 +45,7 @@ function harness(overrides: Partial<MainAppDeps> = {}) {
     candidates: [],
     appInfo: () => ({ version: '0', electron: '0', node: '0', chrome: '0', packaged: false }),
     loadCards: installLoader(async () => SQL),
+    spawnWorker: workers.spawn,
     createWindow: () => {
       windows++;
     },
@@ -42,8 +54,21 @@ function harness(overrides: Partial<MainAppDeps> = {}) {
     log: (line) => log.push(line),
     ...overrides,
   });
-  const statuses = () => sent.map((message) => message.payload as CardStatus);
-  return { app, ipcMain, userDataDir, sent, statuses, log, windows: () => windows };
+  const on = (channel: string) =>
+    sent.filter((message) => message.channel === channel).map((message) => message.payload);
+  const statuses = () => on(IpcChannels.cardsStatus) as CardStatus[];
+  const runEvents = () => on(IpcEvents.runEvent) as RunEvent[];
+  return {
+    app,
+    ipcMain,
+    userDataDir,
+    sent,
+    statuses,
+    runEvents,
+    workers,
+    log,
+    windows: () => windows,
+  };
 }
 
 describe('MainApp', () => {
@@ -194,6 +219,107 @@ describe('MainApp', () => {
       expect(app.cards.status().state).toBe('loading');
       loader.call(0).resolve(loadedCards(SQL));
       await started;
+    });
+  });
+
+  describe('runs', () => {
+    async function started(overrides: Partial<MainAppDeps> = {}) {
+      const made = harness({ candidates: [runnableInstall()], ...overrides });
+      await made.app.start();
+      const start = async (options?: unknown) => {
+        const result = await made.ipcMain.invoke(IpcChannels.runStart, {
+          template: motivatingTemplate(),
+          options,
+        });
+        return (result as { runId: number }).runId;
+      };
+      return { ...made, start };
+    }
+
+    it('spawn no worker at startup: the first run does', async () => {
+      const { workers, start } = await started();
+      expect(workers.spawned).toHaveLength(0);
+      await start();
+      expect(workers.spawned).toHaveLength(1);
+    });
+
+    it('are broadcast, event by event, on run:event', async () => {
+      const { workers, runEvents, start } = await started();
+      const runId = await start();
+      workers.worker(0).answer(0);
+      expect(runEvents().map((event) => `${event.runId}:${event.type}`)).toEqual([
+        `${runId}:started`,
+        `${runId}:progress`,
+        `${runId}:result`,
+      ]);
+      expect(runEvents().at(-1)).toMatchObject({
+        result: { best: { blend: { num: 46_185, den: 658_008 } } },
+      });
+    });
+
+    it('are logged, one line an event, when a log is given', async () => {
+      const { workers, log, start, ipcMain } = await started();
+      const first = await start({ confirmThresholdMs: 0 });
+      workers.worker(0).answer(0);
+      await ipcMain.invoke(IpcChannels.runConfirm, first);
+      workers.worker(0).answer(1);
+      const second = await start();
+      await ipcMain.invoke(IpcChannels.runCancel, { runId: second });
+      const third = await start();
+      workers.worker(1).crash(new Error('boom'));
+
+      const lines = log.filter((line) => line.startsWith('[run]'));
+      expect(lines.map((line) => line.replace(/Ms=[0-9.]+/g, 'Ms=N'))).toEqual([
+        `[run] ${first} started total=128 estimatedMs=N`,
+        `[run] ${first} needs-confirmation reason=estimate total=128 estimatedMs=N thresholdMs=N`,
+        `[run] ${first} progress 128/128 elapsedMs=N etaMs=N`,
+        `[run] ${first} result done=128/128 best=46185/658008 plateau=3 elapsedMs=N`,
+        `[run] ${second} started total=128 estimatedMs=N`,
+        `[run] ${second} cancelled abandoned`,
+        `[run] ${third} started total=128 estimatedMs=N`,
+        `[run] ${third} error boom`,
+      ]);
+    });
+
+    it('log what a graceful stop kept', async () => {
+      const { workers, log, start, ipcMain } = await started();
+      const runId = await start();
+      const cancelling = ipcMain.invoke(IpcChannels.runCancel, { runId, graceful: true });
+      const whole = workers.worker(0).request(0);
+      workers.worker(0).answer(0);
+      await cancelling;
+      // The search of 128 vectors was over before it looked at the flag: a plain result.
+      expect(whole.runId).toBe(runId);
+      expect(log.at(-1)).toMatch(/^\[run\] \d+ result done=128\/128 /);
+    });
+
+    it('need no log', async () => {
+      const { workers, runEvents, start } = await started({ log: undefined });
+      await start();
+      workers.worker(0).answer(0);
+      expect(runEvents().at(-1)?.type).toBe('result');
+    });
+
+    it('take the plateau’s width from the settings', async () => {
+      const { app, workers, start } = await started();
+      app.settings.set({ plateauDelta: 0.02 });
+      await start();
+      expect(workers.worker(0).request(0).options.plateauDelta).toEqual({ num: 1, den: 50 });
+    });
+
+    it('calibrate the analysis: once a worker is ready, a template is estimated at its cost', async () => {
+      const { ipcMain, workers, start } = await started();
+      const costOf = async () => {
+        const response = (await ipcMain.invoke(IpcChannels.templateAnalyze, {
+          seq: 1,
+          payload: motivatingTemplate(),
+        })) as { payload: { analysis: { work: { cost: unknown } } } };
+        return response.payload.analysis.work.cost;
+      };
+      expect(await costOf()).not.toEqual(FAKE_COST);
+      await start();
+      workers.worker(0).ready();
+      expect(await costOf()).toEqual(FAKE_COST);
     });
   });
 });

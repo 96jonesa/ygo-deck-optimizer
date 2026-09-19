@@ -1,7 +1,7 @@
 import { contextBridge, type IpcRendererEvent, ipcRenderer } from 'electron';
 import type { RendererApi } from '../shared/ipc';
-import { IpcChannels } from '../shared/ipc';
-import type { CardStatus } from '../shared/types';
+import { IpcChannels, IpcEvents } from '../shared/ipc';
+import type { CardStatus, RunEvent } from '../shared/types';
 
 const api: RendererApi = {
   getAppInfo: () => ipcRenderer.invoke(IpcChannels.appInfo),
@@ -23,6 +23,17 @@ const api: RendererApi = {
   getCards: (passcodes) => ipcRenderer.invoke(IpcChannels.cardsGet, passcodes),
   parseDescription: (request) => ipcRenderer.invoke(IpcChannels.descParse, request),
   analyzeTemplate: (request) => ipcRenderer.invoke(IpcChannels.templateAnalyze, request),
+  startRun: (request) => ipcRenderer.invoke(IpcChannels.runStart, request),
+  cancelRun: (runId, opts) =>
+    ipcRenderer.invoke(IpcChannels.runCancel, { runId, graceful: opts?.graceful === true }),
+  confirmRun: (runId) => ipcRenderer.invoke(IpcChannels.runConfirm, runId),
+  onRunEvent: (listener) => {
+    const forward = (_event: IpcRendererEvent, event: RunEvent) => listener(event);
+    ipcRenderer.on(IpcEvents.runEvent, forward);
+    return () => {
+      ipcRenderer.removeListener(IpcEvents.runEvent, forward);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

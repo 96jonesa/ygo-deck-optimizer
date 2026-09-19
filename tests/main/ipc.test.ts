@@ -2,14 +2,16 @@ import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
 import { type IpcDeps, registerIpc } from '../../src/main/ipc';
 import { type CardLoader, CardService } from '../../src/main/services/cards';
+import { RunService } from '../../src/main/services/runs';
 import { TemplateService } from '../../src/main/services/templates';
 import { SettingsStore } from '../../src/main/store/settings';
-import { IpcChannels } from '../../src/shared/ipc';
-import type { AppInfo, CardStatus, WorkdirHealth } from '../../src/shared/types';
+import { IpcChannels, IpcEvents } from '../../src/shared/ipc';
+import type { AppInfo, CardStatus, RunEvent, WorkdirHealth } from '../../src/shared/types';
 import { ControllableLoader, immediateLoader, loadedCards } from '../helpers/card-loader';
 import { FakeIpcMain } from '../helpers/fake-ipc-main';
-import { CODE } from '../helpers/fixture-cards';
-import { motivatingTemplate } from '../helpers/motivating';
+import { FakeWorkers } from '../helpers/fake-worker';
+import { CODE, FIXTURE_ROWS } from '../helpers/fixture-cards';
+import { MOTIVATING_ROWS, motivatingTemplate } from '../helpers/motivating';
 import { tempDirs } from '../helpers/workdir';
 
 const SQL = await initSqlJs();
@@ -36,11 +38,21 @@ function harness(load: CardLoader = immediateLoader(() => loadedCards(SQL))) {
   const cards = new CardService(load, (status) => pushed.push(status));
   const probed: string[] = [];
   const picks: (string | null)[] = [];
+  const templates = new TemplateService(cards);
+  const workers = new FakeWorkers();
+  const runEvents: RunEvent[] = [];
+  const runs = new RunService({
+    templates,
+    spawn: workers.spawn,
+    // Events leave main by `webContents.send`: a structured clone, like an invoke's result.
+    emit: (event) => runEvents.push(structuredClone(event)),
+  });
   const deps: IpcDeps = {
     appInfo: () => APP_INFO,
     settings,
     cards,
-    templates: new TemplateService(cards),
+    templates,
+    runs,
     probe: (dir) => {
       probed.push(dir);
       return healthOf(dir);
@@ -48,13 +60,30 @@ function harness(load: CardLoader = immediateLoader(() => loadedCards(SQL))) {
     pickDirectory: async () => picks.shift() ?? null,
   };
   registerIpc(ipcMain, deps);
-  return { ipcMain, userData, settings, cards, pushed, probed, picks, deps };
+  return { ipcMain, userData, settings, cards, pushed, probed, picks, deps, workers, runEvents };
+}
+
+/** A harness whose cards are `ready` and include the motivating example's, so that it runs. */
+async function runnable() {
+  const made = harness(
+    immediateLoader(() => loadedCards(SQL, [...FIXTURE_ROWS, ...MOTIVATING_ROWS])),
+  );
+  await made.cards.reload('/edopro', { includePrerelease: true });
+  return made;
 }
 
 describe('registerIpc', () => {
   it('registers a handler for every invoke channel of the contract, each exactly once', () => {
     const { ipcMain } = harness();
     expect([...ipcMain.registered].sort()).toEqual(Object.values(IpcChannels).sort());
+  });
+
+  it('keeps push-only channels apart: `run:event` has no handler, and no invoke channel shares its name', () => {
+    const { ipcMain } = harness();
+    for (const channel of Object.values(IpcEvents)) {
+      expect(ipcMain.registered).not.toContain(channel);
+      expect(Object.values(IpcChannels)).not.toContain(channel);
+    }
   });
 
   it('cannot be run twice on one ipcMain — which is why it is run once, at app start', () => {
@@ -324,6 +353,163 @@ describe('registerIpc', () => {
           payload: motivatingTemplate(),
         }),
       ).toMatchObject({ seq: 9, payload: { reason: 'not-ready', state: 'loading' } });
+    });
+  });
+
+  describe('run:start', () => {
+    it('starts a run and returns its id; the events that follow carry it', async () => {
+      const { ipcMain, workers, runEvents } = await runnable();
+      const started = await ipcMain.invoke(IpcChannels.runStart, {
+        template: motivatingTemplate(),
+      });
+      expect(started).toEqual({ ok: true, runId: expect.any(Number) });
+      const { runId } = started as { runId: number };
+      expect(runEvents).toEqual([
+        { runId, type: 'started', total: 128, estimatedMs: expect.any(Number) },
+      ]);
+
+      workers.worker(0).answer(0);
+      expect(runEvents.at(-1)).toMatchObject({
+        runId,
+        type: 'result',
+        result: { status: 'done', best: { blend: { num: 46_185, den: 658_008 } } },
+      });
+    });
+
+    it('passes the options on', async () => {
+      const { ipcMain, workers } = await runnable();
+      await ipcMain.invoke(IpcChannels.runStart, {
+        template: motivatingTemplate(),
+        options: { plateauCap: 25, confirmThresholdMs: 1 },
+      });
+      expect(workers.worker(0).request(0).options).toMatchObject({
+        plateauCap: 25,
+        confirmThresholdMs: 1,
+      });
+    });
+
+    it('sends events that survive the trip: everything a run says is structured-cloneable', async () => {
+      const { ipcMain, workers, runEvents } = await runnable();
+      await ipcMain.invoke(IpcChannels.runStart, {
+        template: motivatingTemplate(),
+        options: { confirmThresholdMs: 0 },
+      });
+      workers.worker(0).answer(0);
+      const runId = runEvents[0]?.runId;
+      await ipcMain.invoke(IpcChannels.runConfirm, runId);
+      workers.worker(0).answer(1);
+      // `emit` cloned each of them on the way out, and would have thrown.
+      expect(runEvents.map((event) => event.type)).toEqual([
+        'started',
+        'needs-confirmation',
+        'progress',
+        'result',
+      ]);
+      expect(JSON.parse(JSON.stringify(runEvents))).toEqual(runEvents);
+    });
+
+    it('says why nothing was started: not-ready, invalid, template-errors', async () => {
+      const { ipcMain, cards, runEvents } = harness(
+        immediateLoader(() => loadedCards(SQL, [...FIXTURE_ROWS, ...MOTIVATING_ROWS])),
+      );
+      const start = (request: unknown) => ipcMain.invoke(IpcChannels.runStart, request);
+      expect(await start({ template: motivatingTemplate() })).toMatchObject({
+        ok: false,
+        reason: 'not-ready',
+        state: 'idle',
+      });
+      await cards.reload('/edopro', { includePrerelease: true });
+      for (const junk of [undefined, null, 'run', {}, { template: { version: 1 } }])
+        expect(await start(junk)).toMatchObject({ ok: false, reason: 'invalid' });
+      expect(await start({ template: motivatingTemplate(), options: 'fast' })).toMatchObject({
+        ok: false,
+        reason: 'invalid',
+      });
+
+      const template = motivatingTemplate();
+      template.lines[2] = { id: 'typo', text: 'level 4 monstr', min: 0, max: 3 };
+      expect(await start({ template })).toMatchObject({
+        ok: false,
+        reason: 'template-errors',
+        analysis: { ok: false },
+      });
+      expect(runEvents).toEqual([]);
+    });
+  });
+
+  describe('run:cancel', () => {
+    it('abandons the run by default, and stops it gracefully when asked to', async () => {
+      const { ipcMain, workers, runEvents } = await runnable();
+      const start = async () =>
+        (
+          (await ipcMain.invoke(IpcChannels.runStart, { template: motivatingTemplate() })) as {
+            runId: number;
+          }
+        ).runId;
+
+      const first = await start();
+      expect(await ipcMain.invoke(IpcChannels.runCancel, { runId: first })).toEqual({ ok: true });
+      expect(workers.worker(0).terminated).toBe(true);
+      expect(runEvents.at(-1)).toEqual({ runId: first, type: 'cancelled', result: null });
+
+      const second = await start();
+      const cancelling = ipcMain.invoke(IpcChannels.runCancel, { runId: second, graceful: true });
+      await Promise.resolve();
+      expect(workers.worker(1).terminated).toBe(false);
+      expect(workers.worker(1).flag(0)).toBe(1);
+      workers.worker(1).answer(0);
+      expect(await cancelling).toEqual({ ok: true });
+    });
+
+    it('takes `graceful` only as `true`: anything else abandons, at once', async () => {
+      const { ipcMain, workers, runEvents } = await runnable();
+      const { runId } = (await ipcMain.invoke(IpcChannels.runStart, {
+        template: motivatingTemplate(),
+      })) as { runId: number };
+      await ipcMain.invoke(IpcChannels.runCancel, { runId, graceful: 'yes' });
+      expect(workers.worker(0).terminated).toBe(true);
+      // Abandoned, not stopped gracefully: the flag was never raised, and nothing was waited for.
+      expect(workers.worker(0).flag(0)).toBe(0);
+      expect(runEvents.at(-1)).toEqual({ runId, type: 'cancelled', result: null });
+    });
+
+    it('answers a run that is not active, and a malformed request, without touching anything', async () => {
+      const { ipcMain } = await runnable();
+      expect(await ipcMain.invoke(IpcChannels.runCancel, { runId: 99 })).toEqual({
+        ok: false,
+        reason: 'not-active',
+      });
+      for (const junk of [undefined, null, 7, { runId: '7' }, {}])
+        expect(await ipcMain.invoke(IpcChannels.runCancel, junk)).toEqual({
+          ok: false,
+          reason: 'invalid',
+        });
+    });
+  });
+
+  describe('run:confirm', () => {
+    it('sends a waiting run again with force', async () => {
+      const { ipcMain, workers } = await runnable();
+      const { runId } = (await ipcMain.invoke(IpcChannels.runStart, {
+        template: motivatingTemplate(),
+        options: { confirmThresholdMs: 0 },
+      })) as { runId: number };
+      workers.worker(0).answer(0);
+      expect(await ipcMain.invoke(IpcChannels.runConfirm, runId)).toEqual({ ok: true });
+      expect(workers.worker(0).request(1)).toMatchObject({ runId, options: { force: true } });
+    });
+
+    it('answers a run that is not waiting, and a malformed request', async () => {
+      const { ipcMain } = await runnable();
+      expect(await ipcMain.invoke(IpcChannels.runConfirm, 99)).toEqual({
+        ok: false,
+        reason: 'not-active',
+      });
+      for (const junk of [undefined, null, '7', { runId: 7 }])
+        expect(await ipcMain.invoke(IpcChannels.runConfirm, junk)).toEqual({
+          ok: false,
+          reason: 'invalid',
+        });
     });
   });
 });

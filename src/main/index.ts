@@ -13,6 +13,7 @@ import { MainApp } from './app';
 import { contentSecurityPolicy } from './csp';
 import { candidateWorkdirs } from './edopro/probe';
 import { installLoader } from './services/cards';
+import { spawnOptimizerWorker } from './worker-spawn';
 
 // The Electron adapter: everything else in src/main takes what it needs by
 // injection (TDD §3) and is tested without Electron; this file only wires.
@@ -82,10 +83,11 @@ const main = new MainApp({
   }),
   // sql.js stays unbundled in main (TDD §2), so a bare `initSqlJs()` finds its wasm.
   loadCards: installLoader(() => initSqlJs()),
+  spawnWorker: spawnOptimizerWorker,
   createWindow,
   broadcast,
   pickDirectory,
-  // `YGO_DEBUG=1`: one stderr line per change of the card status.
+  // `YGO_DEBUG=1`: one stderr line per change of the card status and per run event.
   log: process.env.YGO_DEBUG ? (line) => process.stderr.write(`${line}\n`) : undefined,
 });
 

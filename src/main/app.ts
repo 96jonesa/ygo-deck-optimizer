@@ -1,8 +1,9 @@
-import { IpcChannels } from '../shared/ipc';
-import type { AppInfo, CardStatus } from '../shared/types';
+import { IpcChannels, IpcEvents } from '../shared/ipc';
+import type { AppInfo, CardStatus, RunEvent } from '../shared/types';
 import { autodetectWorkdir, probeWorkdir } from './edopro/probe';
 import { type IpcMainLike, registerIpc } from './ipc';
 import { type CardLoader, CardService } from './services/cards';
+import { RunService, type WorkerLike } from './services/runs';
 import { TemplateService } from './services/templates';
 import { SettingsStore } from './store/settings';
 
@@ -19,13 +20,15 @@ export interface MainAppDeps {
   candidates: readonly string[];
   appInfo(): AppInfo;
   loadCards: CardLoader;
+  /** A new optimizer thread (TDD §3); called by the first run, not at startup. */
+  spawnWorker(): WorkerLike;
   /** Open one more app window. */
   createWindow(): void;
   /** Send to every open window. */
   broadcast(channel: string, payload: unknown): void;
   /** The system's folder dialog; `null` when it is cancelled. */
   pickDirectory(): Promise<string | null>;
-  /** One line per change of the card status; absent unless debugging. */
+  /** One line per change of the card status and per run event; absent unless debugging. */
   log?: ((line: string) => void) | undefined;
 }
 
@@ -36,10 +39,35 @@ function statusLine(status: CardStatus): string {
   return `${head} databases=${status.databases} skipped=${status.skippedDatabases} cards=${status.cards} replacedRows=${status.replacedRows} conflicts=${status.conflicts} setnames=${status.setnames}`;
 }
 
+function runLine(event: RunEvent): string {
+  const head = `[run] ${event.runId} ${event.type}`;
+  switch (event.type) {
+    case 'started':
+      return `${head} total=${event.total} estimatedMs=${event.estimatedMs}`;
+    case 'progress': {
+      const { done, total, elapsedMs, etaMs } = event.progress;
+      return `${head} ${done}/${total} elapsedMs=${elapsedMs} etaMs=${etaMs}`;
+    }
+    case 'needs-confirmation': {
+      const { reason, total, estimatedMs, thresholdMs } = event.confirmation;
+      return `${head} reason=${reason} total=${total} estimatedMs=${estimatedMs} thresholdMs=${thresholdMs}`;
+    }
+    case 'error':
+      return `${head} ${event.message}`;
+    default: {
+      // `result`, or `cancelled` with what a graceful stop kept.
+      if (event.result === null) return `${head} abandoned`;
+      const { done, total, best, plateau, elapsedMs } = event.result;
+      return `${head} done=${done}/${total} best=${best.blend.num}/${best.blend.den} plateau=${plateau.size} elapsedMs=${elapsedMs}`;
+    }
+  }
+}
+
 export class MainApp {
   readonly settings: SettingsStore;
   readonly cards: CardService;
   readonly templates: TemplateService;
+  readonly runs: RunService;
 
   constructor(private readonly deps: MainAppDeps) {
     this.settings = new SettingsStore(deps.userDataDir);
@@ -48,7 +76,18 @@ export class MainApp {
       deps.log?.(statusLine(status));
       deps.broadcast(IpcChannels.cardsStatus, status);
     });
-    this.templates = new TemplateService(this.cards);
+    // The analysis estimates at the cost the optimizer worker calibrates (TDD §11.3), once one has.
+    this.templates = new TemplateService(this.cards, () => this.runs.cost());
+    this.runs = new RunService({
+      templates: this.templates,
+      spawn: deps.spawnWorker,
+      // One run at a time, app-wide: its events go to every window, like the card status.
+      emit: (event) => {
+        deps.log?.(runLine(event));
+        deps.broadcast(IpcEvents.runEvent, event);
+      },
+      plateauDelta: () => this.settings.get().plateauDelta,
+    });
   }
 
   /**
@@ -60,12 +99,13 @@ export class MainApp {
    * wait for it, and learns of it by push.
    */
   start(): Promise<void> {
-    const { deps, settings, cards, templates } = this;
+    const { deps, settings, cards, templates, runs } = this;
     registerIpc(deps.ipcMain, {
       appInfo: deps.appInfo,
       settings,
       cards,
       templates,
+      runs,
       probe: probeWorkdir,
       pickDirectory: deps.pickDirectory,
     });
