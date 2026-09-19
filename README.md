@@ -19,7 +19,7 @@ combinatorial probability plus a card-database lookup layer.
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done (in review)**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | **Done (in review)**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals) |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts) |
 | M3 — polish | Not started |
 | M4 — release | Not started |
 
@@ -43,9 +43,26 @@ up, and a clear error when the ranges cannot sum to the deck size. Named **group
 `brick` — are created, renamed, filled from the picker and used in any description as
 `{starter}`. Load the motivating example, or clear it, and score it.
 
-The **criteria** editor (criterion rows, nested OR groups, filled-by / near-miss / limit
-readouts) is M2e, the full results view — ranked table, plateau, sweep chart, per-criterion
-breakdown — is M2f, and template open/save is M2g; until then those live in the
+**You can write the success criteria, and see what they mean.** Criteria are added, removed,
+reordered, named and edited as text in the criterion language (`1x [Ash Blossom], 1x monster, at
+most 1x [Brick]`), each with the same live parse echo, marked error span and canonical printed
+form the template's lines get. A criterion with alternatives — `1x A and 1x B and (1x C or 2x
+D)` — shows the **flat alternatives it will actually be scored as**, so nested `or` is never a
+guess, along with any alternative dropped for needing more cards than a hand holds. Criteria
+carry their own notices: one that adds nothing because another already covers it, one that can
+never be met, and one naming a card no line of the template has.
+
+Under them are the two readouts the tool exists for. **Per requirement**: the lines that fill it
+and — the point — the near misses, each with the dimension it leaves unsaid (`` `monster`:
+Level unstated ``) and a one-click **split** that adds the line which *would* count, exactly as
+`analyze` wrote it; once a line says it, the readout says which one instead of offering it
+again. **Per limit**: the lines it counts and, stated plainly rather than assumed, the
+under-specified cards it ignores with their total range (`at most 1x trap` ignores 13–33
+unspecified cards) — a limit counts only cards a line is specific enough to be *known* to match.
+A criterion with an error blocks a run exactly as a broken line does.
+
+The full results view — ranked table, plateau, sweep chart, per-criterion breakdown — is M2f,
+and template open/save is M2g; until then those live in the
 [command-line harness](#command-line-harness).
 
 ## Description language

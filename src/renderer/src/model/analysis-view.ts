@@ -1,9 +1,11 @@
 import type {
   Analysis,
   AnalyzeTemplateResult,
+  CriterionAnalysis,
   GroupAnalysis,
   Issue,
   LineAnalysis,
+  ParsedText,
   Severity,
   Span,
 } from '../../../shared/types';
@@ -46,6 +48,23 @@ export function groupAnalysisOf(analysis: Analysis | null, id: string): GroupAna
   return analysis?.groups.find((group) => group.id === id) ?? null;
 }
 
+export function criterionAnalysisOf(
+  analysis: Analysis | null,
+  id: string,
+): CriterionAnalysis | null {
+  return analysis?.criteria.find((criterion) => criterion.id === id) ?? null;
+}
+
+/**
+ * What a line and a criterion have in common: text the tool tried to parse,
+ * and what it found wrong. Their grammars differ (TDD §5.1, §7.1) but the two
+ * are read back the same way, so the readers below take either.
+ */
+export interface ParsedPart {
+  parsed: ParsedText;
+  issues: Issue[];
+}
+
 const LOUDNESS: Record<Severity, number> = { notice: 0, warning: 1, error: 2 };
 
 /** The loudest severity among the issues, or `null` when there are none. */
@@ -86,22 +105,22 @@ export function matchText(line: LineAnalysis | null): string | null {
   return `${cards}: ${line.samples.join(', ')}${more}`;
 }
 
-/** The parse error of a line, for marking the offending span in the input. */
-export function parseFailureOf(line: LineAnalysis | null): { message: string; span: Span } | null {
-  if (line === null || line.parsed.ok) return null;
-  return { message: line.parsed.message, span: line.parsed.span };
+/** The parse error of a line or criterion, for marking the offending span in the input. */
+export function parseFailureOf(part: ParsedPart | null): { message: string; span: Span } | null {
+  if (part === null || part.parsed.ok) return null;
+  return { message: part.parsed.message, span: part.parsed.span };
 }
 
 /**
- * The issues to list beside a line. A parse failure reaches the analysis twice
- * — as `parsed` and as a `parse` issue — and is shown once, by the readout
- * that can also mark the span it is about.
+ * The issues to list beside a line or criterion. A parse failure reaches the
+ * analysis twice — as `parsed` and as a `parse` issue — and is shown once, by
+ * the readout that can also mark the span it is about.
  */
-export function issuesToList(line: LineAnalysis | null): Issue[] {
-  if (line === null) return [];
-  return parseFailureOf(line) === null
-    ? line.issues
-    : line.issues.filter((found) => found.code !== 'parse');
+export function issuesToList(part: ParsedPart | null): Issue[] {
+  if (part === null) return [];
+  return parseFailureOf(part) === null
+    ? part.issues
+    : part.issues.filter((found) => found.code !== 'parse');
 }
 
 /** `13–33`, or `null` when the ranges cannot fill the deck: the range as `analyze` computed it. */

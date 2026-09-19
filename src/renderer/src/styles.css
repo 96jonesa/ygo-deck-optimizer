@@ -951,6 +951,122 @@ input.narrow-name {
   width: 10rem;
 }
 
+/* --- the criteria editor ------------------------------------------------ */
+
+/*
+ * A criterion row is the line row's grid with the copy range taken out — the
+ * id, the text and the buttons line up with the template's down the same left
+ * column — and the optional name placed on a row of its own beneath the text.
+ * The text needs the width: the example's shortest criterion is 70 characters.
+ */
+.line.criterion .line-main {
+  grid-template-columns: 3.5rem minmax(6rem, 1fr) auto;
+}
+
+.line.criterion .criterion-name {
+  grid-column: 2 / -1;
+  grid-row: 2;
+  max-width: 22rem;
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+}
+
+/*
+ * The flat alternatives a criterion is scored as (PRD §5.3), under its row.
+ * Numbered, because `analyze`'s subsumption notices name them by number.
+ */
+.alternatives ol {
+  margin: 2px 0 0;
+  padding-left: var(--sp-5);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.alternatives li::marker {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The requirement and limit readouts (PRD §6.3–6.4). This is where the tool
+ * stops being a calculator and says what it understood, so each one gets a
+ * block of its own rather than a table row — but a quiet one: only an issue
+ * inside it is ever coloured.
+ */
+.readouts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.readout-row {
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+  background: var(--bg-sunken);
+}
+
+.readout-head {
+  margin: 0 0 2px;
+  overflow-wrap: anywhere;
+}
+
+.readout-head code {
+  font-weight: 600;
+}
+
+/*
+ * One fact per line, label in a column of its own so `Filled by`, `Near miss`
+ * and `Ignores` line up down the block and a wrapped value hangs under its own
+ * first line rather than under the label.
+ */
+.readout-line,
+.near-miss {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.readout-label {
+  color: var(--text-dim);
+}
+
+/* A near miss is advice, not a fault: dimmer than the facts above it. */
+.near-miss {
+  color: var(--text-dim);
+}
+
+.near-miss code,
+.readout-line code {
+  color: var(--text);
+}
+
+/* The one-click split of PRD §6.4, inline in the sentence that explains it. */
+button.link {
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  color: var(--accent);
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+button.link:hover:not(:disabled) {
+  background: none;
+  filter: brightness(1.15);
+}
+
+button.link code {
+  color: inherit;
+}
+
 /* --- readouts and tables ------------------------------------------------ */
 
 .desc {

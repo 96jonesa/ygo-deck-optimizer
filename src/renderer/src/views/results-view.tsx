@@ -7,7 +7,7 @@ import {
   startFailureLines,
   topRows,
 } from '../model/run-format';
-import { selectAnalysis, selectCardsReady, useApp } from '../store';
+import { selectRunBlocker, selectRunnable, useApp } from '../store';
 
 // The results region (PRD §8.4). M2c keeps M2b's run controls working — start,
 // progress, a graceful stop, the confirmation, the best ratio; the ranked
@@ -72,13 +72,11 @@ export function ResultsView() {
   const failure = useApp((state) => state.runFailure);
   const setRunFailure = useApp((state) => state.setRunFailure);
   const cancelling = useApp((state) => state.cancelling);
-  const ready = useApp(selectCardsReady);
-  const analysis = useApp(selectAnalysis);
   // M2d put the analysis on screen, so a template it has already found errors
-  // in is not offered as runnable: the errors are beside the lines they are
-  // about. `null` is "not analysed yet", which is not a reason to refuse.
-  const broken = analysis !== null && !analysis.ok;
-  const runnable = ready && !broken && template.lines.length > 0 && template.criteria.length > 0;
+  // in is not offered as runnable: the errors are beside the lines and criteria
+  // they are about. `selectRunBlocker` is the whole rule, and says it in words.
+  const runnable = useApp(selectRunnable);
+  const blocker = useApp(selectRunBlocker);
 
   async function run(): Promise<void> {
     setRunFailure(startFailureLines(await window.api.startRun({ template })));
@@ -105,13 +103,8 @@ export function ResultsView() {
       </div>
 
       <p className="hint trailing" data-testid="run-template">
-        {runnable
-          ? `Ready to score: ${template.lines.length} lines, ${template.criteria.length} criteria, deck of ${template.deckSize}.`
-          : !ready
-            ? 'A run needs the card database.'
-            : broken
-              ? 'The template has errors; they are marked on the lines they are about.'
-              : 'A run needs at least one line and one criterion. Load the example to see one.'}
+        {blocker ??
+          `Ready to score: ${template.lines.length} lines, ${template.criteria.length} criteria, deck of ${template.deckSize}.`}
       </p>
 
       {failure.length > 0 && (

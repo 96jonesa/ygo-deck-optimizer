@@ -21,6 +21,9 @@ import {
   cardLines,
   EMPTY_TEMPLATE,
   withCardLine,
+  withCriterion,
+  withCriterionName,
+  withCriterionText,
   withDeckSize,
   withDescriptionLine,
   withGroup,
@@ -28,11 +31,14 @@ import {
   withHandSize,
   withLineRange,
   withLineText,
+  withMovedCriterion,
   withMovedLine,
+  withoutCriterion,
   withoutGroup,
   withoutGroupCard,
   withoutLine,
   withRenamedGroup,
+  withSuggestedLine,
 } from './model/template-edit';
 
 // The renderer's one store (TDD §3): what main has pushed, what the user is
@@ -115,6 +121,15 @@ export interface AppState {
   moveLine(id: string, by: number): void;
   setDeckSize(size: number): void;
   setHandSize(size: number): void;
+  /** The one-click split of PRD §6.4: a near miss's suggestion, as a line of its own. */
+  addSuggestedLine(text: string): void;
+  addCriterion(): void;
+  dropCriterion(id: string): void;
+  setCriterionText(id: string, text: string): void;
+  /** The criterion's own name; cleared to nothing, it goes back to being called by its id. */
+  setCriterionName(id: string, name: string): void;
+  /** One place up (`by` -1) or down (`by` +1); a criterion at that end does not move. */
+  moveCriterion(id: string, by: number): void;
   addGroup(name: string): void;
   renameGroup(id: string, name: string): void;
   dropGroup(id: string): void;
@@ -190,6 +205,12 @@ export function createAppStore(): AppStore {
       moveLine: edit(withMovedLine),
       setDeckSize: edit(withDeckSize),
       setHandSize: edit(withHandSize),
+      addSuggestedLine: edit(withSuggestedLine),
+      addCriterion: edit(withCriterion),
+      dropCriterion: edit(withoutCriterion),
+      setCriterionText: edit(withCriterionText),
+      setCriterionName: edit(withCriterionName),
+      moveCriterion: edit(withMovedCriterion),
       addGroup: edit(withGroup),
       renameGroup: edit(withRenamedGroup),
       dropGroup: edit(withoutGroup),
@@ -245,6 +266,33 @@ export function selectStatusText(state: AppState): string {
 /** What main understood of the template on screen; `null` before the first reply. */
 export function selectAnalysis(state: AppState): Analysis | null {
   return state.analysis.analysis;
+}
+
+/**
+ * Why a run cannot start, or `null` when one can — the Run button's `disabled`
+ * and the sentence beside it, which must never disagree.
+ *
+ * Three of the four reasons are M2b's and M2d's. The fourth is the one the
+ * criteria editor made easy to hit: when the latest `template:analyze` came
+ * back `invalid`, what is on screen is the PREVIOUS analysis (`reduceAnalysis`
+ * keeps it deliberately), so its `ok` says nothing about the template in hand.
+ * An empty line or an empty criterion is exactly that case — `validateTemplate`
+ * refuses empty `text` — and without this Run would stay live over a template
+ * main is going to refuse anyway.
+ */
+export function selectRunBlocker(state: AppState): string | null {
+  if (!selectCardsReady(state)) return 'A run needs the card database.';
+  if (state.analysis.problem !== null)
+    return 'The template is not complete yet; the message under the lines says what is missing.';
+  if (state.analysis.analysis !== null && !state.analysis.analysis.ok)
+    return 'The template has errors; they are marked on the lines and criteria they are about.';
+  if (state.template.lines.length === 0 || state.template.criteria.length === 0)
+    return 'A run needs at least one line and one criterion. Load the example to see one.';
+  return null;
+}
+
+export function selectRunnable(state: AppState): boolean {
+  return selectRunBlocker(state) === null;
 }
 
 /** What the main region is. */

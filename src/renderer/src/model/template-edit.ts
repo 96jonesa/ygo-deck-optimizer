@@ -2,6 +2,7 @@ import type {
   CardHit,
   Template,
   TemplateCard,
+  TemplateCriterion,
   TemplateGroup,
   TemplateLine,
 } from '../../../shared/types';
@@ -100,9 +101,21 @@ export function withCardLine(template: Template, card: CardHit): Template {
  * line the tool pretends to understand.
  */
 export function withDescriptionLine(template: Template): Template {
+  return withSuggestedLine(template, '');
+}
+
+/**
+ * A description line holding `text`, at the end. This is the one-click split of
+ * PRD §6.4: the text is a near miss's `suggestion`, which `analyze` wrote and
+ * already checked re-parses, so it is used WORD FOR WORD — the renderer neither
+ * composes it nor corrects it (TDD §3). A line saying the same thing may exist
+ * already; adding a second one is additive and harmless (PRD §6.1), and the
+ * readout says so rather than this refusing.
+ */
+export function withSuggestedLine(template: Template, text: string): Template {
   return withLines(template, [
     ...template.lines,
-    { id: nextLineId(template, 'line'), text: '', min: NEW_LINE_MIN, max: NEW_LINE_MAX },
+    { id: nextLineId(template, 'line'), text, min: NEW_LINE_MIN, max: NEW_LINE_MAX },
   ]);
 }
 
@@ -151,6 +164,93 @@ export function withDeckSize(template: Template, deckSize: number): Template {
 
 export function withHandSize(template: Template, size: number): Template {
   return template.hand.size === size ? template : { ...template, hand: { size } };
+}
+
+// --- criteria --------------------------------------------------------------
+
+/** An id no criterion of `template` has, `c1` upwards; a removal frees its number again. */
+export function nextCriterionId(template: Template): string {
+  const taken = new Set(template.criteria.map((criterion) => criterion.id));
+  for (let n = 1; ; n++) {
+    const id = `c${n}`;
+    if (!taken.has(id)) return id;
+  }
+}
+
+function withCriteria(template: Template, criteria: TemplateCriterion[]): Template {
+  return { ...template, criteria };
+}
+
+function mapCriterion(
+  template: Template,
+  id: string,
+  edit: (criterion: TemplateCriterion) => TemplateCriterion,
+): Template {
+  const at = template.criteria.findIndex((criterion) => criterion.id === id);
+  if (at < 0) return template;
+  const criterion = template.criteria[at]!;
+  const next = edit(criterion);
+  if (next === criterion) return template;
+  return withCriteria(
+    template,
+    template.criteria.map((old, i) => (i === at ? next : old)),
+  );
+}
+
+/**
+ * An empty criterion at the end. Empty is a parse error, as an empty line is,
+ * and for the same reason: the prompt to type something.
+ */
+export function withCriterion(template: Template): Template {
+  return withCriteria(template, [
+    ...template.criteria,
+    { id: nextCriterionId(template), text: '' },
+  ]);
+}
+
+export function withoutCriterion(template: Template, id: string): Template {
+  const criteria = template.criteria.filter((criterion) => criterion.id !== id);
+  return criteria.length === template.criteria.length ? template : withCriteria(template, criteria);
+}
+
+/**
+ * The text of a criterion. Any AST stored beside it is dropped, since it is no
+ * longer what the text says (TDD §14) — the same rule `withLineText` follows.
+ */
+export function withCriterionText(template: Template, id: string, text: string): Template {
+  return mapCriterion(template, id, (criterion) => {
+    const next: TemplateCriterion = { id: criterion.id, text };
+    if (criterion.name !== undefined) next.name = criterion.name;
+    return next;
+  });
+}
+
+/**
+ * The criterion's own name — the example's "A, B and any monster" — which is
+ * what the readouts call it instead of its id. Trimmed; cleared to nothing, the
+ * field goes away rather than being stored blank, so a saved template says
+ * "unnamed" the one way.
+ */
+export function withCriterionName(template: Template, id: string, name: string): Template {
+  const trimmed = name.trim();
+  return mapCriterion(template, id, (criterion) => {
+    if ((criterion.name ?? '') === trimmed) return criterion;
+    const next: TemplateCriterion = { id: criterion.id, text: criterion.text };
+    if (trimmed !== '') next.name = trimmed;
+    if (criterion.expr !== undefined) next.expr = criterion.expr;
+    return next;
+  });
+}
+
+/** One place up (`by` -1) or down (`by` +1); a criterion already at that end does not move. */
+export function withMovedCriterion(template: Template, id: string, by: number): Template {
+  const at = template.criteria.findIndex((criterion) => criterion.id === id);
+  const to = at + by;
+  if (at < 0 || to < 0 || to >= template.criteria.length) return template;
+  const criteria = [...template.criteria];
+  const [criterion] = criteria.splice(at, 1);
+  criteria.splice(to, 0, criterion!);
+  return withCriteria(template, criteria);
 }
 
 // --- groups ----------------------------------------------------------------

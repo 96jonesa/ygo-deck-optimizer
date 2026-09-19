@@ -12,11 +12,13 @@ import type { WorkerResult } from '../worker/protocol';
 
 export type {
   Analysis,
+  Appearance,
   ClassAnalysis,
   ClassesAnalysis,
   CostModel,
   CriterionAnalysis,
   GroupAnalysis,
+  IgnoredLine,
   Issue,
   IssueCode,
   LimitAnalysis,
@@ -26,6 +28,7 @@ export type {
   RemainderAnalysis,
   RequirementAnalysis,
   Severity,
+  SubsumedAlternative,
   TotalsAnalysis,
   WorkAnalysis,
 } from '../core/model/analyze';

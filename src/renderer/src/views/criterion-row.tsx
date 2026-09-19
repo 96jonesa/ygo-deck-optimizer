@@ -1,0 +1,166 @@
+import type { CriterionAnalysis, TemplateCriterion } from '../../../shared/types';
+import { issuesToList, parseFailureOf, worstSeverity } from '../model/analysis-view';
+import { canonicalText, expansionPreview } from '../model/criteria-readout';
+import { useField } from './fields';
+import { IssueList, ParseFailure } from './line-row';
+
+// One criterion of the template: what it says, what the tool understood of it,
+// and — where an `OR` made more than one of them — the flat alternatives it
+// will actually be scored as (PRD §5.3). The row is the line row's markup down
+// to the class names, so the two editors line up in the same left column.
+
+export interface CriterionRowProps {
+  criterion: TemplateCriterion;
+  /** What `analyze` made of it; `null` while the analysis is one edit behind. */
+  found: CriterionAnalysis | null;
+  /** The hand the alternatives were expanded for, which is what a drop is measured against. */
+  handSize: number;
+  first: boolean;
+  last: boolean;
+  onText: (text: string) => void;
+  onName: (name: string) => void;
+  onMove: (by: number) => void;
+  onRemove: () => void;
+}
+
+export function CriterionRow({
+  criterion,
+  found,
+  handSize,
+  first,
+  last,
+  onText,
+  onName,
+  onMove,
+  onRemove,
+}: CriterionRowProps) {
+  const { id } = criterion;
+  const [text, setText] = useField(criterion.text);
+  const [name, setName] = useField(criterion.name ?? '');
+  const failure = parseFailureOf(found);
+  const canonical = canonicalText(found);
+  const preview = expansionPreview(found, handSize);
+  const issues = issuesToList(found);
+  const severity = worstSeverity(found?.issues ?? []);
+
+  return (
+    <li
+      className={severity === 'error' ? 'line criterion bad' : 'line criterion'}
+      data-testid={`criterion-${id}`}
+    >
+      <div className="line-main">
+        <span className="line-id" title="a criterion">
+          {id}
+        </span>
+        <input
+          type="text"
+          className="desc"
+          value={text}
+          aria-label={`Criterion ${id}`}
+          data-testid={`criterion-text-${id}`}
+          placeholder="1x [Ash Blossom], 1x monster, at most 1x [Brick]"
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(event) => {
+            setText(event.target.value);
+            onText(event.target.value);
+          }}
+        />
+        {/*
+          The name sits on a second grid row of its own, under the text and in
+          its column: a criterion is long — the example's is 70 characters —
+          and sharing one row with a name field left it showing about twenty.
+          It stays here in the DOM, between the text and the buttons, so that
+          tabbing through the row still goes text, name, move, move, remove.
+        */}
+        <input
+          type="text"
+          className="criterion-name"
+          value={name}
+          aria-label={`Name of criterion ${id}`}
+          data-testid={`criterion-name-${id}`}
+          placeholder="name this criterion (optional)"
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(event) => {
+            setName(event.target.value);
+            onName(event.target.value);
+          }}
+        />
+        <span className="line-buttons">
+          {/* `aria-disabled` rather than `disabled`, for the reason `LineRow` gives. */}
+          <button
+            type="button"
+            className={first ? 'quiet icon off' : 'quiet icon'}
+            aria-disabled={first}
+            aria-label={`Move criterion ${id} up`}
+            onClick={() => {
+              if (!first) onMove(-1);
+            }}
+          >
+            {'↑'}
+          </button>
+          <button
+            type="button"
+            className={last ? 'quiet icon off' : 'quiet icon'}
+            aria-disabled={last}
+            aria-label={`Move criterion ${id} down`}
+            onClick={() => {
+              if (!last) onMove(1);
+            }}
+          >
+            {'↓'}
+          </button>
+          <button
+            type="button"
+            className="quiet icon"
+            aria-label={`Remove criterion ${id}`}
+            onClick={onRemove}
+          >
+            {'×'}
+          </button>
+        </span>
+      </div>
+
+      <div className="line-readout" data-testid={`criterion-readout-${id}`}>
+        {failure !== null ? (
+          <ParseFailure
+            text={criterion.text}
+            message={failure.message}
+            span={failure.span}
+            testId={`criterion-parse-error-${id}`}
+          />
+        ) : (
+          canonical !== null && (
+            <p className="line-echo">
+              <code data-testid={`criterion-canonical-${id}`}>{canonical}</code>
+            </p>
+          )
+        )}
+        {preview !== null && (
+          <div className="alternatives" data-testid={`criterion-alternatives-${id}`}>
+            <p className="line-echo">
+              <span className="readout-label">Scored as</span>
+              {preview.alternatives.length === 1
+                ? ' 1 alternative'
+                : ` any of ${preview.alternatives.length} alternatives`}
+            </p>
+            <ol>
+              {preview.alternatives.map((alternative) => (
+                <li key={alternative}>
+                  <code>{alternative}</code>
+                </li>
+              ))}
+            </ol>
+            {preview.dropped !== null && (
+              <p className="line-echo" data-testid={`criterion-dropped-${id}`}>
+                {preview.dropped}
+              </p>
+            )}
+          </div>
+        )}
+        <IssueList issues={issues} />
+      </div>
+    </li>
+  );
+}
