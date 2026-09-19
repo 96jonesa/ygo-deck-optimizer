@@ -1,4 +1,4 @@
-import type { Problem } from '../../src/core/model/problem';
+import type { CompiledCriterion, CompiledRequirement, Problem } from '../../src/core/model/problem';
 import type { MatchProblem } from '../../src/core/prob/montecarlo';
 
 /**
@@ -47,10 +47,28 @@ export function problemFromMatrix(match: MatchProblem, handSizes: readonly numbe
       min: 0,
       max: line === null ? 0 : match.deckSize,
     })),
-    criteria: match.flat.map(({ reqs, limits }) => ({
-      slots: reqs.flatMap(({ n, desc }) => new Array<number>(n).fill(maskOf(desc))),
-      limits: limits.map(({ n, desc }) => ({ mask: maskOf(desc), n })),
-    })),
+    criteria: match.flat.map(({ reqs, limits }): CompiledCriterion => {
+      // Built here rather than by `compileCriterion`, so that a differential
+      // test owes nothing to the code it is checking: a ceiling is kept exactly
+      // as written, with none of compile's dropping.
+      const compiled = reqs.map(
+        ({ n, max, desc }): CompiledRequirement => ({
+          mask: maskOf(desc),
+          min: n,
+          max: max ?? null,
+        }),
+      );
+      const criterion: CompiledCriterion = {
+        slots: compiled.flatMap(({ mask, min }) => new Array<number>(min).fill(mask)),
+        limits: limits.map(({ n, desc }) => ({ mask: maskOf(desc), n })),
+      };
+      // `validateProblem` refuses a ceiling no class can reach, and a hand
+      // never holds a card of such a class anyway: an unreachable ceiling is
+      // the same as none.
+      if (compiled.some(({ mask, max }) => max !== null && mask !== 0))
+        criterion.reqs = compiled.map((req) => (req.mask === 0 ? { ...req, max: null } : req));
+      return criterion;
+    }),
   };
 
   const totals = (counts: readonly number[]): number[] => {

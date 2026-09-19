@@ -25,7 +25,7 @@ class Failure {
 
 type TokenOf<T extends CriterionToken['t']> = Extract<CriterionToken, { t: T }>;
 
-function isPunct(token: CriterionToken | undefined, ch: '(' | ')'): boolean {
+function isPunct(token: CriterionToken | undefined, ch: '(' | ')' | '-'): boolean {
   return token?.t === 'punct' && token.ch === ch;
 }
 
@@ -34,6 +34,15 @@ function isTermWord(
   token: CriterionToken | undefined,
 ): token is TokenOf<'count' | 'atMost' | 'no'> {
   return token?.t === 'count' || token?.t === 'atMost' || token?.t === 'no';
+}
+
+/**
+ * A plain integer that can stand in for a count whose `x` was left out. The
+ * cap is what keeps the better message: `2000 ATK monster` is a description
+ * missing its count, not a count of 2000.
+ */
+function isBareCount(token: CriterionToken | undefined): token is TokenOf<'int'> {
+  return token?.t === 'int' && token.value <= MAX_COUNT;
 }
 
 class Parser {
@@ -102,6 +111,16 @@ class Parser {
     return isTermWord(this.tokens[this.pastOpenParens(index)]);
   }
 
+  /**
+   * Whether a term starts AT `index`, where the grammar allows nothing else —
+   * so a count may leave its `x` out. Not the same question as `startsTerm`,
+   * which is asked after an `or`, where a description may continue instead and
+   * only the `x` tells the two apart.
+   */
+  private startsTermHere(index: number): boolean {
+    return isTermWord(this.tokens[index]) || isBareCount(this.tokens[index]);
+  }
+
   private term(depth: number): Expr {
     const expr = this.termBody(depth);
     const after = this.peek();
@@ -117,6 +136,7 @@ class Parser {
   private termBody(depth: number): Expr {
     const token = this.peek();
     if (isTermWord(token)) return this.leaf(token);
+    if (isBareCount(token)) return this.requirement(this.bareCount());
     if (token !== undefined && isPunct(token, '(')) return this.group(token, depth);
 
     const before = this.tokens[this.pos - 1];
@@ -126,19 +146,19 @@ class Parser {
     throw this.missingCount(token);
   }
 
-  /** Something that is not a term stands where one must start: most likely a bare description. */
+  /**
+   * Something that is not a term stands where one must start: most likely a
+   * bare description. An integer never gets here unless it is too large to be
+   * a count — `isBareCount` has taken every other one for a count already.
+   */
   private missingCount(token: CriterionToken): Failure {
     if (token.t === 'hex')
       return new Failure(
         `\`${this.textOf(token)}\` reads as a hex code; put a space after the \`x\` of a count, as in \`0x dark monster\``,
         token.span,
       );
-    const hint =
-      token.t === 'int' && token.value <= MAX_COUNT
-        ? `; a count ends in x: \`${token.value}x\``
-        : '';
     return new Failure(
-      `expected a count before the description, as in \`1x level 4 monster\`${hint}; a limit reads \`at most 1x trap\` or \`no trap\``,
+      'expected a count before the description, as in `1x level 4 monster`; a limit reads `at most 1x trap` or `no trap`',
       token.span,
     );
   }
@@ -155,7 +175,7 @@ class Parser {
         end: first.span.end,
       });
     // `([C] or [E])` is a description, which belongs after a count.
-    if (!isTermWord(first)) throw this.missingCount(first);
+    if (!this.startsTermHere(inside)) throw this.missingCount(first);
 
     if (depth >= MAX_DEPTH) throw new Failure('too many nested parentheses', open.span);
     this.next();
@@ -169,33 +189,66 @@ class Parser {
   private leaf(word: TokenOf<'count' | 'atMost' | 'no'>): Expr {
     this.next();
     if (word.t === 'no') return { op: 'atMost', n: 0, desc: this.description() };
-    if (word.t === 'count') {
-      if (word.n < 1)
+    if (word.t === 'count') return this.requirement(word);
+
+    const count = this.peek();
+    // `at most` names one ceiling, so a count there is a single number.
+    if (count?.t === 'count' || isBareCount(count)) {
+      const counted = count?.t === 'count' ? (this.next() as TokenOf<'count'>) : this.bareCount();
+      if (counted.max !== undefined)
+        throw new Failure(
+          `a limit has one ceiling: write \`at most ${counted.max}x …\`, or make it the requirement \`${counted.n}-${counted.max}x …\``,
+          counted.span,
+        );
+      return { op: 'atMost', n: this.checked(counted.n, counted.span), desc: this.description() };
+    }
+    if (count?.t === 'hex') throw this.missingCount(count);
+    throw new Failure(
+      'expected a count after `at most`, as in `at most 1x trap`',
+      this.spanAt(this.pos),
+    );
+  }
+
+  /**
+   * `1`, or the range `1-2`, standing where a term must start: a count whose
+   * `x` was left out. The cursor is on the first integer.
+   */
+  private bareCount(): TokenOf<'count'> {
+    const first = this.next() as TokenOf<'int'>;
+    const dash = this.peek();
+    const upper = this.tokens[this.pos + 1];
+    if (!isPunct(dash, '-') || upper?.t !== 'int')
+      return { t: 'count', n: first.value, span: first.span };
+    this.next();
+    this.next();
+    return {
+      t: 'count',
+      n: first.value,
+      max: upper.value,
+      span: { start: first.span.start, end: upper.span.end },
+    };
+  }
+
+  /** `n×` or `a-b×`, and the description that follows it. */
+  private requirement(word: TokenOf<'count'>): Expr {
+    const n = this.checked(word.n, word.span);
+    if (word.max === undefined) {
+      if (n < 1)
         throw new Failure(
           'a requirement needs at least 1 card; to rule cards out, write `no …` or `at most 1x …`',
           word.span,
         );
-      return { op: 'req', n: this.count(word), desc: this.description() };
+      return { op: 'req', n, desc: this.description() };
     }
-    const count = this.peek();
-    if (count?.t !== 'count') {
-      if (count?.t === 'hex') throw this.missingCount(count);
-      throw new Failure(
-        'expected a count after `at most`, as in `at most 1x trap`',
-        this.spanAt(this.pos),
-      );
-    }
-    this.next();
-    return { op: 'atMost', n: this.count(count), desc: this.description() };
+    const max = this.checked(word.max, word.span);
+    if (max < n) throw new Failure(`a range runs low to high: write \`${max}-${n}x\``, word.span);
+    return { op: 'req', n, max, desc: this.description() };
   }
 
-  private count(token: TokenOf<'count'>): number {
-    if (token.n > MAX_COUNT)
-      throw new Failure(
-        `a count is at most ${MAX_COUNT}, the size of the largest deck`,
-        token.span,
-      );
-    return token.n;
+  private checked(value: number, span: Span): number {
+    if (value > MAX_COUNT)
+      throw new Failure(`a count is at most ${MAX_COUNT}, the size of the largest deck`, span);
+    return value;
   }
 
   /**
@@ -228,9 +281,22 @@ class Parser {
       this.spanAt(end),
       this.ctx,
     );
-    if (!result.ok) throw new Failure(result.message, result.span);
+    if (!result.ok) throw new Failure(result.message + this.orCountHint(start, end), result.span);
     this.pos = end;
     return result.desc;
+  }
+
+  /**
+   * After an `or`, an integer continues the description — `1x [C] or 2000 ATK
+   * monster` is one slot either card fills — so a count there needs its `x`,
+   * and without one the whole thing was read as a description. When that
+   * description will not parse, say so: it is the likeliest thing meant.
+   */
+  private orCountHint(start: number, end: number): string {
+    for (let at = start; at + 1 < end; at++)
+      if (this.tokens[at]?.t === 'or' && isBareCount(this.tokens[at + 1]))
+        return '; a count after `or` keeps its `x`, as in `or 2x monster`';
+    return '';
   }
 
   private termWordInDescription(token: CriterionToken, depth: number): Failure {
@@ -257,6 +323,13 @@ class Parser {
  * that `1x [C] or [E]` is ONE slot either card can fill. The same lookahead
  * reads a `(` where a term must start; after a count, a `(` always opens a
  * description.
+ *
+ * A count is `1x`, the range `1-2x`, or either with the `x` left out — but
+ * only where the grammar allows nothing but a term, which is the start of the
+ * text, after `and` or `,`, after a `(` that opens a group of terms, and after
+ * `at most`. A description may itself begin with an integer (`2000 ATK
+ * monster`), and the one place a description and a term can both stand is
+ * after an `or`; there the `x` is what tells them apart, and a count keeps it.
  */
 export function parseCriterion(text: string, ctx: DescContext): CriterionParseResult {
   const lexed = lexCriterion(text);

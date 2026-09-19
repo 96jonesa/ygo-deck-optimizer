@@ -41,6 +41,8 @@ export interface GenProblemOptions {
   copies: readonly [number, number];
   /** How often a line fills a column. */
   fill: number;
+  /** How often a requirement is a range, `a-b×`; 0 leaves the criteria as they were. */
+  rangeChance?: number;
 }
 
 export const SMALL_PROBLEMS: GenProblemOptions = {
@@ -51,6 +53,9 @@ export const SMALL_PROBLEMS: GenProblemOptions = {
   copies: [1, 3],
   fill: 0.4,
 };
+
+/** `SMALL_PROBLEMS`, with a range requirement in roughly half the leaves. */
+export const RANGED_PROBLEMS: GenProblemOptions = { ...SMALL_PROBLEMS, rangeChance: 0.5 };
 
 export function genProblem(rng: Rng, options: GenProblemOptions = SMALL_PROBLEMS): Generated {
   for (;;) {
@@ -80,15 +85,17 @@ export function genProblem(rng: Rng, options: GenProblemOptions = SMALL_PROBLEMS
         maxDepth: 2,
         maxArgs: 3,
         limitChance: 0.25,
+        ...(options.rangeChance === undefined ? {} : { rangeChance: options.rangeChance }),
       }),
     );
     const expanded = expandAll(exprs, { maxHandSize: handSize });
     if (!expanded.ok) continue;
-    const index = (side: FlatCriterion['reqs']) =>
-      side.map(({ n, desc }) => ({ n, desc: columnOf(desc) }));
     const flat = expanded.flat.map(({ reqs, limits }) => ({
-      reqs: index(reqs),
-      limits: index(limits),
+      reqs: reqs.map(({ n, max, desc }) => {
+        const at = columnOf(desc);
+        return max === undefined ? { n, desc: at } : { n, max, desc: at };
+      }),
+      limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc) })),
     }));
     return {
       problem: { deckSize, matrix, flat },
@@ -127,4 +134,20 @@ export const SMALL_PROBLEM_COUNT = 240;
 
 export function smallProblems(): Generated[] {
   return Array.from({ length: SMALL_PROBLEM_COUNT }, (_, i) => genProblem(seededRng(31_000 + i)));
+}
+
+/**
+ * The same, with RANGE requirements throughout: a second family for the same
+ * oracles, so that the rule ranges add is held to the same standard. A
+ * different seed base, so the two families are not the same problems twice.
+ */
+export function smallRangedProblems(): Generated[] {
+  return Array.from({ length: SMALL_PROBLEM_COUNT }, (_, i) =>
+    genProblem(seededRng(57_000 + i), RANGED_PROBLEMS),
+  );
+}
+
+/** Whether any alternative of `generated` holds a requirement with a ceiling. */
+export function hasRange({ flat }: Generated): boolean {
+  return flat.some(({ reqs }) => reqs.some(({ max }) => max !== undefined));
 }

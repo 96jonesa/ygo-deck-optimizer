@@ -16,27 +16,53 @@ import type { Description } from '../../src/core/desc/ast';
 export type Fills<C> = (card: C, desc: Description) => boolean;
 
 /**
- * Every set of hand positions that can be left over once `expr` has taken the
- * cards it needs out of `available` (both as bitmasks); empty when `expr`
- * cannot be satisfied from `available`.
+ * One way `expr` can have taken its cards: which hand positions are still
+ * unassigned, and the descriptions of the CAPPED requirements it met on the
+ * way. A capped requirement is one written `a-b×`, and no card left over at
+ * the end may match any of them.
  */
-function remainders<C>(
+interface Outcome {
+  available: number;
+  capped: readonly Description[];
+}
+
+/** The identity of an outcome: two that leave the same cards under the same caps are one. */
+function outcomeKey({ available, capped }: Outcome): string {
+  const keys = capped.map((desc) => JSON.stringify(desc)).sort();
+  return `${available}|${keys.join(';')}`;
+}
+
+function collect(outcomes: Iterable<Outcome>): Outcome[] {
+  const seen = new Map<string, Outcome>();
+  for (const outcome of outcomes) seen.set(outcomeKey(outcome), outcome);
+  return [...seen.values()];
+}
+
+/**
+ * Every way `expr` can take the cards it needs out of `available` (a bitmask
+ * of hand positions); empty when `expr` cannot be satisfied from `available`.
+ */
+function outcomesOf<C>(
   expr: Expr,
   available: number,
   hand: readonly C[],
   fills: Fills<C>,
-): Set<number> {
+): Outcome[] {
   switch (expr.op) {
     case 'req': {
       let fillers = 0;
       hand.forEach((card, position) => {
         if ((available & (1 << position)) !== 0 && fills(card, expr.desc)) fillers |= 1 << position;
       });
-      // Every choice of `n` of them, not the first that works: a later
-      // requirement may need exactly the card a greedy choice would take.
-      const out = new Set<number>();
+      // Every choice the range allows, not the first that works: a later
+      // requirement may need exactly the card a greedy choice would take, and
+      // a ceiling elsewhere may forbid taking as few as possible.
+      const capped = expr.max === undefined ? [] : [expr.desc];
+      const out: Outcome[] = [];
       for (let taken = fillers; ; taken = (taken - 1) & fillers) {
-        if (popcount(taken) === expr.n) out.add(available & ~taken);
+        const count = popcount(taken);
+        if (count >= expr.n && count <= (expr.max ?? hand.length))
+          out.push({ available: available & ~taken, capped });
         if (taken === 0) break;
       }
       return out;
@@ -44,24 +70,25 @@ function remainders<C>(
     case 'atMost': {
       // A limit counts over the WHOLE hand, whatever has been taken, and takes nothing.
       const count = hand.filter((card) => fills(card, expr.desc)).length;
-      return new Set(count <= expr.n ? [available] : []);
+      return count <= expr.n ? [{ available, capped: [] }] : [];
     }
     case 'and': {
-      let states = new Set([available]);
-      for (const arg of expr.args) {
-        const next = new Set<number>();
-        for (const state of states)
-          for (const remainder of remainders(arg, state, hand, fills)) next.add(remainder);
-        states = next;
-      }
+      let states: Outcome[] = [{ available, capped: [] }];
+      for (const arg of expr.args)
+        states = collect(
+          states.flatMap((state) =>
+            outcomesOf(arg, state.available, hand, fills).map(
+              (next): Outcome => ({
+                available: next.available,
+                capped: [...state.capped, ...next.capped],
+              }),
+            ),
+          ),
+        );
       return states;
     }
-    case 'or': {
-      const out = new Set<number>();
-      for (const arg of expr.args)
-        for (const remainder of remainders(arg, available, hand, fills)) out.add(remainder);
-      return out;
-    }
+    case 'or':
+      return collect(expr.args.flatMap((arg) => outcomesOf(arg, available, hand, fills)));
   }
 }
 
@@ -74,32 +101,49 @@ function popcount(mask: number): number {
 /**
  * The meaning of a criterion, read directly off its tree (PRD §5.3): for some
  * choice of one branch at every `or`, the requirements met on the way take
- * distinct cards and every limit met on the way holds. Hands of up to 30 cards.
+ * distinct cards — each a count within its own range — every limit met on the
+ * way holds, and no card left over matches a requirement that has a ceiling.
+ * Hands of up to 30 cards.
+ *
+ * Requirements are NOT merged here: `1x D and 1-2x D` stays two requirements,
+ * and the unbounded one absorbs whatever the capped one cannot take. That is
+ * the same meaning `expand` gives when it merges the pair into `2x D`, which
+ * is what holding the two against each other checks.
  */
 export function satisfiesTree<C>(expr: Expr, hand: readonly C[], fills: Fills<C>): boolean {
-  return remainders(expr, 2 ** hand.length - 1, hand, fills).size > 0;
+  return outcomesOf(expr, 2 ** hand.length - 1, hand, fills).some(({ available, capped }) =>
+    hand.every(
+      (card, position) =>
+        (available & (1 << position)) === 0 || capped.every((desc) => !fills(card, desc)),
+    ),
+  );
 }
 
 /**
  * The meaning of a flat criterion (TDD §10.1), by brute force: every limit
- * holds over the whole hand, and the requirement slots (`n×` is `n` slots)
- * can be given distinct cards, each filling its slot.
+ * holds over the whole hand, and the cards can be handed out so that every
+ * requirement takes a count within `[n, max]` and every card left over matches
+ * no requirement that has a ceiling.
  */
 export function satisfiesFlat<C>(flat: FlatCriterion, hand: readonly C[], fills: Fills<C>) {
   for (const { n, desc } of flat.limits)
     if (hand.filter((card) => fills(card, desc)).length > n) return false;
 
-  const slots = flat.reqs.flatMap(({ n, desc }) => Array.from({ length: n }, () => desc));
-  const used = hand.map(() => false);
-  const assign = (slot: number): boolean => {
-    if (slot === slots.length) return true;
-    for (let position = 0; position < hand.length; position++) {
-      if (used[position] || !fills(hand[position]!, slots[slot]!)) continue;
-      used[position] = true;
-      if (assign(slot + 1)) return true;
-      used[position] = false;
+  const taken = flat.reqs.map(() => 0);
+  const capped = flat.reqs.filter(({ max }) => max !== undefined);
+  const assign = (position: number): boolean => {
+    if (position === hand.length) return flat.reqs.every(({ n }, at) => taken[at]! >= n);
+    const card = hand[position]!;
+    for (let at = 0; at < flat.reqs.length; at++) {
+      const req = flat.reqs[at]!;
+      if (taken[at]! >= (req.max ?? hand.length) || !fills(card, req.desc)) continue;
+      taken[at]!++;
+      const done = assign(position + 1);
+      taken[at]!--;
+      if (done) return true;
     }
-    return false;
+    // Left over, which only a card no ceiling would have counted may be.
+    return capped.every(({ desc }) => !fills(card, desc)) && assign(position + 1);
   };
   return assign(0);
 }

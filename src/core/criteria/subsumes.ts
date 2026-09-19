@@ -68,12 +68,19 @@ function slotsInject(
  *   counts too, so `B`'s count is at most `A`'s, at most `nA`, at most `nB`.
  *   A limit with `nB >= maxHandSize` holds of every hand and needs no cover.
  *
+ * A `B` with a RANGE requirement is never claimed to subsume anything. The
+ * injection argument reads lower bounds only, and a ceiling of `B` is a reason
+ * for `B` to REJECT a hand that `A` accepts — the opposite direction — so it
+ * would have to be covered by a ceiling of `A`, which this does not try to
+ * decide. A range in `A` alone is harmless: its ceilings only shrink the hands
+ * `A` accepts, and `A`'s lower bounds still fill `B`'s slots.
+ *
  * `true` is a proof. `false` is NOT a refutation — the condition is not
  * necessary: two limits of `A` never combine to cover one of `B` (`no monster
  * and no spell` against `no (monster or spell)`), an `A` that no hand can
- * satisfy is subsumed by everything, and requirements are never weighed
- * against limits. It is advice for a notice (PRD §8.3); nothing computed
- * depends on it.
+ * satisfy is subsumed by everything, requirements are never weighed against
+ * limits, and a range in `B` gives up at once. It is advice for a notice
+ * (PRD §8.3); nothing computed depends on it.
  */
 export function subsumes(
   B: FlatCriterion,
@@ -81,6 +88,7 @@ export function subsumes(
   ctx: Implication,
   maxHandSize = Number.POSITIVE_INFINITY,
 ): boolean {
+  if (B.reqs.some(({ max }) => max !== undefined)) return false;
   const holds = relationOf(ctx);
   const covered = B.limits.every(
     (b) => b.n >= maxHandSize || A.limits.some((a) => a.n <= b.n && holds(b.desc, a.desc)),

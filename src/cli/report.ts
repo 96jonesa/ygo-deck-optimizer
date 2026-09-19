@@ -1,4 +1,5 @@
-import type { Analysis, Issue, Severity } from '../core/model/analyze';
+import { countPrefix } from '../core/criteria/print';
+import type { Analysis, Appearance, Issue, Severity } from '../core/model/analyze';
 import { REMAINDER_ID } from '../core/model/compile';
 import type { IntRange } from '../core/model/ranges';
 import { formatCount } from '../core/util/count';
@@ -95,6 +96,28 @@ export function criteriaSection(a: Analysis): string {
   return out.join('\n');
 }
 
+/**
+ * The counts a requirement or a limit appears under, as the criteria editor
+ * writes them: distinct counts joined by `/`, and a range kept apart from the
+ * plain count it would otherwise read as — `1x monster` and `1-2x monster` are
+ * different criteria and must not print alike.
+ */
+function countsOf(
+  appearsIn: readonly Appearance[],
+  say: (appearance: Appearance) => string,
+): string {
+  const seen = new Map<string, Appearance>();
+  for (const appearance of appearsIn)
+    seen.set(`${appearance.n}-${appearance.max ?? ''}`, appearance);
+  return [...seen.values()]
+    .sort(
+      (x, y) =>
+        x.n - y.n || (x.max ?? Number.POSITIVE_INFINITY) - (y.max ?? Number.POSITIVE_INFINITY),
+    )
+    .map(say)
+    .join(' / ');
+}
+
 /** Filled-by and near misses per requirement, the readout per limit, and the lines that match nothing. */
 export function matchingSection(a: Analysis): string {
   const out = [
@@ -103,11 +126,16 @@ export function matchingSection(a: Analysis): string {
   const rows = [
     ...a.requirements.map((r) => [
       'requirement',
-      r.text,
+      `${countsOf(r.appearsIn, ({ n, max }) => countPrefix(n, max))} ${r.text}`,
       `[${r.echo}]`,
       `filled by: ${namesOf(r.filledBy)}`,
     ]),
-    ...a.limits.map((l) => ['limit', l.text, `[${l.echo}]`, `counts: ${namesOf(l.counts)}`]),
+    ...a.limits.map((l) => [
+      'limit',
+      `${countsOf(l.appearsIn, ({ n }) => (n === 0 ? 'no' : `at most ${n}x`))} ${l.text}`,
+      `[${l.echo}]`,
+      `counts: ${namesOf(l.counts)}`,
+    ]),
   ];
   const aligned = rows.length === 0 ? [] : table(rows).split('\n');
   a.requirements.forEach((requirement, i) => {
@@ -124,6 +152,14 @@ export function matchingSection(a: Analysis): string {
     }
     for (const [advice, lines] of grouped)
       out.push(`      near miss: ${lines.join(', ')} — ${advice}`);
+    // A ceiling counts cards, so it has a limit's blind spot and says so the same way.
+    if (requirement.ignored.length === 0) return;
+    const each = requirement.ignored
+      .map((line) => `${nameOf(line.line)} (${span(line)})`)
+      .join(', ');
+    const total =
+      requirement.ignoredRange === null ? '' : ` — ${span(requirement.ignoredRange)} cards in all`;
+    out.push(`      the ceiling ignores: ${each}${total}`);
   });
   a.limits.forEach((limit, i) => {
     out.push(aligned[a.requirements.length + i]!);
@@ -182,6 +218,12 @@ export function classesSection(a: Analysis): string {
     out.push(
       `  the limit \`${n === 0 ? 'no' : `at most ${n}x`} ${text}\` holds of every hand and is left out: ${
         reason === 'counts-nothing' ? 'no line counts against it' : 'no hand holds more cards'
+      }`,
+    );
+  for (const { text, n, max, reason } of a.classes.droppedCeilings)
+    out.push(
+      `  the ceiling of \`${n}-${max}x ${text}\` can never be exceeded and is left out, leaving \`${n}x ${text}\`: ${
+        reason === 'counts-nothing' ? 'no line fills it' : 'no hand holds more cards'
       }`,
     );
   return out.join('\n');

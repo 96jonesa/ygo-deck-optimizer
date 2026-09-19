@@ -2,9 +2,10 @@ import type { CostModel } from '../model/analyze';
 import {
   type CompiledClassInfo,
   type CompileResult,
+  compileCriterion,
+  type FlatAlternative,
   lineInterval,
   REMAINDER_ID,
-  type ResolvedCounted,
 } from '../model/compile';
 import type { HandSize, Problem } from '../model/problem';
 import { countSums } from '../model/ranges';
@@ -619,10 +620,7 @@ export interface BreakdownCriterion {
   id: string;
   name?: string;
   /** Its own flat alternatives; the descriptions are columns of the match matrix `compiled` was built from. */
-  alternatives: readonly {
-    reqs: readonly ResolvedCounted[];
-    limits: readonly ResolvedCounted[];
-  }[];
+  alternatives: readonly FlatAlternative[];
 }
 
 export interface CriterionScore {
@@ -653,13 +651,15 @@ export function breakdown(
     });
     return mask >>> 0;
   };
+  // The same ceiling and limit dropping the whole problem got, so a criterion
+  // alone is judged exactly as it is judged among the others.
+  const largestHand = Math.max(...compiled.problem.handSizes.map(({ H }) => H));
   return criteria.map(({ id, name, alternatives }) => {
     const alone: Problem = {
       ...compiled.problem,
-      criteria: alternatives.map(({ reqs, limits }) => ({
-        slots: reqs.flatMap(({ n, desc }) => new Array<number>(n).fill(maskOf(desc))),
-        limits: limits.map(({ n, desc }) => ({ mask: maskOf(desc), n })),
-      })),
+      criteria: alternatives.map(
+        (alternative) => compileCriterion(alternative, maskOf, largestHand).criterion,
+      ),
     };
     const { score, blend } = createRanker(alone).scored(classTotals);
     return name === undefined ? { id, score, blend } : { id, name, score, blend };

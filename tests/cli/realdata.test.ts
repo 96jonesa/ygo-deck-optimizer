@@ -32,7 +32,13 @@ describe.skipIf(!EDOPRO_WORKDIR)('M0 exit: the motivating example against a real
     const filledBy = (description: string): string[] => {
       const row = stdout
         .split('\n')
-        .find((line) => line.startsWith('  requirement ') && line.includes(`  ${description}  `));
+        .find(
+          (line) =>
+            line.startsWith('  requirement ') &&
+            new RegExp(
+              `\\s\\d+(?:-\\d+)?x ${description.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\s\\s`,
+            ).test(line),
+        );
       const lines = /filled by: (.*)$/.exec(row ?? '')?.[1];
       if (lines === undefined) throw new Error(`no match row for ${description} in:\n${stdout}`);
       return lines.split(', ');

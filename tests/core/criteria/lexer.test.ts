@@ -49,6 +49,38 @@ describe('lexCriterion', () => {
       ]);
     });
 
+    it('reads a range, `1-2x`, with or without spaces around the dash', () => {
+      for (const text of ['1-2x', '1 - 2x', '1-2 ×', '1-2X'])
+        expect(bodies(text), text).toEqual([{ t: 'count', n: 1, max: 2 }]);
+      expect(bodies('0-0x')).toEqual([{ t: 'count', n: 0, max: 0 }]);
+      // Not validated here: a backwards range is a count, and the parser refuses it.
+      expect(bodies('4-2x')).toEqual([{ t: 'count', n: 4, max: 2 }]);
+      expect(spansOf('1-2x monster')).toEqual(['1-2x', 'monster']);
+    });
+
+    it("leaves a description's own range alone: `level 2-4` ends in no x", () => {
+      expect(bodies('1x level 2-4 monster')).toEqual([
+        { t: 'count', n: 1 },
+        { t: 'level' },
+        { t: 'int', value: 2 },
+        { t: 'punct', ch: '-' },
+        { t: 'int', value: 4 },
+        { t: 'kind', kind: 'monster' },
+      ]);
+      // And the two together, the count a range and the level a range.
+      expect(bodies('1-2x level 2-4 monster').slice(0, 2)).toEqual([
+        { t: 'count', n: 1, max: 2 },
+        { t: 'level' },
+      ]);
+      expect(bodies('1x ATK 1000-2000')).toEqual([
+        { t: 'count', n: 1 },
+        { t: 'stat', stat: 'atk' },
+        { t: 'int', value: 1000 },
+        { t: 'punct', ch: '-' },
+        { t: 'int', value: 2000 },
+      ]);
+    });
+
     it('leaves a hex code whole: 0x2066 is not the count 0x', () => {
       expect(bodies('0x2066')).toEqual([{ t: 'hex', value: 0x2066 }]);
       expect(bodies('0X2066')).toEqual([{ t: 'hex', value: 0x2066 }]);

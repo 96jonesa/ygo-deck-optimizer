@@ -11,12 +11,24 @@ export interface GenExprOptions {
   maxArgs: number;
   /** How often a leaf is a limit rather than a requirement. */
   limitChance: number;
+  /** How often a requirement is a RANGE, `a-b×`; 0 by default, so old callers generate what they did. */
+  rangeChance?: number;
 }
 
 function genLeaf(rng: Rng, options: GenExprOptions): Expr {
   const desc = options.desc(rng);
   if (rng.chance(options.limitChance))
     return { op: 'atMost', n: rng.pick([0, 0, 0, 1, 1, 2]), desc };
+  // Asked for only when wanted: `chance` draws whatever it is given, so a
+  // generator that never makes ranges must not consume the draw and shift
+  // every problem the older suites pinned.
+  const rangeChance = options.rangeChance ?? 0;
+  if (rangeChance > 0 && rng.chance(rangeChance)) {
+    // `0-b` as often as anything: its lower bound asks for nothing, and only
+    // its ceiling and the leftovers it forbids decide.
+    const n = rng.pick([0, 0, 1, 1, 1, 2]);
+    return { op: 'req', n, max: n + rng.pick([0, 0, 1, 1, 2]), desc };
+  }
   return { op: 'req', n: rng.pick([1, 1, 1, 1, 1, 1, 2, 2, 3]), desc };
 }
 

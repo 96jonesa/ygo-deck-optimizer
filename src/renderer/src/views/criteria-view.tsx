@@ -1,6 +1,7 @@
 import { criterionAnalysisOf } from '../model/analysis-view';
 import {
   criteriaIssues,
+  type IgnoredRow,
   type LimitRow,
   limitRows,
   type NearMissRow,
@@ -89,6 +90,22 @@ function NearMiss({ requirement, miss }: { requirement: string; miss: NearMissRo
   );
 }
 
+/** What a count over the hand — a limit, or a requirement's ceiling — cannot see. */
+function Ignored({ lines, total }: { lines: IgnoredRow[]; total: string }) {
+  return (
+    <>
+      <strong className="tabular">{total}</strong> cards of lines that do not say whether they
+      match:{' '}
+      {lines.map((line, at) => (
+        <span key={line.label}>
+          {at > 0 && ', '}
+          <code>{line.label}</code> <span className="dim">{line.range}</span>
+        </span>
+      ))}
+    </>
+  );
+}
+
 function Requirement({ row }: { row: RequirementRow }) {
   return (
     <li className="readout-row" data-testid={`requirement-${row.text}`}>
@@ -101,6 +118,12 @@ function Requirement({ row }: { row: RequirementRow }) {
       {row.nearMisses.map((miss) => (
         <NearMiss key={miss.line} requirement={row.text} miss={miss} />
       ))}
+      {/* A ceiling counts cards, so it is blind to the same lines a limit is. */}
+      {row.ignoredRange !== null && (
+        <Fact label="Ceiling ignores" testId={`requirement-ignores-${row.text}`}>
+          <Ignored lines={row.ignored} total={row.ignoredRange} />
+        </Fact>
+      )}
       {/* A criterion's own name may hold commas — the example's do — so the
           separator between names cannot be one. */}
       <Fact label="Needed by">{row.neededBy.join(' · ')}</Fact>
@@ -120,14 +143,7 @@ function Limit({ row }: { row: LimitRow }) {
       </Fact>
       {row.ignoredRange !== null && (
         <Fact label="Ignores" testId={`limit-ignores-${row.text}`}>
-          <strong className="tabular">{row.ignoredRange}</strong> cards of lines that do not say
-          whether they match:{' '}
-          {row.ignored.map((line, at) => (
-            <span key={line.label}>
-              {at > 0 && ', '}
-              <code>{line.label}</code> <span className="dim">{line.range}</span>
-            </span>
-          ))}
+          <Ignored lines={row.ignored} total={row.ignoredRange} />
         </Fact>
       )}
       <Fact label="Applies to">{row.appliesTo.join(' · ')}</Fact>
@@ -194,7 +210,9 @@ export function CriteriaView() {
         A line fills a requirement only if what it says <em>implies</em> it (PRD §6.2): a{' '}
         <code>monster</code> line does not count toward <code>level 4 or lower monster</code>,
         because its Level is unstated. Where one nearly does, the split that would count is one
-        click away.
+        click away. A requirement written as a range — <code>1-2x monster</code> — also sets a
+        ceiling: a hand holding more matching cards than that fails, unless another requirement
+        takes them.
       </p>
       {requirements.length === 0 ? (
         <p className="seam" data-testid="no-requirements">
@@ -214,7 +232,8 @@ export function CriteriaView() {
           <p className="hint flush">
             A limit counts <strong>only</strong> cards a line is specific enough to be known to
             match (PRD §6.3). Cards it cannot see are listed rather than assumed: if some of them
-            really do match, give them a line that says so.
+            really do match, give them a line that says so. A range requirement&rsquo;s ceiling
+            counts cards the same way, and is blind to the same lines.
           </p>
           <ul className="readouts" data-testid="limits">
             {limits.map((row) => (

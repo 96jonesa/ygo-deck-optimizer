@@ -179,6 +179,32 @@ describe('subsumes', () => {
     );
     expect(subsumes(flat([], [[0, 'monster or spell']]), A, ctx)).toBe(false);
   });
+
+  describe('range requirements', () => {
+    const ranged = (n: number, max: number, text: string): FlatCriterion => ({
+      reqs: [{ n, max, desc: d(text) }],
+      limits: [],
+    });
+
+    it('claims nothing for a B with a ceiling: a ceiling REJECTS hands, and is not covered', () => {
+      // `1-1x monster` does not accept every hand `1x level 4 monster` accepts:
+      // two Level 4 monsters satisfy the second and break the first.
+      expect(subsumes(ranged(1, 1, 'monster'), flat([[1, 'level 4 monster']]), ctx)).toBe(false);
+      // Not even of itself, which is where the giving up shows plainest.
+      expect(subsumes(ranged(1, 2, 'monster'), ranged(1, 2, 'monster'), ctx)).toBe(false);
+    });
+
+    it('still reads an A with a ceiling: its lower bounds fill B, and its ceiling only narrows A', () => {
+      expect(subsumes(flat([[1, 'monster']]), ranged(1, 2, 'level 4 monster'), ctx)).toBe(true);
+      // A lower bound of zero fills nothing, so it cannot fill B's slot.
+      expect(subsumes(flat([[1, 'monster']]), ranged(0, 2, 'level 4 monster'), ctx)).toBe(false);
+    });
+
+    it('keeps a range out of the notice `findSubsumed` gives', () => {
+      const criteria = [flat([[1, 'level 4 monster']]), ranged(1, 2, 'monster')];
+      expect(findSubsumed(criteria, ctx)).toEqual([]);
+    });
+  });
 });
 
 describe('findSubsumed', () => {

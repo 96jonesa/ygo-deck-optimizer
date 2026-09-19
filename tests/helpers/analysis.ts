@@ -93,6 +93,9 @@ export function requirementOf(
     appearsIn: [{ criterion: 'c1', alternative: 0, n: 1 }],
     filledBy: [],
     nearMisses: [],
+    bounded: false,
+    ignored: [],
+    ignoredRange: null,
     issues: [],
     ...over,
   };

@@ -4,10 +4,10 @@ import { createProgressReporter, type OnProgress } from '../util/progress';
 /**
  * The Monte Carlo oracle (TDD §10.4). It draws CONCRETE cards, each tagged
  * with the LINE it came from, and decides success by brute-force assignment
- * of drawn cards to requirement slots, reading the match matrix rows of
- * lines. It deliberately shares nothing with the exact engine — no classes,
- * no masks, no Hall's condition, no success set, no binomials — so that the
- * two can be held against each other.
+ * of drawn cards to requirements, reading the match matrix rows of lines. It
+ * deliberately shares nothing with the exact engine — no classes, no masks,
+ * no Hall's condition, no Hoffman conditions, no success set, no binomials —
+ * so that the two can be held against each other.
  */
 
 /** `n×` the description in column `desc` of the match matrix. */
@@ -16,13 +16,18 @@ export interface MatchCounted {
   desc: number;
 }
 
+/** A requirement: `n` cards at least, and — written `a-b×` — `max` at most. */
+export interface MatchRange extends MatchCounted {
+  max?: number;
+}
+
 /** What the oracle needs of a resolved template; `ResolvedTemplate` satisfies it. */
 export interface MatchProblem {
   deckSize: number;
   /** `matrix[line][description]`: whether a card of the line matches. The LAST row is the remainder. */
   matrix: readonly (readonly boolean[])[];
   /** A hand succeeds if it meets ANY of these. */
-  flat: readonly { reqs: readonly MatchCounted[]; limits: readonly MatchCounted[] }[];
+  flat: readonly { reqs: readonly MatchRange[]; limits: readonly MatchCounted[] }[];
 }
 
 export interface EstimateOptions {
@@ -101,44 +106,54 @@ export function drawHand(cards: Int32Array | number[], handSize: number, rng: Pr
   }
 }
 
+/** A criterion as the judge holds it: requirements with both bounds, and its limits. */
+interface JudgedCriterion {
+  reqs: { min: number; max: number; desc: number }[];
+  /** `sum of the lower bounds`: fewer cards than this can never meet it. */
+  needed: number;
+  /** The descriptions of the requirements that HAVE a ceiling: a card matching one cannot be left over. */
+  capped: number[];
+  limits: readonly MatchCounted[];
+}
+
 /**
  * The hand judge for `problem`: whether the first `size` cards of `hand`
- * (line indices) meet ANY flat criterion. A criterion is met when every limit
- * holds over the WHOLE hand and its requirement slots — `n×` is `n` slots —
- * can each be given a DISTINCT drawn card whose line matches the slot. The
- * assignment is tried exhaustively, slot by slot; with at most six slots and
- * six cards that is instant.
+ * (line indices) meet ANY flat criterion, by the rules of `FlatCriterion` —
+ * every limit holds over the WHOLE hand, and the drawn cards can be given to
+ * the requirements so that each takes a count within its range and no card
+ * matching a CAPPED requirement is left over.
+ *
+ * The assignment is searched exhaustively over concrete cards, one card at a
+ * time: each is offered to every requirement that matches it and still has
+ * room, and then to no requirement at all — which is only allowed when no
+ * capped requirement would have had to count it. With at most six cards that
+ * is instant, and it shares nothing with the exact matcher, which decides the
+ * same question by counting classes against precomputed subset conditions.
  */
 export function createJudge(
   problem: MatchProblem,
 ): (hand: ArrayLike<number>, size?: number) => boolean {
   const columns = problem.matrix[0]?.length ?? 0;
-  /** `matches[description][line]`, so a slot reads one row. */
+  /** `matches[description][line]`, so a requirement reads one row. */
   const matches = Array.from({ length: columns }, (_, desc) =>
     problem.matrix.map((row) => row[desc] === true),
   );
-  const criteria = problem.flat.map(({ reqs, limits }) => ({
-    slots: reqs.flatMap(({ n, desc }) => Array.from({ length: n }, () => desc)),
-    limits,
-  }));
+  const criteria = problem.flat.map(({ reqs, limits }): JudgedCriterion => {
+    const bounded = reqs.map(({ n, max, desc }) => ({
+      min: n,
+      max: max ?? Number.POSITIVE_INFINITY,
+      desc,
+    }));
+    return {
+      reqs: bounded,
+      needed: bounded.reduce((sum, { min }) => sum + min, 0),
+      capped: reqs.flatMap(({ max, desc }) => (max === undefined ? [] : [desc])),
+      limits,
+    };
+  });
 
   let hand: ArrayLike<number> = [];
   let size = 0;
-  let slots: readonly number[] = [];
-  const taken: boolean[] = [];
-
-  const assign = (slot: number): boolean => {
-    if (slot === slots.length) return true;
-    const fillers = matches[slots[slot]!]!;
-    for (let position = 0; position < size; position++) {
-      if (taken[position] || !fillers[hand[position]!]) continue;
-      taken[position] = true;
-      const done = assign(slot + 1);
-      taken[position] = false;
-      if (done) return true;
-    }
-    return false;
-  };
 
   const withinLimits = (limits: readonly MatchCounted[]): boolean => {
     for (const { n, desc } of limits) {
@@ -150,13 +165,36 @@ export function createJudge(
     return true;
   };
 
+  const assigns = ({ reqs, capped }: JudgedCriterion): boolean => {
+    const taken = reqs.map(() => 0);
+    /** What the requirements still owe: the search gives up once the cards left cannot pay it. */
+    let owed = reqs.reduce((sum, { min }) => sum + min, 0);
+    const place = (position: number): boolean => {
+      if (owed > size - position) return false;
+      if (position === size) return true;
+      const line = hand[position]!;
+      for (let at = 0; at < reqs.length; at++) {
+        const req = reqs[at]!;
+        if (taken[at]! >= req.max || !matches[req.desc]![line]) continue;
+        if (taken[at]! < req.min) owed--;
+        taken[at]!++;
+        const done = place(position + 1);
+        taken[at]!--;
+        if (taken[at]! < req.min) owed++;
+        if (done) return true;
+      }
+      // Left over, which only a card no ceiling would have counted may be.
+      return capped.every((desc) => !matches[desc]![line]) && place(position + 1);
+    };
+    return place(0);
+  };
+
   return (cards, cardCount = cards.length) => {
     hand = cards;
     size = cardCount;
     for (const criterion of criteria) {
-      if (criterion.slots.length > size || !withinLimits(criterion.limits)) continue;
-      slots = criterion.slots;
-      if (assign(0)) return true;
+      if (criterion.needed > size || !withinLimits(criterion.limits)) continue;
+      if (assigns(criterion)) return true;
     }
     return false;
   };
