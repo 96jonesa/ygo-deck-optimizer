@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.core.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:licenses": "node scripts/check-licenses.mjs"
+    "check:licenses": "node scripts/check-licenses.mjs",
+    "cli": "tsx src/cli/index.ts"
   },
   "license": "UNLICENSED",
   "author": "Andrew Jones",

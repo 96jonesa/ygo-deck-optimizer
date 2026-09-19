@@ -1,8 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import path from 'node:path';
 import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
-import { type CardDatabaseSource, CardIndex } from '../../../src/core/cards/index';
+import { CardIndex } from '../../../src/core/cards/index';
 import type { CardRecord } from '../../../src/core/cards/record';
 import { SetnameTable } from '../../../src/core/cards/setnames';
 import type { DescContext } from '../../../src/core/desc/context';
@@ -10,6 +8,7 @@ import { type Groups, matcher } from '../../../src/core/desc/evaluate';
 import { type ImpliesContext, implies, intersects } from '../../../src/core/desc/implies';
 import { parse } from '../../../src/core/desc/parser';
 import { print } from '../../../src/core/desc/print';
+import { loadCardIndex, loadSetnames } from '../../../src/main/edopro/loader';
 import { same } from '../../helpers/assert';
 import { type GenPool, genClause, genDescription } from '../../helpers/gen-desc';
 import { weaken } from '../../helpers/implies-oracle';
@@ -20,49 +19,11 @@ import { seededRng } from '../../helpers/prng';
 // The install can be any version, so counts are reported, not pinned.
 const EDOPRO_WORKDIR = process.env.EDOPRO_WORKDIR;
 
-/** Every `.cdb` under `dir`, recursively, in sorted path order. */
-function cdbsUnder(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir, { recursive: true, encoding: 'utf8' })
-    .filter((name) => name.endsWith('.cdb'))
-    .sort()
-    .map((name) => path.join(dir, name));
-}
-
-/** TDD §4.4 load order: `cards.cdb`, then `expansions/`, then each repository, labelled. */
-function databaseSources(workdir: string): CardDatabaseSource[] {
-  const base = path.join(workdir, 'cards.cdb');
-  const sources: CardDatabaseSource[] = [];
-  if (existsSync(base) && statSync(base).size > 0) sources.push({ bytes: readFileSync(base) });
-  for (const file of cdbsUnder(path.join(workdir, 'expansions')))
-    sources.push({ bytes: readFileSync(file) });
-  const repositories = path.join(workdir, 'repositories');
-  for (const repository of existsSync(repositories) ? readdirSync(repositories).sort() : [])
-    for (const file of cdbsUnder(path.join(repositories, repository)))
-      sources.push({ bytes: readFileSync(file), repository });
-  return sources;
-}
-
-/** TDD §4.5 order: config/, then expansions/, then each repository, sorted. */
-function stringsConfLayers(workdir: string): string[] {
-  const repositories = path.join(workdir, 'repositories');
-  const files = [
-    path.join(workdir, 'config', 'strings.conf'),
-    path.join(workdir, 'expansions', 'strings.conf'),
-    ...(existsSync(repositories) ? readdirSync(repositories) : [])
-      .sort()
-      .map((name) => path.join(repositories, name, 'strings.conf')),
-  ];
-  return files.filter((file) => existsSync(file)).map((file) => readFileSync(file, 'utf8'));
-}
-
 // Loaded once for every suite below; empty when the variable is unset and the suites skip.
-const index = EDOPRO_WORKDIR
-  ? CardIndex.fromDatabases(await initSqlJs(), databaseSources(EDOPRO_WORKDIR))
-  : CardIndex.empty();
+const index = EDOPRO_WORKDIR ? loadCardIndex(EDOPRO_WORKDIR, await initSqlJs()) : CardIndex.empty();
 const ctx: DescContext = {
   cards: index,
-  setnames: SetnameTable.fromLayers(EDOPRO_WORKDIR ? stringsConfLayers(EDOPRO_WORKDIR) : []),
+  setnames: (EDOPRO_WORKDIR ? loadSetnames(EDOPRO_WORKDIR) : null) ?? SetnameTable.fromLayers([]),
   groups: { idOf: () => undefined, nameOf: () => undefined },
 };
 

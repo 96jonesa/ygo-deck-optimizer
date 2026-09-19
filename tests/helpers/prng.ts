@@ -1,3 +1,8 @@
+import { mulberry32 } from '../../src/core/util/prng';
+
+// The generator itself lives in core, where the Monte Carlo oracle draws from it (TDD §10.4).
+export { mulberry32 };
+
 /**
  * A tiny seeded PRNG for property tests (TDD §15.1): the same seed always
  * yields the same cases, so a failure is reproducible from its seed alone.
@@ -11,18 +16,6 @@ export interface Rng {
   pick<T>(items: readonly T[]): T;
   /** Between `min` and `max` distinct members of `items`, in the order of `items`. */
   subset<T>(items: readonly T[], min: number, max?: number): T[];
-}
-
-/** mulberry32 (Tommy Ettinger, public domain): 32 bits of state, full period. */
-export function mulberry32(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 export function seededRng(seed: number): Rng {
