@@ -1,8 +1,5 @@
 import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
-import type { Expr, FlatCriterion } from '../../../src/core/criteria/ast';
-import { expandAll } from '../../../src/core/criteria/expand';
-import type { Description } from '../../../src/core/desc/ast';
 import { resolveTemplate } from '../../../src/core/model/compile';
 import type { Template } from '../../../src/core/model/template';
 import {
@@ -16,32 +13,12 @@ import {
 import { createPrng } from '../../../src/core/util/prng';
 import type { Progress } from '../../../src/core/util/progress';
 import { same } from '../../helpers/assert';
-import { type Fills, satisfiesAnyFlat, satisfiesTree } from '../../helpers/criteria-oracle';
-import { genExpr } from '../../helpers/gen-criteria';
-import { motivatingContext, ROTA, STRATOS } from '../../helpers/motivating';
-import { type Rng, seededRng } from '../../helpers/prng';
-
 // Test code may use binomials; the Monte Carlo engine may not (TDD §10.4).
-function choose(n: number, k: number): number {
-  if (k < 0 || k > n) return 0;
-  let out = 1;
-  for (let i = 1; i <= k; i++) out = (out * (n - k + i)) / i;
-  return Math.round(out);
-}
-
-/** Every `size`-subset of `items`, as lists in the order of `items`. */
-function combinations<T>(items: readonly T[], size: number): T[][] {
-  const out: T[][] = [];
-  const extend = (hand: T[], from: number) => {
-    if (hand.length === size) {
-      out.push(hand);
-      return;
-    }
-    for (let i = from; i < items.length; i++) extend([...hand, items[i]!], i + 1);
-  };
-  extend([], 0);
-  return out;
-}
+import { choose, combinations } from '../../helpers/combinatorics';
+import { satisfiesAnyFlat, satisfiesTree } from '../../helpers/criteria-oracle';
+import { fillsOf, type Generated, genProblem } from '../../helpers/gen-problem';
+import { motivatingContext, ROTA, STRATOS } from '../../helpers/motivating';
+import { seededRng } from '../../helpers/prng';
 
 /** `|estimate - exact|` within five standard errors OF THE EXACT VALUE; a certain outcome must be hit exactly. */
 function expectWithinFiveSigma(
@@ -73,81 +50,7 @@ const F = false;
 /** One line of three copies and the remainder; success is drawing the line (TDD §15.1's anchor). */
 const THREE_IN_FORTY = problemOf(40, [[T], [F]], [{ reqs: [{ n: 1, desc: 0 }], limits: [] }]);
 
-// ---------------------------------------------------------------------------
-// MC2's generated problems: the matrix is random, descriptions are opaque
-// (`#i` is column `i`), and criteria come from the criterion generator.
-// ---------------------------------------------------------------------------
-
-function column(i: number): Description {
-  return { anyOf: [{ t: 'card', passcode: i }] };
-}
-
-function columnOf(desc: Description): number {
-  const [alt] = desc.anyOf;
-  if (desc.anyOf.length !== 1 || alt?.t !== 'card') throw new Error('not a generated description');
-  return alt.passcode;
-}
-
-interface Generated {
-  problem: MatchProblem;
-  counts: number[];
-  handSize: number;
-  /** The criteria as written, and as `expandAll` flattened them: two routes to the same meaning. */
-  exprs: Expr[];
-  flat: FlatCriterion[];
-}
-
-function genProblem(rng: Rng): Generated {
-  for (;;) {
-    const lineCount = rng.int(3, 5);
-    const columns = rng.int(3, 5);
-    const deckSize = rng.int(10, 14);
-    const handSize = rng.int(3, 4);
-    const counts = Array.from({ length: lineCount }, () => rng.int(1, 3));
-    if (counts.reduce((sum, n) => sum + n, 0) > deckSize) continue;
-
-    const matrix = counts.map(() => Array.from({ length: columns }, () => rng.chance(0.4)));
-    // The remainder fills nothing — except, in some problems, a column that
-    // everything fills, as `1x card` would be.
-    const remainder = new Array<boolean>(columns).fill(false);
-    if (rng.chance(0.25)) {
-      const universe = rng.int(0, columns - 1);
-      for (const row of matrix) row[universe] = true;
-      remainder[universe] = true;
-    }
-    matrix.push(remainder);
-
-    const exprs = Array.from({ length: rng.int(1, 2) }, () =>
-      genExpr(rng, {
-        desc: (r) => column(r.int(0, columns - 1)),
-        maxDepth: 2,
-        maxArgs: 3,
-        limitChance: 0.25,
-      }),
-    );
-    const expanded = expandAll(exprs, { maxHandSize: handSize });
-    if (!expanded.ok) continue;
-    const index = (side: FlatCriterion['reqs']) =>
-      side.map(({ n, desc }) => ({ n, desc: columnOf(desc) }));
-    const flat = expanded.flat.map(({ reqs, limits }) => ({
-      reqs: index(reqs),
-      limits: index(limits),
-    }));
-    return {
-      problem: { deckSize, matrix, flat },
-      counts,
-      handSize,
-      exprs,
-      flat: expanded.flat,
-    };
-  }
-}
-
-/** The relation the oracles judge by: the match matrix row of the card's line. */
-function fillsOf(problem: MatchProblem): Fills<number> {
-  return (line, desc) => problem.matrix[line]![columnOf(desc)] === true;
-}
-
+// MC2's generated problems (`tests/helpers/gen-problem.ts`).
 const PROBLEMS = 48;
 const generated = Array.from({ length: PROBLEMS }, (_, i) => genProblem(seededRng(7000 + i)));
 
