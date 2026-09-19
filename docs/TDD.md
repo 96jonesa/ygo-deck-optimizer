@@ -153,7 +153,7 @@ export interface CardRecord {
 }
 ```
 
-`CardIndex.fromDatabases(SQL, bytes: Uint8Array[], opts)` lives in `core/` and takes an injected sql.js instance and raw file contents; the filesystem walk stays in main (`src/main/edopro/loader.ts`) and the CLI. It exposes `get(code)`, `search(query, limit)` (the sibling's diacritic/case-insensitive prefix-then-substring ranking), `count(desc)` / `sample(desc, n)` for the parse echo, and `status`.
+`CardIndex.fromDatabases(SQL, bytes: Uint8Array[], opts)` lives in `core/` and takes an injected sql.js instance and raw file contents; the filesystem walk stays in main (`src/main/edopro/loader.ts`) and the CLI. It exposes `get(code)`, `search(query, limit)` (the sibling's diacritic/case-insensitive prefix-then-substring ranking), `findByName(name)`, `count(pred)` / `sample(pred, n)` for the parse echo (they take a predicate — `matcher(desc, groups)` from `core/desc` — because `core/desc` imports `core/cards` and the reverse import would be a cycle), and `status`.
 
 Vocabulary tables (English names for Types, Attributes, sub-kinds, with synonyms) are hand-written beside the transcribed constants and tested for **totality**: every official `RACE_*` (bits 0–25, per `constant.lua`'s `RACE_ALL = 0x3ffffff`) and every `ATTRIBUTE_*` has exactly one canonical name. `race` is not a Type for `TYPE_SKILL` rows; those are outside the population.
 
@@ -166,18 +166,18 @@ Free text is an input method; the AST (§5.2) is the source of truth. Lexing is 
 ```
 description := alternative ( "or" alternative )*
 alternative := "(" description ")" | cardRef | groupRef | clause
-clause      := qualifier* kindWord?              -- at least one of the two
-kindWord    := "monster" | "spell" | "trap" | "card"
+clause      := ( qualifier | kindList )+          -- kindList at most once, anywhere
+kindList    := KIND ( "/" KIND )*                 -- monster | spell | trap | card; plurals accepted
 qualifier   := ["non-"] monsterFlag
-             | ["non-"] valueList                -- attributes or Types
-             | stSubkind
+             | ["non-"] valueList                 -- attributes or Types
+             | stSubkind ( "/" stSubkind )*
              | "level" levelSpec
              | statSpec
-             | QUOTED ( ":" HEXCODE )?           -- archetype, e.g. "Sky Striker", "Warrior":0x2066
-valueList   := VALUE ( "/" VALUE )*              -- FIRE/WATER, Warrior/Beast-Warrior
+             | QUOTED ( ":" HEXCODE )?            -- archetype: "Sky Striker", "Warrior":0x2066, "?":0x155a
+valueList   := VALUE ( "/" VALUE )*               -- FIRE/WATER, Warrior/Beast-Warrior
 levelSpec   := INT ( "or lower" | "or higher" | "-" INT | ( "/" INT )+ )?
-statSpec    := ("ATK"|"DEF") ( INT ( "or less" | "or more" )? | "?" )
-             | INT ( "or less" | "or more" )? ("ATK"|"DEF")
+statSpec    := ("ATK"|"DEF") ( INT ( "or less" | "or more" | "-" INT )? | "?" )
+             | INT ( "or less" | "or more" | "-" INT )? ("ATK"|"DEF")
 cardRef     := "[" card name "]" | "#" PASSCODE
 groupRef    := "{" group name "}"
 ```
@@ -186,8 +186,13 @@ Decisions:
 
 - **`or` separates whole descriptions; `/` separates values inside one dimension.** `FIRE/WATER monster` is one clause; `level 4 or level 3 FIRE monster` is two clauses, the first of which says nothing about Attribute — and the parse echo shows exactly that. This removes the classic ambiguity without precedence rules.
 - **Card names are always delimited.** Real names contain `or`, `and`, commas and digits (`Nibiru, the Primal Being`), so bare names are not parseable. In the app, cards and groups are inserted as chips through the picker and carry a passcode; the bracket forms exist for the CLI harness, tests, and pasted text. `[Name]` resolves by exact normalized-name match; zero or several matches is an error listing candidates.
-- **Contextual words.** `normal`, `ritual` and `continuous` mean different things by kind. With a kind word they resolve (`normal spell` = a Spell with no sub-kind bits; `normal monster` = the Normal flag). Without one: `quick-play`, `equip`, `field` imply Spell; `counter` implies Trap; `continuous` means Spell-or-Trap; bare `normal` or `ritual` is an error asking "normal what?".
-- **Negation is atomic only** — `non-tuner`, `non-FIRE`, `non-Warrior`, `non-effect`. There is no negation of whole descriptions, which keeps every description a finite union of boxes (§6.1).
+- **Contextual words are exactly `normal` and `ritual`** — the two words that are both a monster flag and a Spell/Trap sub-kind. A kind word resolves them (`normal spell` = a Spell with none of the six sub-kind bits; `normal monster` = the Normal flag); so does any *positive* monster-only qualifier in the clause (`level 4 normal` is a monster). A negative one does not — `non-tuner normal` still errors with "normal what?", because a Spell is a non-Tuner too. Inside a `/` list of sub-kinds they are necessarily sub-kinds (`normal/field spell`).
+- **Sub-kinds imply their kinds by one rule**: the implied kinds are the kinds the listed sub-kinds exist for — `quick-play` ⇒ Spell, `counter` ⇒ Trap, `continuous` ⇒ Spell or Trap. A sub-kind none of the written kinds has is an error (`counter spell`), as is any sub-kind beside `monster`.
+- **Negation is atomic only** — `non-tuner`, `non-FIRE`, `non-Warrior/Dragon` (none of them). `non-normal` / `non-ritual` always mean the monster flag and are an error beside Spell/Trap-only kinds, where they would silently be true of everything; `non-` on a sub-kind is an error suggesting the positive list. There is no negation of whole descriptions, which keeps every description a finite union of boxes (§6.1).
+- **One statement per dimension.** `FIRE WATER` is an error suggesting `FIRE/WATER`; several negations merge; a positive and a negative list in one dimension, a flag both required and negated, or Level/ATK/DEF/kind given twice are errors.
+- **A lexer hazard that follows from "hyphens are spaces":** `DIVINE Beast` lexes as the Type *Divine-Beast*. The echo shows what was understood, and the printer orders Types before Attributes in the one clause shape where its own output would otherwise fuse.
+- **The printer is canonical, not minimal.** Cards print as `#passcode` (names are not unique — two distinct records are called "Black Luster Soldier"); archetypes always as `"Name":0xCODE`, or `"?":0xCODE` when the code has no writable name (one real setname contains quotes) — which the parser accepts even with a table loaded, so files survive `strings.conf` changes. Every clause closes with its kind word or `card`, so the ` or ` between alternatives can never fuse into `or lower`. `canonicalize` sorts and de-duplicates *within* a clause but keeps alternatives in written order, so the echo reads back the way the user wrote it; descriptions are therefore compared with `implies` in both directions, never structurally.
+- Robustness: the parser never throws — nesting is capped at 32 and numerals are length-capped so they stay exact — and unknown words get an edit-distance suggestion.
 - Not in the MVP vocabulary: Pendulum Scale, Link/Xyz/Synchro/Fusion anything (Extra Deck, out of scope), effect-text properties (unavailable; use groups).
 
 ### 5.2 AST
@@ -544,6 +549,7 @@ M3 and M4 are sliced when M2 is in hand.
 | `?nodeWorker` bundling or asar path resolution for the worker | Proven in M2b before the UI depends on it; fallback is an explicit second rollup input for the worker |
 | Scored-vector count explodes on very wide templates | Exact count and ETA shown before the run; cancel; shard-ready enumeration; prefix-sharing trie held in reserve (§11.3) |
 | Class cap of 30 | A template with more than 30 *distinguishable* classes is far outside the use case; clear error rather than silent BigInt slow path |
+| A collapsed alternate-art passcode (`#36996508`) resolves to "no such card", since the index keeps no alias → target map | Add `CardIndex.resolve(code)` when `.ydk` import lands (M3): decklists routinely carry alt-art passcodes |
 | `strings.conf` alternates or overrides change a name's meaning between installs | Archetypes are stored in template files as setcodes, not names; the name is display only |
 
 ## Appendix A. Constant tables

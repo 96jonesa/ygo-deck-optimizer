@@ -513,6 +513,52 @@ describe('CardIndex', () => {
     });
   });
 
+  describe('findByName', () => {
+    it('returns the record whose whole name matches', () => {
+      expect(fixture.findByName('Synthetic Harpy').map((card) => card.code)).toEqual([CODE.harpy]);
+    });
+
+    it('is diacritic- and case-insensitive, and ignores surrounding whitespace', () => {
+      const index = indexOf(named('Élégant Égotiste', 'Elegant'));
+      expect(index.findByName('  elegant egotiste ').map((card) => card.name)).toEqual([
+        'Élégant Égotiste',
+      ]);
+      expect(index.findByName('ÉLEGANT').map((card) => card.name)).toEqual(['Elegant']);
+    });
+
+    it('does not match a prefix, a substring, or a longer name', () => {
+      expect(fixture.findByName('Synthetic Harp')).toEqual([]);
+      expect(fixture.findByName('Harpy')).toEqual([]);
+      expect(fixture.findByName('Synthetic Harpy Lady')).toEqual([]);
+      expect(fixture.findByName('')).toEqual([]);
+    });
+
+    it('returns every card that shares the name, by code', () => {
+      expect(fixture.findByName('synthetic ritual soldier').map((card) => card.code)).toEqual([
+        CODE.ritualSoldier,
+        CODE.sameNameDifferentCard,
+      ]);
+    });
+
+    it('returns a collapsed alternate artwork once, as its target', () => {
+      expect(fixture.findByName('Synthetic Vanilla Dragon').map((card) => card.code)).toEqual([
+        CODE.vanillaDragon,
+      ]);
+    });
+
+    it('finds names at either end of the alphabet', () => {
+      const index = indexOf(named('Aardvark', 'Mole', 'Zebra'));
+      expect(index.findByName('aardvark')).toHaveLength(1);
+      expect(index.findByName('zebra')).toHaveLength(1);
+      expect(index.findByName('zebras')).toEqual([]);
+      expect(CardIndex.empty().findByName('zebra')).toEqual([]);
+    });
+
+    it('finds only cards in the population', () => {
+      expect(fixture.findByName('Synthetic Token')).toEqual([]);
+    });
+  });
+
   describe('search', () => {
     it('finds cards by substring', () => {
       const index = indexOf([

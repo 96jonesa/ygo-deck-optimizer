@@ -17,7 +17,7 @@ combinatorial probability plus a card-database lookup layer.
 | Milestone | State |
 | --- | --- |
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
-| M0 — de-risk spike (headless) | **In progress**: M0a scaffold, M0b card data |
+| M0 — de-risk spike (headless) | **In progress**: M0a scaffold, M0b card data, M0c descriptions |
 | M1 — exact engine + optimizer (headless) | Not started |
 | M2 — app MVP | Not started |
 | M3 — polish | Not started |
@@ -25,6 +25,29 @@ combinatorial probability plus a card-database lookup layer.
 
 Today the app opens an empty window that proves the main ↔ preload ↔ renderer
 bridge; nothing is computed yet.
+
+## Description language
+
+A description says which cards a template line or a criterion means
+(`src/core/desc`: `parse`, `print`, `echo`, `evaluate`). By example:
+
+| Text | Means |
+| --- | --- |
+| `level 4 monster`, `level 4 or lower`, `level 1-4`, `level 3/4` | Level; `or lower` reaches down to 0, `or higher` up to 13 |
+| `FIRE/WATER Beast-Warrior monster` | `/` lists values **within one dimension**: FIRE *or* WATER, and Beast-Warrior |
+| `level 4 monster or normal spell` | `or` separates **whole descriptions** — the second says nothing about Level |
+| `non-tuner`, `non-FIRE`, `non-Warrior/Dragon` | Negation of one flag, or of a whole value list; true of every Spell and Trap |
+| `ATK 1500 or less`, `2000 or more DEF`, `ATK 1000-2000`, `ATK ?` | A range never matches a `?` stat |
+| `quick-play spell`, `counter`, `continuous`, `normal/field spell` | Sub-kinds; `counter` implies Trap, `continuous` alone is Spell or Trap |
+| `normal monster` / `normal spell` | `normal` and `ritual` are read by the kind word; alone they are an error ("normal what?") |
+| `"Sky Striker" spell`, `"Warrior":0x2066` | Archetype, by exact name. Names can be ambiguous ("Warrior" is two codes), so a `:0xCODE` suffix picks one; canonical text always carries it |
+| `[Nibiru, the Primal Being]`, `#27204311`, `{hand traps}` | A card by name or passcode, a group — always delimited, always a whole alternative |
+
+Case, hyphens and spacing do not matter (`beast warrior` = `Beast-Warrior` =
+`beastwarrior`); parentheses group alternatives. Errors come back as a message
+plus the span of the text they are about, never as an exception.
+`tests/core/desc/realdata.test.ts` checks all of this against a real install
+when `EDOPRO_WORKDIR` is set (see below).
 
 ## Development
 

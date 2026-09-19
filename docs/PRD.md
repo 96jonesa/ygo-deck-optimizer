@@ -74,6 +74,8 @@ Success if the opening hand satisfies any one of:
 1x card A, 1x card B, 1x level 4 or lower monster
 ```
 
+One correction the card database makes to the example as written: **no Level 7 FIRE Beast-Warrior monster exists** (the Main Deck ones are Levels 1–6, 8 and 9), so that line is rejected as matching no card (§5.1) — exactly the kind of mistake the tool exists to catch. Tests and the harness use Level 8.
+
 Two observations. First, the lines look nested ("level 4 monster" inside "monster") and a named card may itself be a monster — how that is read is §6. Second, the lines sum to at most 27, so the model needs an explicit notion of the *remainder* of the deck (§5.1).
 
 ### 4.3 Exact computation is cheap — Monte Carlo is the check, not the engine
