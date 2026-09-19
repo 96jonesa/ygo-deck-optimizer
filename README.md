@@ -17,7 +17,7 @@ combinatorial probability plus a card-database lookup layer.
 | Milestone | State |
 | --- | --- |
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
-| M0 — de-risk spike (headless) | **In progress**: M0a scaffold, M0b card data, M0c descriptions |
+| M0 — de-risk spike (headless) | **In progress**: M0a scaffold, M0b card data, M0c descriptions, M0d implication |
 | M1 — exact engine + optimizer (headless) | Not started |
 | M2 — app MVP | Not started |
 | M3 — polish | Not started |
@@ -48,6 +48,21 @@ Case, hyphens and spacing do not matter (`beast warrior` = `Beast-Warrior` =
 plus the span of the text they are about, never as an exception.
 `tests/core/desc/realdata.test.ts` checks all of this against a real install
 when `EDOPRO_WORKDIR` is set (see below).
+
+## How matching works
+
+A line's cards are known only to the specificity the line states: `monster` means "some
+monsters", not particular ones. So a line fills a requirement, or counts against a limit, only
+when its description **logically implies** the requirement's (`src/core/desc`: `implies`).
+
+| Line | Requirement | Matches? |
+| --- | --- | --- |
+| `level 4 FIRE monster` | `level 4 or lower monster` | Yes — every such card is one |
+| `monster` | `level 4 or lower monster` | **No** — some monsters are, but the line does not say these are |
+| `"Magnet Warrior":0x3066 card` | `"Magnet":0x1066 card` | Yes — a sub-archetype belongs to its archetype |
+
+The card pool is never consulted, except that a named card (`#27204311`) or group is fully
+known and matches whatever its record satisfies. Real-data soundness check: `EDOPRO_WORKDIR`.
 
 ## Development
 

@@ -6,9 +6,14 @@ import { type CardDatabaseSource, CardIndex } from '../../../src/core/cards/inde
 import type { CardRecord } from '../../../src/core/cards/record';
 import { SetnameTable } from '../../../src/core/cards/setnames';
 import type { DescContext } from '../../../src/core/desc/context';
-import { matcher } from '../../../src/core/desc/evaluate';
+import { type Groups, matcher } from '../../../src/core/desc/evaluate';
+import { type ImpliesContext, implies, intersects } from '../../../src/core/desc/implies';
 import { parse } from '../../../src/core/desc/parser';
 import { print } from '../../../src/core/desc/print';
+import { same } from '../../helpers/assert';
+import { type GenPool, genClause, genDescription } from '../../helpers/gen-desc';
+import { weaken } from '../../helpers/implies-oracle';
+import { seededRng } from '../../helpers/prng';
 
 // Opt-in integration test against a real EDOPro install (TDD §15.1); skipped in CI.
 //   EDOPRO_WORKDIR=/path/to/ProjectIgnis npm test
@@ -51,16 +56,17 @@ function stringsConfLayers(workdir: string): string[] {
   return files.filter((file) => existsSync(file)).map((file) => readFileSync(file, 'utf8'));
 }
 
-describe.skipIf(!EDOPRO_WORKDIR)('descriptions against a real EDOPro install', async () => {
-  const SQL = await initSqlJs();
-  const index = EDOPRO_WORKDIR
-    ? CardIndex.fromDatabases(SQL, databaseSources(EDOPRO_WORKDIR))
-    : CardIndex.empty();
-  const ctx: DescContext = {
-    cards: index,
-    setnames: SetnameTable.fromLayers(EDOPRO_WORKDIR ? stringsConfLayers(EDOPRO_WORKDIR) : []),
-    groups: { idOf: () => undefined, nameOf: () => undefined },
-  };
+// Loaded once for every suite below; empty when the variable is unset and the suites skip.
+const index = EDOPRO_WORKDIR
+  ? CardIndex.fromDatabases(await initSqlJs(), databaseSources(EDOPRO_WORKDIR))
+  : CardIndex.empty();
+const ctx: DescContext = {
+  cards: index,
+  setnames: SetnameTable.fromLayers(EDOPRO_WORKDIR ? stringsConfLayers(EDOPRO_WORKDIR) : []),
+  groups: { idOf: () => undefined, nameOf: () => undefined },
+};
+
+describe.skipIf(!EDOPRO_WORKDIR)('descriptions against a real EDOPro install', () => {
   const counts: Record<string, number> = {};
 
   function matched(text: string): CardRecord[] {
@@ -170,5 +176,100 @@ describe.skipIf(!EDOPRO_WORKDIR)('descriptions against a real EDOPro install', a
   it('reports the match counts', () => {
     console.info(`match counts over ${index.status.cards} cards:`, counts);
     expect(Object.keys(counts).length).toBeGreaterThanOrEqual(10);
+  });
+});
+
+// TDD §15.1, Implication (1): soundness against the database. Whatever `implies` claims,
+// no card of the real pool may contradict — a contradiction is a bug in an axiom (TDD §6.3).
+describe.skipIf(!EDOPRO_WORKDIR)('implication against a real EDOPro install', () => {
+  const cards = [...index.all()];
+  const rng = seededRng(0x1a9c0020);
+  const passcodes = rng.subset(cards, 1, 400).map((card) => card.code);
+  const groups: Groups = new Map(
+    ['g-a', 'g-b', 'g-c', 'g-d'].map((id) => [id, new Set(rng.subset(passcodes, 1, 8))]),
+  );
+  const pool: GenPool = {
+    passcodes,
+    groupIds: [...groups.keys()],
+    // Setcodes real cards carry, sub-archetypes and their bases both, so that axiom 4 is exercised.
+    setcodes: [...new Set(cards.flatMap((card) => card.setcodes))]
+      .filter((code) => code > 0xfff || rng.chance(0.05))
+      .flatMap((code) => [code, code & 0xfff])
+      .slice(0, 300),
+  };
+  const implyCtx: ImpliesContext = { cards: index, groups };
+  const report: Record<string, number> = {};
+
+  it('holds the assumptions the box model makes of every card (boxes.ts)', () => {
+    const SPELL = 0x2;
+    const TRAP = 0x4;
+    const COUNTER = 0x100000;
+    const SPELL_ONLY_SUBKINDS = 0x10000 | 0x40000 | 0x80000 | 0x80;
+    const bits = (n: number) => n.toString(2).replaceAll('0', '').length;
+    const offenders = cards.filter((card) => {
+      if ((card.type & SPELL) !== 0) return (card.type & COUNTER) !== 0;
+      if ((card.type & TRAP) !== 0) return (card.type & SPELL_ONLY_SUBKINDS) !== 0;
+      return (
+        bits(card.attribute) > 1 ||
+        bits(card.race & 0x3ffffff) > 1 ||
+        (card.atk < 0 && card.atk !== -2) ||
+        (card.def < 0 && card.def !== -2)
+      );
+    });
+    expect(offenders.map((card) => card.name)).toEqual([]);
+  });
+
+  it('never claims an implication that a real card contradicts, over 4,000 pairs', () => {
+    let holds = 0;
+    let witnessed = 0;
+    let checks = 0;
+    for (let i = 0; i < 4000; i++) {
+      const L = genDescription(rng, pool);
+      const q = rng.chance(0.7)
+        ? weaken(rng, L, (r) => genClause(r, pool))
+        : genDescription(rng, pool);
+      if (!implies(L, q, implyCtx)) continue;
+      holds++;
+      const inL = matcher(L, groups);
+      const inQ = matcher(q, groups);
+      let matched = 0;
+      for (const card of cards) {
+        if (!inL(card)) continue;
+        matched++;
+        same(inQ(card), true, () => `${card.name} matches L and not q: ${JSON.stringify([L, q])}`);
+      }
+      checks += matched;
+      if (matched > 0) witnessed++;
+    }
+    Object.assign(report, {
+      'pairs generated': 4000,
+      'true implications': holds,
+      'of which some real card matches L': witnessed,
+      'card-level checks (card matches L, so must match q)': checks,
+    });
+    expect(holds).toBeGreaterThan(1000);
+    expect(witnessed).toBeGreaterThan(500);
+  });
+
+  it('never misses an overlap that a real card witnesses, over 1,000 pairs', () => {
+    let witnessed = 0;
+    for (let i = 0; i < 1000; i++) {
+      const L = genDescription(rng, pool);
+      const q = rng.chance(0.5)
+        ? weaken(rng, L, (r) => genClause(r, pool))
+        : genDescription(rng, pool);
+      const inL = matcher(L, groups);
+      const inQ = matcher(q, groups);
+      if (!cards.some((card) => inL(card) && inQ(card))) continue;
+      witnessed++;
+      same(intersects(L, q, implyCtx), true, () => JSON.stringify([L, q]));
+    }
+    report['overlaps witnessed by a real card'] = witnessed;
+    expect(witnessed).toBeGreaterThan(200);
+  });
+
+  it('reports what was exercised', () => {
+    console.info(`implication soundness over ${cards.length} cards:`, report);
+    expect(Object.keys(report).length).toBeGreaterThanOrEqual(5);
   });
 });
