@@ -1,24 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { EXAMPLE_TEMPLATE } from '../../../src/renderer/src/model/example-template';
 import { IDLE_RUN } from '../../../src/renderer/src/model/run-state';
+import { EMPTY_TEMPLATE, withCardLine } from '../../../src/renderer/src/model/template-edit';
 import {
   type AppState,
   type AppStore,
-  cardLines,
   createAppStore,
-  EMPTY_TEMPLATE,
   learnCards,
-  nextLineId,
+  selectAnalysis,
   selectCardState,
   selectCardsReady,
   selectShows,
   selectStage,
   selectStatusText,
   unknownPasscodes,
-  withCardLine,
-  withoutLine,
 } from '../../../src/renderer/src/store';
-import type { CardHit, CardStatus, RunResult, Template } from '../../../src/shared/types';
+import type { Analysis, CardHit, CardStatus, RunResult } from '../../../src/shared/types';
 
 const ASH: CardHit = {
   passcode: 14558127,
@@ -58,83 +55,6 @@ function runResult(): RunResult {
   } as unknown as RunResult;
 }
 
-function lineIds(template: Template): string[] {
-  return template.lines.map((line) => line.id);
-}
-
-describe('withCardLine', () => {
-  it('adds the picked card as a line of its own', () => {
-    const template = withCardLine(EMPTY_TEMPLATE, ASH);
-    expect(template.lines).toHaveLength(1);
-    expect(template.lines[0]).toMatchObject({ card: { passcode: ASH.passcode, name: ASH.name } });
-  });
-
-  it('gives the new line a copy range a deck allows', () => {
-    const [line] = withCardLine(EMPTY_TEMPLATE, ASH).lines;
-    expect(line).toMatchObject({ min: 0, max: 3 });
-  });
-
-  it('does not add the same card twice — two lines for one card is a template error', () => {
-    const once = withCardLine(EMPTY_TEMPLATE, ASH);
-    expect(withCardLine(once, ASH)).toBe(once);
-  });
-
-  it('leaves the template it was given alone', () => {
-    const before = EMPTY_TEMPLATE.lines.length;
-    withCardLine(EMPTY_TEMPLATE, ASH);
-    expect(EMPTY_TEMPLATE.lines).toHaveLength(before);
-  });
-
-  it('keeps every other part of the template', () => {
-    const template = withCardLine(EXAMPLE_TEMPLATE, ASH);
-    expect(template.criteria).toBe(EXAMPLE_TEMPLATE.criteria);
-    expect(template.deckSize).toBe(EXAMPLE_TEMPLATE.deckSize);
-    expect(template.lines).toHaveLength(EXAMPLE_TEMPLATE.lines.length + 1);
-  });
-});
-
-describe('withoutLine', () => {
-  it('removes the line with that id', () => {
-    const two = withCardLine(withCardLine(EMPTY_TEMPLATE, ASH), MAXX);
-    const [first] = lineIds(two);
-    expect(lineIds(withoutLine(two, first!))).toEqual(lineIds(two).slice(1));
-  });
-
-  it('leaves the template alone when the id is not there', () => {
-    const one = withCardLine(EMPTY_TEMPLATE, ASH);
-    expect(withoutLine(one, 'nope')).toBe(one);
-  });
-});
-
-describe('nextLineId', () => {
-  it('does not collide with a line that is already there', () => {
-    const two = withCardLine(withCardLine(EMPTY_TEMPLATE, ASH), MAXX);
-    expect(lineIds(two)).not.toContain(nextLineId(two));
-  });
-
-  it('does not collide with the ids of a loaded template either', () => {
-    expect(lineIds(EXAMPLE_TEMPLATE)).not.toContain(nextLineId(EXAMPLE_TEMPLATE));
-  });
-
-  it('fills a gap left by a removal rather than growing forever', () => {
-    const two = withCardLine(withCardLine(EMPTY_TEMPLATE, ASH), MAXX);
-    const [first] = lineIds(two);
-    const one = withoutLine(two, first!);
-    expect(nextLineId(one)).toBe(first);
-  });
-});
-
-describe('cardLines', () => {
-  it('is the lines that name a card, not the ones that describe cards', () => {
-    const mixed = withCardLine(EXAMPLE_TEMPLATE, ASH);
-    expect(cardLines(mixed).map((line) => line.card.passcode)).toEqual([ASH.passcode]);
-  });
-
-  it('is empty for a template of descriptions alone', () => {
-    expect(cardLines(EXAMPLE_TEMPLATE)).toEqual([]);
-  });
-});
-
 describe('learnCards', () => {
   it('remembers a card by its passcode', () => {
     expect(learnCards({}, [ASH])).toEqual({ [ASH.passcode]: ASH });
@@ -160,6 +80,22 @@ describe('unknownPasscodes', () => {
 
   it('is empty for a template with no named cards', () => {
     expect(unknownPasscodes(EXAMPLE_TEMPLATE, {})).toEqual([]);
+  });
+
+  it('asks about the cards in a GROUP too: their chips need a typeline as much as a line does', () => {
+    const store = createAppStore();
+    store.getState().addGroup('starter');
+    store.getState().addGroupCard('g1', ASH);
+    const { template } = store.getState();
+    expect(unknownPasscodes(template, {})).toEqual([ASH.passcode]);
+  });
+
+  it('asks about a card only once when a line and a group both name it', () => {
+    const store = createAppStore();
+    store.getState().pickCard(ASH);
+    store.getState().addGroup('starter');
+    store.getState().addGroupCard('g1', ASH);
+    expect(unknownPasscodes(store.getState().template, {})).toEqual([ASH.passcode]);
   });
 });
 
@@ -363,6 +299,177 @@ describe('createAppStore', () => {
     });
   });
 
+  describe('addDescriptionLine', () => {
+    it('adds a line to the template being edited', () => {
+      const store = createAppStore();
+      store.getState().addDescriptionLine();
+      expect(store.getState().template.lines).toMatchObject([{ text: '', min: 0, max: 3 }]);
+    });
+
+    it('gives two lines added in one tick two different ids', () => {
+      // The edit is applied to the state as it is, not to a snapshot taken
+      // before it: two clicks in one frame must not make two `line1`s.
+      const store = createAppStore();
+      store.getState().addDescriptionLine();
+      store.getState().addDescriptionLine();
+      const ids = store.getState().template.lines.map((line) => line.id);
+      expect(new Set(ids).size).toBe(2);
+    });
+  });
+
+  describe('setLineText', () => {
+    it('edits the line the user is typing into', () => {
+      const store = createAppStore();
+      store.getState().addDescriptionLine();
+      store.getState().setLineText('line1', 'level 4 monster');
+      expect(store.getState().template.lines[0]).toMatchObject({ text: 'level 4 monster' });
+    });
+
+    it('holds the template still when the edit changes nothing', () => {
+      const store = createAppStore();
+      store.getState().addDescriptionLine();
+      const before = store.getState().template;
+      store.getState().setLineText('nope', 'monster');
+      expect(store.getState().template).toBe(before);
+    });
+  });
+
+  describe('setLineRange', () => {
+    it('sets the copy range of that line', () => {
+      const store = createAppStore();
+      store.getState().pickCard(ASH);
+      store.getState().setLineRange('card1', { min: 1, max: 2 });
+      expect(store.getState().template.lines[0]).toMatchObject({ min: 1, max: 2 });
+    });
+  });
+
+  describe('moveLine', () => {
+    it('reorders the lines', () => {
+      const store = createAppStore();
+      store.getState().pickCard(ASH);
+      store.getState().pickCard(MAXX);
+      store.getState().moveLine('card1', 1);
+      expect(store.getState().template.lines.map((line) => line.id)).toEqual(['card2', 'card1']);
+    });
+
+    it('holds the template still at either end', () => {
+      const store = createAppStore();
+      store.getState().pickCard(ASH);
+      const before = store.getState().template;
+      store.getState().moveLine('card1', -1);
+      store.getState().moveLine('card1', 1);
+      expect(store.getState().template).toBe(before);
+    });
+  });
+
+  describe('setDeckSize', () => {
+    it('sets the deck size', () => {
+      const store = createAppStore();
+      store.getState().setDeckSize(60);
+      expect(store.getState().template.deckSize).toBe(60);
+    });
+  });
+
+  describe('setHandSize', () => {
+    it('sets the hand size', () => {
+      const store = createAppStore();
+      store.getState().setHandSize(6);
+      expect(store.getState().template.hand).toEqual({ size: 6 });
+    });
+  });
+
+  describe('addGroup', () => {
+    it('adds a named group the descriptions can reach', () => {
+      const store = createAppStore();
+      store.getState().addGroup('starter');
+      expect(store.getState().template.groups).toEqual([{ id: 'g1', name: 'starter', cards: [] }]);
+    });
+
+    it('holds the template still for a blank name', () => {
+      const store = createAppStore();
+      const before = store.getState().template;
+      store.getState().addGroup('  ');
+      expect(store.getState().template).toBe(before);
+    });
+  });
+
+  describe('renameGroup', () => {
+    it('renames it', () => {
+      const store = createAppStore();
+      store.getState().addGroup('starter');
+      store.getState().renameGroup('g1', 'enabler');
+      expect(store.getState().template.groups[0]?.name).toBe('enabler');
+    });
+  });
+
+  describe('dropGroup', () => {
+    it('removes it', () => {
+      const store = createAppStore();
+      store.getState().addGroup('starter');
+      store.getState().dropGroup('g1');
+      expect(store.getState().template.groups).toEqual([]);
+    });
+  });
+
+  describe('addGroupCard', () => {
+    it('adds the card to the group', () => {
+      const store = createAppStore();
+      store.getState().addGroup('starter');
+      store.getState().addGroupCard('g1', ASH);
+      expect(store.getState().template.groups[0]?.cards).toEqual([
+        { passcode: ASH.passcode, name: ASH.name },
+      ]);
+    });
+
+    it('remembers the typeline the picker showed, so the chip can be drawn', () => {
+      const store = createAppStore();
+      store.getState().addGroup('starter');
+      store.getState().addGroupCard('g1', ASH);
+      expect(store.getState().known[ASH.passcode]).toEqual(ASH);
+    });
+  });
+
+  describe('dropGroupCard', () => {
+    it('removes the card from the group', () => {
+      const store = createAppStore();
+      store.getState().addGroup('starter');
+      store.getState().addGroupCard('g1', ASH);
+      store.getState().dropGroupCard('g1', ASH.passcode);
+      expect(store.getState().template.groups[0]?.cards).toEqual([]);
+    });
+  });
+
+  describe('setAnalysis', () => {
+    const analysis = { ok: true, deckSize: 40, lines: [] } as unknown as Analysis;
+
+    it('holds what main understood of the template', () => {
+      const store = createAppStore();
+      store.getState().setAnalysis({ ok: true, analysis });
+      expect(selectAnalysis(store.getState())).toBe(analysis);
+    });
+
+    it('keeps the analysis in hand through a re-index, and says why there is no newer one', () => {
+      const store = createAppStore();
+      store.getState().setAnalysis({ ok: true, analysis });
+      store.getState().setAnalysis({
+        ok: false,
+        reason: 'not-ready',
+        state: 'loading',
+        message: 'the card data is still loading',
+      });
+      expect(selectAnalysis(store.getState())).toBe(analysis);
+      expect(store.getState().analysis.problem).toBe('the card data is still loading');
+    });
+
+    it('holds the slot still when the same analysis arrives again', () => {
+      const store = createAppStore();
+      store.getState().setAnalysis({ ok: true, analysis });
+      const before = store.getState().analysis;
+      store.getState().setAnalysis({ ok: true, analysis });
+      expect(store.getState().analysis).toBe(before);
+    });
+  });
+
   describe('applyRunEvent', () => {
     it('reduces the run events into the view', () => {
       const store = createAppStore();
@@ -408,6 +515,7 @@ describe('createAppStore', () => {
 describe('the selectors', () => {
   /** Every selector the components pass to `useStore`: a new object each call would re-render forever. */
   const selectors: ((state: AppState) => unknown)[] = [
+    selectAnalysis,
     selectCardState,
     selectCardsReady,
     selectShows,
@@ -415,6 +523,7 @@ describe('the selectors', () => {
     selectStatusText,
     (state) => state.cards,
     (state) => state.template,
+    (state) => state.analysis,
     (state) => state.run,
     (state) => state.settings,
     (state) => state.view,

@@ -5,7 +5,7 @@ import type { Template } from '../../../shared/types';
  * read files, so the throwaway shell carries a copy; a test holds the two
  * equal. M2g's template open/save replaces it.
  */
-export const EXAMPLE_TEMPLATE: Template = {
+const MOTIVATING: Template = {
   version: 1,
   deckSize: 40,
   hand: { size: 5 },
@@ -33,3 +33,15 @@ export const EXAMPLE_TEMPLATE: Template = {
     },
   ],
 };
+
+/** The example, read-only: a test holds it equal to `examples/motivating.json`. */
+export const EXAMPLE_TEMPLATE: Template = MOTIVATING;
+
+/**
+ * A FRESH copy of the example, which is what "Load example" loads. The editor
+ * changes the template in place from here on, so handing out the module's own
+ * object would let one edit rewrite the example for the rest of the session.
+ */
+export function exampleTemplate(): Template {
+  return structuredClone(MOTIVATING);
+}

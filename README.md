@@ -19,7 +19,7 @@ combinatorial probability plus a card-database lookup layer.
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done (in review)**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | **Done (in review)**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker) |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals) |
 | M3 — polish | Not started |
 | M4 — release | Not started |
 
@@ -29,13 +29,24 @@ A single window with a status bar — cards, databases, archetype names, conflic
 **Re-index** — over a workspace laid out as *template* and *criteria* on the left, *results* on
 the right. With no EDOPro install found, a first-run panel explains what EDOPro is, why it is
 needed, and that nothing is uploaded anywhere, then asks for the folder; a settings panel holds
-the folder, the pre-release toggle and the plateau width. You can search the card database by
-name in a keyboard-operable picker and add named cards to the template, type a description and
-see it parsed and counted against the real cards, and load the motivating example and score it.
+the folder, the pre-release toggle and the plateau width.
 
-The template and criteria **editors** (lines, groups, copy ranges, criterion rows) are M2d and
-M2e, and the full results view — ranked table, plateau, sweep chart, per-criterion breakdown —
-is M2f; until then those live in the [command-line harness](#command-line-harness).
+**You can write a deck template.** Add lines — a named card through the keyboard-operable
+picker, or a free-text description — and remove, reorder and edit them; set each line's copy
+range, the deck size (40–60) and the opening hand (5 or 6). Every edit is analysed (debounced,
+newest-wins), and each line shows what the tool understood of it, how many cards in the database
+match and a few of their names, with errors, warnings and notices marked at the line they are
+about — a description that matches nothing is a **notice**, not a failure, because a line states
+what its cards are known to be, not which cards exist. Below the lines sit the computed
+remainder (`Unspecified cards: 13–33`), the derived totals by kind with the lines that make them
+up, and a clear error when the ranges cannot sum to the deck size. Named **groups** — `starter`,
+`brick` — are created, renamed, filled from the picker and used in any description as
+`{starter}`. Load the motivating example, or clear it, and score it.
+
+The **criteria** editor (criterion rows, nested OR groups, filled-by / near-miss / limit
+readouts) is M2e, the full results view — ranked table, plateau, sweep chart, per-criterion
+breakdown — is M2f, and template open/save is M2g; until then those live in the
+[command-line harness](#command-line-harness).
 
 ## Description language
 
