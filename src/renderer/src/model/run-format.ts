@@ -1,4 +1,5 @@
 import type {
+  Analysis,
   Count,
   Fraction,
   Issue,
@@ -6,6 +7,7 @@ import type {
   RunConfirmation,
   RunResult,
   RunStartResult,
+  Template,
 } from '../../../shared/types';
 
 // How a run reads on screen. Pure text: the renderer holds no core code (TDD
@@ -34,13 +36,40 @@ function about(ms: number): string {
   return ms < 1 ? formatDuration(ms) : `about ${formatDuration(ms)}`;
 }
 
-function percent({ num, den }: Fraction): string {
-  return `${((100 * num) / den).toFixed(4)}%`;
+/**
+ * `7.0189%`: an exact fraction as a percentage, for the eye. Four places,
+ * because ratios a fraction of a point apart is the whole point of scoring
+ * exactly (PRD §2) — and the percentage is never what two scores are COMPARED
+ * by: that is the numerator, which `topRows` and the sweeps use.
+ */
+export function percentText(fraction: Fraction): string {
+  return `${((100 * fraction.num) / fraction.den).toFixed(4)}%`;
+}
+
+/** `46,185 / 658,008`: the fraction the ranking is actually done in. */
+export function exactText({ num, den }: Fraction): string {
+  return `${formatCount(num)} / ${formatCount(den)}`;
 }
 
 /** `46,185 / 658,008 = 7.0189%`: the exact answer, and the percentage it is. */
 export function fractionText(fraction: Fraction): string {
-  return `${formatCount(fraction.num)} / ${formatCount(fraction.den)} = ${percent(fraction)}`;
+  return `${exactText(fraction)} = ${percentText(fraction)}`;
+}
+
+/**
+ * `3`, `2–3`, `0, 2–3`: a sorted set of counts with its runs collapsed. A GAP
+ * stays a gap — `0, 2–3` is not `0–3`, and a line whose plateau skips a count
+ * must not be read as covering it.
+ */
+export function countsLabel(counts: readonly number[]): string {
+  const runs: string[] = [];
+  for (let at = 0; at < counts.length; ) {
+    let end = at;
+    while (end + 1 < counts.length && counts[end + 1] === counts[end]! + 1) end++;
+    runs.push(at === end ? `${counts[at]}` : `${counts[at]}–${counts[end]}`);
+    at = end + 1;
+  }
+  return runs.join(', ');
 }
 
 /** `32 / 128 (25.0%) · 1.0 s elapsed · about 3.0 s left`. */
@@ -86,7 +115,12 @@ export function bestRatioRows(result: RunResult): BestRatioRow[] {
 }
 
 export interface TopRow {
+  /** The vector's class totals, joined: what tells one row from another, since a tied rank does not. */
+  key: string;
+  /** Exactly tied rows share ONE rank: a tie is not an ordering. */
   rank: number;
+  /** How many kept rows hold this same exact score; 1 when it stands alone. */
+  tiedWith: number;
   percent: string;
   exact: string;
   /** One deck behind the row: a count per line, in the order of `result.lines`. */
@@ -95,14 +129,71 @@ export interface TopRow {
   rawRatios: string;
 }
 
+/**
+ * The first `rows` of the ranked table. Two vectors tie iff their `blend.num`
+ * are equal — every vector of a run is over one denominator (TDD §11.2) — so
+ * the tie is read off the NUMERATOR and never off the percentage beside it,
+ * which rounds two scores four places apart to the same four places. The tie's
+ * size is counted over the whole kept table, so a tie running past the last
+ * row on screen is still reported as one.
+ */
 export function topRows(result: RunResult, rows: number): TopRow[] {
+  const tied = new Map<number, number>();
+  const firstAt = new Map<number, number>();
+  result.ranked.forEach((vector, at) => {
+    const key = vector.blend.num;
+    tied.set(key, (tied.get(key) ?? 0) + 1);
+    if (!firstAt.has(key)) firstAt.set(key, at);
+  });
   return result.ranked.slice(0, rows).map((vector, at) => ({
-    rank: at + 1,
-    percent: percent(vector.blend),
-    exact: `${formatCount(vector.blend.num)} / ${formatCount(vector.blend.den)}`,
+    key: vector.classTotals.join('-'),
+    rank: (firstAt.get(vector.blend.num) ?? at) + 1,
+    tiedWith: tied.get(vector.blend.num) ?? 1,
+    percent: percentText(vector.blend),
+    exact: exactText(vector.blend),
     example: result.rankedRatios[at]?.example ?? [],
     rawRatios: formatCount(vector.rawRatios),
   }));
+}
+
+/** `128 of 128 class vectors · 4,096 raw ratios · hand of 5`: what the search covered. */
+export function runStatsText(result: RunResult): string {
+  const hands = result.handSizes
+    .map(({ H, weight }) =>
+      result.handSizes.length === 1 ? `hand of ${H}` : `hand of ${H} × ${weight}`,
+    )
+    .join(', ');
+  return [
+    `${formatCount(result.done)} of ${formatCount(result.total)} class vectors`,
+    `${formatCount(result.rawRatios)} raw ratios`,
+    hands,
+  ].join(' · ');
+}
+
+/**
+ * `32 raw ratios are this deck, as far as the criteria can tell`: the exact
+ * tie a class vector stands for (TDD §11.2), so that a ratio reported as one
+ * deck is not read as the only one.
+ */
+export function bestReachText(result: RunResult): string {
+  const ratios = result.best.rawRatios;
+  const one = ratios === 1;
+  return `${formatCount(ratios)} raw ratio${one ? '' : 's'} ${one ? 'is' : 'are'} this deck, as far as the criteria can tell`;
+}
+
+/**
+ * The sentence beside Run when nothing blocks it. The size and the estimate
+ * are `analyze`'s own (TDD §9) and are read off it rather than worked out
+ * again here; before the first reply the template alone is what there is to
+ * say.
+ */
+export function readyText(template: Template, analysis: Analysis | null): string {
+  const head = `Ready to score: ${template.lines.length} lines, ${template.criteria.length} criteria, deck of ${template.deckSize}.`;
+  const work = analysis?.work;
+  if (work === undefined || work.classVectors === null) return head;
+  const ratios = work.rawRatios === null ? '' : ` over ${formatCount(work.rawRatios)} raw ratios`;
+  const estimate = work.estimatedMs === null ? '' : `, ${about(work.estimatedMs)}`;
+  return `${head} ${formatCount(work.classVectors)} class vectors${ratios}${estimate}.`;
 }
 
 /** Why `run:start` started nothing, line by line; empty when it did start. */

@@ -42,11 +42,15 @@ function messageOf(failure: unknown): string {
   return failure instanceof Error ? failure.message : String(failure);
 }
 
-/** The lines by line index: template order, the remainder last. */
+/**
+ * The lines by line index: template order, the remainder last. `label` starts
+ * as the id — the worker has no card data to name a line with, and main
+ * replaces it on the way out — so it is the fallback rather than a blank.
+ */
 function linesOf({ classes, classOfLine }: Compiled): RunLine[] {
   const lines = new Array<RunLine>(classOfLine.length);
   classes.forEach((info, cls) => {
-    for (const { id, line, min, max } of info.lines) lines[line] = { id, cls, min, max };
+    for (const { id, line, min, max } of info.lines) lines[line] = { id, label: id, cls, min, max };
   });
   return lines;
 }

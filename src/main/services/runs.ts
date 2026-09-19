@@ -18,6 +18,10 @@ import type {
   WorkerResult,
   WorkerRunOptions,
 } from '../../worker/protocol';
+
+/** A search that scored something: the only worker results that carry lines. */
+type Scored = Extract<WorkerResult, { status: 'done' | 'cancelled' }>;
+
 import type { CompileTemplateResult } from './templates';
 
 // The optimizer worker's host (TDD §3): one run at a time, on one warm
@@ -52,6 +56,11 @@ interface ActiveRun {
   runId: number;
   /** What the worker was sent — and is sent again, with `force`, on confirmation. */
   request: RunRequest;
+  /** What each line of THIS run is called, by id: the template it was compiled from (`lineLabels`). */
+  labels: Record<string, string>;
+  /** What the run's criteria limited, and what the engine dropped: PRD §6.3's footnote, pinned to this run. */
+  criterionLimits: RunResult['criterionLimits'];
+  droppedLimits: RunResult['droppedLimits'];
   /** `waiting`: the worker answered `needs-confirmation` and is idle. */
   phase: 'running' | 'waiting';
   limits: RunResult['limits'];
@@ -68,6 +77,28 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function gcd(a: number, b: number): number {
   while (b !== 0) [a, b] = [b, a % b];
   return a;
+}
+
+/**
+ * The worker's result as the renderer receives it: the caps it ran under, and
+ * the NAME of every line put back on. The worker is given no card data (TDD
+ * §3), so it can only echo the ids; main compiled the template and kept what
+ * each line is called, and a result therefore carries the names it was
+ * produced with rather than whatever the editor says by the time it is read.
+ * A line main has no label for keeps its id, so a label is never blank.
+ *
+ * The same goes for what the criteria LIMITED: PRD §6.3's footnote qualifies
+ * a number, so it travels with that number instead of being looked up against
+ * whatever is in the editor when someone reads it.
+ */
+function decorate(result: Scored, run: ActiveRun): RunResult {
+  return {
+    ...result,
+    limits: run.limits,
+    criterionLimits: run.criterionLimits,
+    droppedLimits: run.droppedLimits,
+    lines: result.lines.map((line) => ({ ...line, label: run.labels[line.id] ?? line.id })),
+  };
 }
 
 /** A probability as an exact fraction, to six decimals: `0.005` is 1/200. */
@@ -208,6 +239,9 @@ export class RunService {
       runId,
       request,
       phase: 'running',
+      labels: compiled.labels,
+      criterionLimits: compiled.criterionLimits,
+      droppedLimits: compiled.droppedLimits,
       limits: {
         topK: read.options.topK ?? RUN_TOP_K_DEFAULT,
         plateauCap: read.options.plateauCap ?? RUN_PLATEAU_CAP_DEFAULT,
@@ -306,10 +340,10 @@ export class RunService {
         return;
       }
       case 'done':
-        this.finish(run, { runId, type: 'result', result: { ...result, limits: run.limits } });
+        this.finish(run, { runId, type: 'result', result: decorate(result, run) });
         return;
       case 'cancelled':
-        this.finish(run, { runId, type: 'cancelled', result: { ...result, limits: run.limits } });
+        this.finish(run, { runId, type: 'cancelled', result: decorate(result, run) });
         return;
       default:
         // `infeasible` or `error`: the analysis should have stopped either in `start`.

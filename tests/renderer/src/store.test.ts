@@ -12,6 +12,7 @@ import {
   selectCardsReady,
   selectRunBlocker,
   selectRunnable,
+  selectRunSentence,
   selectShows,
   selectStage,
   selectStatusText,
@@ -685,6 +686,45 @@ describe('selectRunBlocker', () => {
   });
 });
 
+describe('selectRunSentence', () => {
+  function runnable(): AppStore {
+    const store = createAppStore();
+    store.getState().setCards(status());
+    store.getState().setTemplate(EXAMPLE_TEMPLATE);
+    store.getState().setAnalysis({ ok: true, analysis: { ok: true } as Analysis });
+    return store;
+  }
+
+  it('is the blocker’s own words whenever one stands, so Run and its sentence cannot disagree', () => {
+    const store = createAppStore();
+    store.getState().setTemplate(EXAMPLE_TEMPLATE);
+    expect(selectRunSentence(store.getState())).toBe(selectRunBlocker(store.getState()));
+    expect(selectRunnable(store.getState())).toBe(false);
+  });
+
+  it('says what the run would be once nothing blocks it', () => {
+    const store = runnable();
+    expect(selectRunSentence(store.getState())).toBe(
+      'Ready to score: 7 lines, 2 criteria, deck of 40.',
+    );
+  });
+
+  it('adds the size the analysis worked out, rather than working it out again', () => {
+    const store = runnable();
+    const work = {
+      rawRatios: 4096,
+      classVectors: 128,
+      hands: null,
+      estimatedMs: 12,
+      cost: { perVectorUs: 0, perTermNs: 7 },
+    };
+    store.getState().setAnalysis({ ok: true, analysis: { ok: true, work } as unknown as Analysis });
+    expect(selectRunSentence(store.getState())).toContain(
+      '128 class vectors over 4,096 raw ratios',
+    );
+  });
+});
+
 describe('the selectors', () => {
   /** Every selector the components pass to `useStore`: a new object each call would re-render forever. */
   const selectors: ((state: AppState) => unknown)[] = [
@@ -693,6 +733,7 @@ describe('the selectors', () => {
     selectCardsReady,
     selectRunBlocker,
     selectRunnable,
+    selectRunSentence,
     selectShows,
     selectStage,
     selectStatusText,

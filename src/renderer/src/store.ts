@@ -15,6 +15,7 @@ import type {
 import { type AnalysisView, NO_ANALYSIS, reduceAnalysis } from './model/analysis-view';
 import { statusHeadline } from './model/card-status';
 import type { CopyRange } from './model/copy-range';
+import { readyText } from './model/run-format';
 import { IDLE_RUN, markCancelling, type RunView, reduceRun } from './model/run-state';
 import { type SetupStage, setupStage } from './model/setup';
 import {
@@ -293,6 +294,15 @@ export function selectRunBlocker(state: AppState): string | null {
 
 export function selectRunnable(state: AppState): boolean {
   return selectRunBlocker(state) === null;
+}
+
+/**
+ * The sentence beside Run, blocked or not: the blocker's own words while one
+ * stands, and otherwise what the run would be. One function, so the button's
+ * `disabled` and the line under it can never say different things.
+ */
+export function selectRunSentence(state: AppState): string {
+  return selectRunBlocker(state) ?? readyText(state.template, selectAnalysis(state));
 }
 
 /** What the main region is. */
