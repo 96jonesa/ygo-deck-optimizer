@@ -487,6 +487,12 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       const result = parse(line.text, descCtx);
       if (result.ok) desc = result.desc;
       else {
+        // A parse failure is deliberately reported TWICE, and both are load-bearing:
+        // `parsed` carries the result a caller renders (message, span, and on
+        // success the canonical text and echo), while the issue carries the
+        // SEVERITY that `ok` below aggregates. Drop the issue and a template
+        // that does not parse silently becomes runnable. A UI that renders both
+        // should suppress the issue, as `issuesToList` does, not remove it here.
         found.push({ ...error('parse', result.message), span: result.span });
         parsed = { ok: false, message: result.message, span: result.span };
       }
@@ -690,6 +696,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     if (criterion.name !== undefined) out.name = criterion.name;
     const result = parseCriterion(criterion.text, descCtx);
     if (!result.ok) {
+      // Both, for the reason given on the line-parse failure above.
       out.parsed = { ok: false, message: result.message, span: result.span };
       out.issues.push({ ...error('parse', result.message), span: result.span });
       parsedCriteria.push(null);
