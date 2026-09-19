@@ -112,6 +112,22 @@ class Validator {
     return this.fail(`${where}: \`${field}\` must be non-empty text, not ${show(value)}`);
   }
 
+  /**
+   * Like `text`, but an empty string is allowed. Used for the one thing a
+   * half-written template is full of: a description nobody has typed yet.
+   *
+   * Rejecting it here would make the WHOLE template structurally invalid, so
+   * `analyze` could not answer at all and an editor would have nothing to show
+   * for any line — whereas an empty description is simply a description that
+   * does not parse, which `analyze` already reports against the line it is on.
+   * Identifiers and names still go through `text`.
+   */
+  draftText(where: string, field: string, value: unknown): string | undefined {
+    if (typeof value === 'string') return value;
+    if (value === undefined) return this.fail(`${where}: \`${field}\` is missing`);
+    return this.fail(`${where}: \`${field}\` must be text, not ${show(value)}`);
+  }
+
   list(field: string, value: unknown, required: boolean): unknown[] {
     if (Array.isArray(value)) return value;
     if (value === undefined) {
@@ -188,7 +204,7 @@ class Validator {
         return undefined;
       return { id, min, max, card };
     }
-    const text = this.text(where, 'text', value.text);
+    const text = this.draftText(where, 'text', value.text);
     if (value.desc !== undefined && !isObject(value.desc))
       this.fail(`${where}: \`desc\` must be a description object, not ${show(value.desc)}`);
     if (id === undefined || min === undefined || max === undefined || text === undefined)
@@ -203,7 +219,7 @@ class Validator {
   criterion(where: string, value: unknown): TemplateCriterion | undefined {
     if (!isObject(value)) return this.fail(`${where}: must be an object, not ${show(value)}`);
     const id = this.text(where, 'id', value.id);
-    const text = this.text(where, 'text', value.text);
+    const text = this.draftText(where, 'text', value.text);
     if (value.name !== undefined && typeof value.name !== 'string')
       this.fail(`${where}: \`name\` must be text, not ${show(value.name)}`);
     if (value.expr !== undefined && !isObject(value.expr))

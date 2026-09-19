@@ -476,16 +476,14 @@ describe('withCriterion', () => {
   });
 
   /**
-   * As an empty LINE is (`withDescriptionLine`), and for the same reason. Note
-   * what this costs today: `validateTemplate` refuses empty `text`, so the
-   * template is structurally invalid until something is typed, and
-   * `template:analyze` answers `invalid` rather than the per-criterion parse
-   * error `analyze` would happily give. The renderer's answer is to refuse a
-   * run while the latest reply was `invalid` (`selectRunnable`); the real fix
-   * belongs in `core`.
+   * As an empty LINE is (`withDescriptionLine`), and for the same reason. This
+   * used to make the whole template structurally invalid, so `analyze` answered
+   * `invalid` and the editor lost every other line's readout the moment a
+   * criterion was added; `core` now accepts the empty draft and reports it as
+   * an ordinary parse error on the criterion it is on.
    */
-  it('makes a template `core` refuses until something is typed', () => {
-    expect(validateTemplate(withCriterion(EMPTY_TEMPLATE))).toMatchObject({ ok: false });
+  it('stays a template `core` accepts, so the rest of the editor keeps working', () => {
+    expect(validateTemplate(withCriterion(EMPTY_TEMPLATE))).toMatchObject({ ok: true });
   });
 
   it('gives each new criterion an id of its own, however fast they are added', () => {
