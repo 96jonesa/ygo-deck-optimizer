@@ -141,6 +141,81 @@ function matchAt(re: RegExp, text: string, pos: number): string | undefined {
   return re.exec(text)?.[0];
 }
 
+export type LexOneResult = { ok: true; token: Token } | { ok: false; message: string; span: Span };
+
+/** The first offset at or after `pos` that is not whitespace; `text.length` when there is none. */
+export function skipSpace(text: string, pos: number): number {
+  return pos + (matchAt(SPACE, text, pos)?.length ?? 0);
+}
+
+/**
+ * The one token that starts at `start`, which must be inside `text` and not
+ * on whitespace; the next token starts at or after `token.span.end`. This is
+ * the whole description lexer — `lex` only loops over it — exposed so that
+ * the criterion lexer (TDD §7.1) can put its own words in front of it.
+ */
+export function lexOne(text: string, start: number): LexOneResult {
+  const fail = (message: string, from: number, end: number): LexOneResult => ({
+    ok: false,
+    message,
+    span: { start: from, end },
+  });
+  const token = (body: TokenBody, length: number): LexOneResult => ({
+    ok: true,
+    token: { ...body, span: { start, end: start + length } },
+  });
+  const ch = text[start]!;
+
+  if (PUNCT.has(ch)) return token({ t: 'punct', ch: ch as Punct }, 1);
+
+  const delimited = DELIMITED[ch];
+  if (delimited !== undefined) {
+    const [close, t, what] = delimited;
+    const end = text.indexOf(close, start + 1);
+    if (end < 0)
+      return fail(
+        `this ${ch} is never closed: expected ${close} after ${what}`,
+        start,
+        text.length,
+      );
+    return token({ t, text: text.slice(start + 1, end).trim() }, end + 1 - start);
+  }
+
+  if (ch === '#') {
+    const digits = matchAt(DIGITS, text, start + 1);
+    if (digits === undefined)
+      return fail('expected a passcode after #, such as #89631139', start, start + 1);
+    if (digits.length > 10)
+      return fail('a passcode has at most 10 digits', start, start + 1 + digits.length);
+    return token({ t: 'passcode', value: Number(digits) }, 1 + digits.length);
+  }
+
+  const hex = matchAt(HEX, text, start);
+  if (hex !== undefined) {
+    if (hex.length > 10) return fail('a hex code has at most 8 digits', start, start + hex.length);
+    return token({ t: 'hex', value: Number.parseInt(hex.slice(2), 16) }, hex.length);
+  }
+
+  const digits = matchAt(DIGITS, text, start);
+  if (digits !== undefined) {
+    if (digits.length > 9) return fail('this number is too large', start, start + digits.length);
+    return token({ t: 'int', value: Number(digits) }, digits.length);
+  }
+
+  const non = matchAt(NON, text, start);
+  if (non !== undefined) return token({ t: 'non' }, non.length);
+
+  const vocabulary = matchAt(VOCABULARY_WORD, text, start);
+  const body = vocabulary && VOCABULARY.get(vocabulary.toLowerCase().replaceAll(/[-\s]+/g, ''));
+  if (vocabulary !== undefined && body) return token(body, vocabulary.length);
+
+  const word = matchAt(WORD, text, start);
+  if (word !== undefined) return token({ t: 'word', text: word }, word.length);
+
+  const codePoint = String.fromCodePoint(text.codePointAt(start)!);
+  return fail(`unexpected character ${codePoint}`, start, start + codePoint.length);
+}
+
 /**
  * Split a description into tokens (TDD §5.1). Case-insensitive; never throws.
  * Every span indexes into `text` as given — the text is not normalized first,
@@ -148,91 +223,11 @@ function matchAt(re: RegExp, text: string, pos: number): string | undefined {
  */
 export function lex(text: string): LexResult {
   const tokens: Token[] = [];
-  let pos = 0;
-  const fail = (message: string, start: number, end: number): LexResult => ({
-    ok: false,
-    message,
-    span: { start, end },
-  });
-
-  while (pos < text.length) {
-    const space = matchAt(SPACE, text, pos);
-    if (space !== undefined) {
-      pos += space.length;
-      continue;
-    }
-    const start = pos;
-    const ch = text[pos]!;
-    const push = (body: TokenBody, length: number) => {
-      pos = start + length;
-      tokens.push({ ...body, span: { start, end: pos } });
-    };
-
-    if (PUNCT.has(ch)) {
-      push({ t: 'punct', ch: ch as Punct }, 1);
-      continue;
-    }
-
-    const delimited = DELIMITED[ch];
-    if (delimited !== undefined) {
-      const [close, t, what] = delimited;
-      const end = text.indexOf(close, pos + 1);
-      if (end < 0)
-        return fail(
-          `this ${ch} is never closed: expected ${close} after ${what}`,
-          start,
-          text.length,
-        );
-      push({ t, text: text.slice(pos + 1, end).trim() }, end + 1 - start);
-      continue;
-    }
-
-    if (ch === '#') {
-      const digits = matchAt(DIGITS, text, pos + 1);
-      if (digits === undefined)
-        return fail('expected a passcode after #, such as #89631139', start, start + 1);
-      if (digits.length > 10)
-        return fail('a passcode has at most 10 digits', start, pos + 1 + digits.length);
-      push({ t: 'passcode', value: Number(digits) }, 1 + digits.length);
-      continue;
-    }
-
-    const hex = matchAt(HEX, text, pos);
-    if (hex !== undefined) {
-      if (hex.length > 10)
-        return fail('a hex code has at most 8 digits', start, start + hex.length);
-      push({ t: 'hex', value: Number.parseInt(hex.slice(2), 16) }, hex.length);
-      continue;
-    }
-
-    const digits = matchAt(DIGITS, text, pos);
-    if (digits !== undefined) {
-      if (digits.length > 9) return fail('this number is too large', start, start + digits.length);
-      push({ t: 'int', value: Number(digits) }, digits.length);
-      continue;
-    }
-
-    const non = matchAt(NON, text, pos);
-    if (non !== undefined) {
-      push({ t: 'non' }, non.length);
-      continue;
-    }
-
-    const vocabulary = matchAt(VOCABULARY_WORD, text, pos);
-    const body = vocabulary && VOCABULARY.get(vocabulary.toLowerCase().replaceAll(/[-\s]+/g, ''));
-    if (vocabulary !== undefined && body) {
-      push(body, vocabulary.length);
-      continue;
-    }
-
-    const word = matchAt(WORD, text, pos);
-    if (word !== undefined) {
-      push({ t: 'word', text: word }, word.length);
-      continue;
-    }
-
-    const codePoint = String.fromCodePoint(text.codePointAt(pos)!);
-    return fail(`unexpected character ${codePoint}`, start, start + codePoint.length);
+  for (let pos = skipSpace(text, 0); pos < text.length; pos = skipSpace(text, pos)) {
+    const result = lexOne(text, pos);
+    if (!result.ok) return result;
+    tokens.push(result.token);
+    pos = result.token.span.end;
   }
   return { ok: true, tokens };
 }

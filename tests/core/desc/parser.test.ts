@@ -18,7 +18,8 @@ import {
   ST_SUBKIND_VOCABULARY,
 } from '../../../src/core/cards/vocabulary';
 import { type Clause, canonicalize, type Description } from '../../../src/core/desc/ast';
-import { parse } from '../../../src/core/desc/parser';
+import { lex } from '../../../src/core/desc/lexer';
+import { parse, parseTokens } from '../../../src/core/desc/parser';
 import { cardRecord, contextOf, FakeCards, FakeGroups } from '../../helpers/desc-context';
 import { buildCdb, CODE, FIXTURE_ROWS } from '../../helpers/fixture-cards';
 import { seededRng } from '../../helpers/prng';
@@ -972,5 +973,50 @@ describe('parse', () => {
     }
     // The soup must be rich enough to reach past the first token.
     expect(parsed).toBeGreaterThan(200);
+  });
+});
+
+describe('parseTokens', () => {
+  const END = { start: 100, end: 103 };
+
+  function tokensOf(text: string) {
+    const lexed = lex(text);
+    if (!lexed.ok) throw new Error(lexed.message);
+    return lexed.tokens;
+  }
+
+  it('parses a description out of the middle of a longer text', () => {
+    const text = '1x level 4 monster or [Synthetic Harpy] and';
+    const tokens = tokensOf(text).slice(2, -1);
+    expect(parseTokens(tokens, END, ctx)).toEqual({
+      ok: true,
+      desc: descOf('level 4 monster or [Synthetic Harpy]'),
+    });
+  });
+
+  it('keeps the spans of the tokens it was given', () => {
+    const tokens = tokensOf('1x level 4 levle monster').slice(2);
+    expect(parseTokens(tokens, END, ctx)).toMatchObject({
+      ok: false,
+      span: { start: 11, end: 16 },
+    });
+  });
+
+  it('points at the given end when something is missing after the last token', () => {
+    expect(parseTokens([], END, ctx)).toEqual({
+      ok: false,
+      message: expect.stringContaining('expected a description'),
+      span: END,
+    });
+    expect(parseTokens(tokensOf('monster or'), END, ctx)).toMatchObject({ ok: false, span: END });
+    expect(parseTokens(tokensOf('level'), END, ctx)).toMatchObject({ ok: false, span: END });
+    expect(parseTokens(tokensOf('"Warrior":'), END, ctx)).toMatchObject({ ok: false, span: END });
+  });
+
+  it('is what parse does with the tokens of the whole text', () => {
+    for (const text of ['FIRE/WATER non-tuner', 'normal', '(spell or trap', 'level 4 level 5', ''])
+      expect(parseTokens(tokensOf(text), { start: text.length, end: text.length }, ctx)).toEqual(
+        parse(text, ctx),
+      );
   });
 });

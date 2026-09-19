@@ -17,7 +17,7 @@ import {
   RACE_VOCABULARY,
   ST_SUBKIND_VOCABULARY,
 } from '../../../src/core/cards/vocabulary';
-import { lex, type Token, type TokenBody } from '../../../src/core/desc/lexer';
+import { lex, lexOne, skipSpace, type Token, type TokenBody } from '../../../src/core/desc/lexer';
 import { seededRng } from '../../helpers/prng';
 
 /** The tokens of `text` without their spans; fails the test on a lex error. */
@@ -367,5 +367,71 @@ describe('lex', () => {
         expect(span.end).toBeLessThanOrEqual(text.length);
       }
     }
+  });
+});
+
+describe('lexOne', () => {
+  it('reads the one token that starts at the offset, with its span in the whole text', () => {
+    const text = 'level 4 or lower "Sky Striker":0x115 spell';
+    expect(lexOne(text, 0)).toEqual({
+      ok: true,
+      token: { t: 'level', span: { start: 0, end: 5 } },
+    });
+    expect(lexOne(text, 8)).toEqual({
+      ok: true,
+      token: { t: 'bound', dir: 'down', span: { start: 8, end: 16 } },
+    });
+    expect(lexOne(text, 17)).toEqual({
+      ok: true,
+      token: { t: 'quoted', text: 'Sky Striker', span: { start: 17, end: 30 } },
+    });
+    expect(lexOne(text, 31)).toEqual({
+      ok: true,
+      token: { t: 'hex', value: 0x115, span: { start: 31, end: 36 } },
+    });
+  });
+
+  it('starts where it is told, even inside a word', () => {
+    expect(lexOne('beastly', 5)).toEqual({
+      ok: true,
+      token: { t: 'word', text: 'ly', span: { start: 5, end: 7 } },
+    });
+  });
+
+  it('reports an error with its span in the whole text', () => {
+    expect(lexOne('monster or [Unclosed', 11)).toEqual({
+      ok: false,
+      message: expect.stringContaining('never closed'),
+      span: { start: 11, end: 20 },
+    });
+    expect(lexOne('spell & trap', 6)).toEqual({
+      ok: false,
+      message: 'unexpected character &',
+      span: { start: 6, end: 7 },
+    });
+  });
+
+  it('gives lex its tokens, one after another', () => {
+    const text = '  non-FIRE/WATER Beast - Warrior  or #123 {g} ATK ? ';
+    const collected: Token[] = [];
+    for (let pos = skipSpace(text, 0); pos < text.length; pos = skipSpace(text, pos)) {
+      const result = lexOne(text, pos);
+      if (!result.ok) throw new Error(result.message);
+      collected.push(result.token);
+      pos = result.token.span.end;
+    }
+    expect(collected).toEqual(tokens(text));
+  });
+});
+
+describe('skipSpace', () => {
+  it('moves past a run of whitespace of any kind', () => {
+    expect(skipSpace('a \t\n\u00a0 b', 1)).toBe(6);
+  });
+
+  it('stays where there is none, and at the end of the text', () => {
+    expect(skipSpace('ab', 0)).toBe(0);
+    expect(skipSpace('ab  ', 2)).toBe(4);
+    expect(skipSpace('ab', 2)).toBe(2);
   });
 });

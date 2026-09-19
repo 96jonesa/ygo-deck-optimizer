@@ -17,7 +17,7 @@ combinatorial probability plus a card-database lookup layer.
 | Milestone | State |
 | --- | --- |
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
-| M0 — de-risk spike (headless) | **In progress**: M0a scaffold, M0b card data, M0c descriptions, M0d implication |
+| M0 — de-risk spike (headless) | **In progress**: M0a scaffold, M0b card data, M0c descriptions, M0d implication, M0e criteria |
 | M1 — exact engine + optimizer (headless) | Not started |
 | M2 — app MVP | Not started |
 | M3 — polish | Not started |
@@ -63,6 +63,22 @@ when its description **logically implies** the requirement's (`src/core/desc`: `
 
 The card pool is never consulted, except that a named card (`#27204311`) or group is fully
 known and matches whatever its record satisfies. Real-data soundness check: `EDOPRO_WORKDIR`.
+
+## Success criteria
+
+A hand succeeds if it meets any one criterion (`src/core/criteria`: `parseCriterion`,
+`printCriterion`, `expand`, `subsumes`). A criterion combines two kinds of term:
+
+| Term | Means |
+| --- | --- |
+| `2x level 4 monster` (or `2×`) | A **requirement**: two *distinct* drawn cards, each filling it. `1x [A], 1x [B], 1x monster` needs three cards |
+| `at most 1x [Brick]`, `no trap` | A **limit**: a count over the whole hand, not an assignment |
+
+`and` and `,` are the same and bind tighter than `or`; parentheses group. There are two "or"s:
+`1x [C] or 2x [D]` chooses between terms, because a count (or `at most`, `no`) follows, while
+`1x [C] or [E]` is **one** slot either card fills — the same as `1x ([C] or [E])`, the form the
+printer always uses. Nesting is surface syntax: `1x [A] and 1x [B] and (1x [C] or 2x [D])` expands
+to the flat alternatives `(A, B, C)` and `(A, B, 2× D)`, all the engine sees (at most 256 of them).
 
 ## Development
 
