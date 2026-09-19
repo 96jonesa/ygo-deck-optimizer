@@ -17,14 +17,15 @@ combinatorial probability plus a card-database lookup layer.
 | Milestone | State |
 | --- | --- |
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
-| M0 — de-risk spike (headless) | **In progress**: M0a scaffold, M0b card data, M0c descriptions, M0d implication, M0e criteria |
+| M0 — de-risk spike (headless) | **Done, pending review**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | Not started |
 | M2 — app MVP | Not started |
 | M3 — polish | Not started |
 | M4 — release | Not started |
 
 Today the app opens an empty window that proves the main ↔ preload ↔ renderer
-bridge; nothing is computed yet.
+bridge; what is computed so far is reachable only through the
+[command-line harness](#command-line-harness).
 
 ## Description language
 
@@ -80,6 +81,55 @@ A hand succeeds if it meets any one criterion (`src/core/criteria`: `parseCriter
 printer always uses. Nesting is surface syntax: `1x [A] and 1x [B] and (1x [C] or 2x [D])` expands
 to the flat alternatives `(A, B, C)` and `(A, B, 2× D)`, all the engine sees (at most 256 of them).
 
+## Command-line harness
+
+A development harness over `src/core` (`src/cli`, run through `tsx`). It is **not the
+product** and is not shipped: it exists so the engine can be driven, and checked against real
+card data, before there is an app around it.
+
+```sh
+npm run cli -- estimate <template.json> --workdir <EDOPro dir> \
+    [--samples 200000] [--seed 1] [--hand 5|6] [--ratio 3,3,5,2,0,7,3 | --at max|min]
+```
+
+`estimate` loads the install's card databases and `strings.conf` layers, resolves a template
+file ([TDD §14](docs/TDD.md)), and estimates the odds of a successful opening hand **at one
+deck ratio** by Monte Carlo (`src/core/prob/montecarlo.ts`). `--workdir` falls back to
+`$EDOPRO_WORKDIR`. `--ratio` gives the copies of each line in template order — the remainder is
+whatever is left of the deck — and must respect every line's range; without it every line sits
+at its `max` (`--at max`). The same `--seed` always gives the same estimate.
+
+The example is the PRD's motivating template, [`examples/motivating.json`](examples/motivating.json)
+— with Level 8 where the PRD first wrote Level 7, because no Level 7 FIRE Beast-Warrior exists
+and a line that matches no card is an error:
+
+```sh
+EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- estimate examples/motivating.json --samples 1000000
+```
+
+What the output means, top to bottom (all of it on stdout):
+
+| Section | Content |
+| --- | --- |
+| Card database | Databases loaded and skipped, cards in the Main Deck population, `replacedRows` (rows a later database updated — a delta repository doing its job), `conflicts` (ids on which two repositories disagree — the one figure worth worrying about), and how many archetype names were found, or that no `strings.conf` was |
+| Template | Each line as written, the parse echo ("understood as"), how many cards in the database match it, its range, and the count chosen for this estimate; the remainder last |
+| Criteria | Each criterion as written and the flat alternatives it expands to; a hand succeeds if it meets any one |
+| Matching | For every distinct requirement or limit description, the lines that fill it (or that it counts). This is where `monster` visibly does **not** fill `level 4 or lower monster`, and where lines that match nothing — and so cannot affect the odds — are listed |
+| Warnings | A requirement no line fills, alternatives that need more cards than a hand, a picker-chosen card missing from the database |
+| `P(success) = 0.0701  (95% CI 0.0696–0.0706, 1,000,000 samples, seed 1)` | The estimate, its 95% **Wilson score** interval, then the hit count and the standard error |
+
+Progress (`done / total`, percent, elapsed, ETA) goes to **stderr**, one plain line per report,
+so stdout can be piped and a log file stays readable. Exit codes: `0` success, `1` the template
+or the card data is at fault (every problem is listed, each naming its line or criterion), `2`
+the command line is.
+
+The Monte Carlo engine is the project's independent oracle (TDD §10.4): it draws concrete cards
+tagged with their line and assigns them to requirement slots by brute force, sharing no code
+with the exact engine that M1 builds and will be tested against it. With `EDOPRO_WORKDIR` set,
+`tests/cli/realdata.test.ts` runs this command on the example against the real install and
+checks the estimate against the exact value (46,185 / 658,008 ≈ 0.0702), computed in the test
+by an independent route.
+
 ## Development
 
 Requires Node 22.
@@ -114,10 +164,12 @@ BABELCDB_PATH=~/repos/deps/babelcdb/cards.cdb EDOPRO_WORKDIR=~/Applications/Proj
 | Path | What lives there |
 | --- | --- |
 | `src/core/` | Everything that can be *wrong*: card data, descriptions, implication, probability, optimizer. Pure TypeScript — no Electron, no Node built-ins, no DOM |
-| `src/main/` | Electron main process: window, CSP, IPC handlers, filesystem |
+| `src/main/` | Electron main process: window, CSP, IPC handlers, filesystem. `src/main/edopro/loader.ts` walks an EDOPro install (no Electron import, so the CLI shares it) |
 | `src/preload/` | The typed `window.api` bridge (emitted as CommonJS — see `electron.vite.config.ts`) |
 | `src/renderer/` | React UI; sandboxed, talks only through `window.api` |
 | `src/shared/` | IPC channel names and payload types |
+| `src/cli/` | Development harness (`npm run cli`), not shipped |
+| `examples/` | Example templates; `motivating.json` is the PRD's motivating example |
 | `tests/` | Mirrors `src/` |
 | `scripts/` | `check-licenses.mjs` |
 

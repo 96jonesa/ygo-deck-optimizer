@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
@@ -6,6 +6,7 @@ import { CardIndex } from '../../../src/core/cards/index';
 import { isMonster, matchSetcode } from '../../../src/core/cards/record';
 import { SetnameTable } from '../../../src/core/cards/setnames';
 import { ATTRIBUTE_VOCABULARY, RACE_VOCABULARY } from '../../../src/core/cards/vocabulary';
+import { collectStringsConf } from '../../../src/main/edopro/loader';
 
 // Opt-in integration tests against real data (TDD §15.1). Skipped in CI; run
 // locally before touching core/cards:
@@ -132,20 +133,10 @@ describe.skipIf(!BABELCDB_PATH)('BabelCDB@47fc046 cards.cdb', async () => {
 });
 
 describe.skipIf(!EDOPRO_WORKDIR)('a real EDOPro install', () => {
-  function stringsConfLayers(workdir: string): string[] {
-    // TDD §4.5 order: config/, then expansions/, then each repository, sorted.
-    const repositories = path.join(workdir, 'repositories');
-    const files = [
-      path.join(workdir, 'config', 'strings.conf'),
-      path.join(workdir, 'expansions', 'strings.conf'),
-      ...(existsSync(repositories) ? readdirSync(repositories) : [])
-        .sort()
-        .map((name) => path.join(repositories, name, 'strings.conf')),
-    ];
-    return files.filter((file) => existsSync(file)).map((file) => readFileSync(file, 'utf8'));
-  }
-
-  const layers = EDOPRO_WORKDIR ? stringsConfLayers(EDOPRO_WORKDIR) : [];
+  // TDD §4.5 order: config/, then expansions/, then each repository, sorted.
+  const layers = EDOPRO_WORKDIR
+    ? collectStringsConf(EDOPRO_WORKDIR).map((file) => readFileSync(file, 'utf8'))
+    : [];
   const table = SetnameTable.fromLayers(layers);
 
   it('finds a base strings.conf and at least one repository layer', () => {

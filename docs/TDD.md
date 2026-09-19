@@ -375,7 +375,7 @@ P(n) = \frac{1}{\binom{N}{H}} \sum_{h \in \mathcal{S}} \prod_{c} \binom{n_c}{h_c
 
 ### 10.4 Monte Carlo oracle
 
-`src/core/prob/montecarlo.ts` builds a concrete deck of $`N`$ card objects tagged with their **line** (not class), draws hands by partial Fisher–Yates with a seeded PRNG, and decides success by brute-force assignment of cards to slots using the *match matrix rows of lines*. It deliberately shares no code with classes, masks, Hall's condition, the success set, or the binomial table. It is a test oracle and the future engine for non-hypergeometric features (PRD §9); it is not reachable from the app in v1.
+`src/core/prob/montecarlo.ts` builds a concrete deck of $`N`$ card objects tagged with their **line** (not class), draws hands by partial Fisher–Yates with a seeded PRNG, and decides success by brute-force assignment of cards to slots using the *match matrix rows of lines*. It deliberately shares no code with classes, masks, Hall's condition, the success set, or the binomial table. It is a test oracle and the future engine for non-hypergeometric features (PRD §9); it is not reachable from the app in v1 (the CLI harness exposes it as `estimate`). Two implementation choices are deliberate. The deck is **reset to built order before every draw**: without the reset a Sattolo-style off-by-one in the shuffle is statistically invisible — the arrangement becomes a random walk on the symmetric group whose stationary distribution is uniform, so the estimate stays unbiased — whereas with it the same bug means the first $`H`$ cards are never drawn and the closed-form anchor fails at once. And `nextInt` uses rejection sampling, so draws are exactly uniform. Intervals are Wilson score intervals; it runs at about 2.4 M hands per second.
 
 ## 11. Optimizer
 
@@ -383,7 +383,7 @@ P(n) = \frac{1}{\binom{N}{H}} \sum_{h \in \mathcal{S}} \prod_{c} \binom{n_c}{h_c
 
 Raw decisions are the line counts $`n_i \in [\min_i, \max_i]`$ with the remainder $`r = N - \sum_i n_i`$ inside its own range. The score depends only on **class totals**, so the optimizer enumerates class-total vectors $`t = (t_c)`$ with $`t_c`$ in the class range and $`\sum_c t_c = N`$, by depth-first search over the non-blank classes with the blank class absorbing the difference (pruned when the remaining classes cannot reach or must overshoot $`N`$). Every raw ratio that maps to the same $`t`$ is an exact tie and is never scored separately.
 
-For the motivating example (taking card A to be a Level 4 monster and card B a Normal Spell, as in PRD §6.2): the 7 lines allow 4 · 4 · 1 · 2 · 4 · 8 · 4 = 4,096 raw ratios, but the criteria can only tell five classes apart — `card A`, `card B`, `level 4 monster`, {`monster`, `level 7 FIRE beast-warrior monster`} merged (both fill `1x monster` and nothing else), and blank (`spell`, `normal spell`, remainder). That is 4 · 4 · 2 · 4 = 128 scored vectors.
+For the motivating example (taking card A to be a Level 4 monster and card B a Normal Spell, as in PRD §6.2): the 7 lines allow 4 · 4 · 1 · 2 · 4 · 8 · 4 = 4,096 raw ratios, but the criteria can only tell five classes apart — `card A`, `card B`, `level 4 monster`, {`monster`, `level 8 FIRE beast-warrior monster`} merged (Level 8 because no Level 7 one exists, PRD §4.2) (both fill `1x monster` and nothing else), and blank (`spell`, `normal spell`, remainder). That is 4 · 4 · 2 · 4 = 128 scored vectors. With every line at its maximum the exact answer is $`46{,}185 / 658{,}008 \approx 7.02\%`$ — computed three independent ways (the M0f exit test's enumeration, a separate hand calculation, and the Monte Carlo harness at $`10^6`$ samples: 0.0701) and the scorer's first anchor on a real template.
 
 ### 11.2 Outputs, all from one pass
 
@@ -458,6 +458,7 @@ Plain JSON, `version`ed, written only by the main process (§12).
 - **The AST is authoritative; text is kept for editing.** On load, if re-parsing `text` no longer yields `desc` (the grammar evolved), the file still means what it meant, and the editor flags the line.
 - **`cardSnapshot`** records the fields of every named card as they were when the file was saved. Results depend on the card database *only* through named cards, so this is what makes "a template file reproduces the same numbers on another machine" (PRD §14) checkable: on load, a named card that is missing from the local database or whose fields differ produces a notice, and the user chooses local data or the snapshot.
 - Unknown `version` → refuse with a clear message; older versions migrate forward in `src/core/model/migrate.ts`.
+- `groups` and `remainder` may be omitted in a hand-written file and default to none and `{ min: 0, max: null }`; a line may be given as `text` alone (`"[Elemental HERO Stratos]"`), in which case it is parsed on load. A description matching no card is an **error** for a `text` line (a typo) but only a **warning** for a picker `card` line whose passcode the local database lacks (§6.2). Until M2g the harness reads the `text` path only.
 
 ## 15. Testing strategy
 
@@ -493,17 +494,19 @@ src/
     criteria/ ast.ts  lexer.ts  parser.ts  print.ts  expand.ts  subsumes.ts
     model/    template.ts  migrate.ts  problem.ts  compile.ts  analyze.ts
     prob/     binomial.ts  matcher.ts  success-set.ts  scorer.ts  montecarlo.ts
-    opt/      enumerate.ts  optimizer.ts  progress.ts
+    opt/      enumerate.ts  optimizer.ts
+    util/     normalize.ts  prng.ts  progress.ts   # progress lives here: prob/ and opt/ both report it
   main/
     index.ts                  # lifecycle, window, CSP, IPC registration (once)
-    edopro/   probe.ts  loader.ts          # fs walk -> bytes for core
+    edopro/   probe.ts  loader.ts          # fs walk -> bytes for core; no electron import, shared with the CLI
     services/ cards.ts  runs.ts  templates.ts
     store/    settings.ts
   worker/     optimizer.worker.ts          # imports core only
   preload/    index.ts                     # emitted as index.cjs
   renderer/   index.html  src/{app.tsx, store.ts, views/*, styles.css}
   shared/     ipc.ts  types.ts
-  cli/        index.ts                     # dev harness, not shipped
+  cli/        index.ts  run.ts  estimate.ts # dev harness, not shipped; exit 0 ok, 1 template/load error, 2 usage
+examples/     motivating.json
 tests/        # mirrors src/
 scripts/      check-licenses.mjs  third-party-notices.mjs
 ```
