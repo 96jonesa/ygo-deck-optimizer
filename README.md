@@ -19,13 +19,14 @@ combinatorial probability plus a card-database lookup layer.
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done (in review)**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | **Done (in review)**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | Not started |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract) |
 | M3 — polish | Not started |
 | M4 — release | Not started |
 
-Today the app opens an empty window that proves the main ↔ preload ↔ renderer
-bridge; what is computed so far is reachable only through the
-[command-line harness](#command-line-harness).
+Today the app finds your EDOPro install, loads its cards, and shows what it loaded, with one
+box that parses a description against them — a placeholder window that proves the main process
+end to end (see [Running the app](#running-the-app)). Scoring and optimizing are reachable only
+through the [command-line harness](#command-line-harness).
 
 ## Description language
 
@@ -240,6 +241,35 @@ npm run build       # electron-vite production build into out/
 npm run check:licenses
 ```
 
+### Running the app
+
+`npm run dev` (hot reload), or `npm run build` and then `npx electron .` for the built app.
+
+On first run the app looks for an EDOPro install where one conventionally lives —
+`~/ProjectIgnis`, `~/Applications/ProjectIgnis`, `/Applications/ProjectIgnis` on macOS;
+`C:\ProjectIgnis`, `C:\Games\ProjectIgnis` on Windows — and uses the first folder that holds a
+non-empty card database. If it finds none, **Choose EDOPro folder…** asks; a folder is checked
+before it is saved, and a missing `strings.conf` is reported (archetype names are then
+unavailable) without being refused. **Re-index** reads the folder again after an EDOPro update.
+
+Settings live in `settings.json` under Electron's user-data folder —
+`~/Library/Application Support/ygo-deck-optimizer/` on macOS, `%APPDATA%\ygo-deck-optimizer\` on
+Windows:
+
+```json
+{ "version": 1, "workdir": "/Users/me/Applications/ProjectIgnis", "includePrerelease": true, "plateauDelta": 0.005 }
+```
+
+Delete the file to run first-run detection again. `--user-data-dir=<dir>` points the app at a
+throwaway folder instead, and `YGO_DEBUG=1` prints one line to stderr per change of the card
+index's status:
+
+```sh
+YGO_DEBUG=1 npx electron . --user-data-dir=/tmp/ygo-scratch
+# [cards] loading workdir=/Users/me/Applications/ProjectIgnis
+# [cards] ready workdir=/Users/me/Applications/ProjectIgnis databases=20 skipped=0 cards=12132 replacedRows=821 conflicts=0 setnames=805
+```
+
 ### Real-data tests
 
 `tests/core/cards/realdata.test.ts` checks `src/core/cards` against real card
@@ -260,10 +290,13 @@ BABELCDB_PATH=~/repos/deps/babelcdb/cards.cdb EDOPRO_WORKDIR=~/Applications/Proj
 | Path | What lives there |
 | --- | --- |
 | `src/core/` | Everything that can be *wrong*: card data, descriptions, implication, probability, optimizer. Pure TypeScript — no Electron, no Node built-ins, no DOM |
-| `src/main/` | Electron main process: window, CSP, IPC handlers, filesystem. `src/main/edopro/loader.ts` walks an EDOPro install (no Electron import, so the CLI shares it) |
+| `src/main/` | Electron main process. Only `index.ts` imports Electron (a Biome `noRestrictedImports` rule keeps it so): it wires the window, the CSP and the dialogs into `app.ts` (startup: IPC registered **once**, first-run detection, the initial load, status pushes) and `ipc.ts` (the handlers), which take everything by injection and are tested without Electron |
+| `src/main/edopro/` | `loader.ts` walks an EDOPro install (no Electron import, so the CLI shares it); `probe.ts` says whether a folder is one, and where to look for one |
+| `src/main/services/` | `cards.ts` owns the card index, the archetype names and the analysis memo behind an `idle → loading → ready / error` state machine whose every change is pushed; `templates.ts` parses descriptions and analyzes templates over it; `typeline.ts` writes `Level 4 · WIND · Warrior · Effect Monster` |
+| `src/main/store/` | `settings.ts`: versioned `settings.json`, loaded tolerantly, written write-then-rename |
 | `src/preload/` | The typed `window.api` bridge (emitted as CommonJS — see `electron.vite.config.ts`) |
-| `src/renderer/` | React UI; sandboxed, talks only through `window.api` |
-| `src/shared/` | IPC channel names and payload types |
+| `src/renderer/` | React UI; sandboxed, talks only through `window.api`. Logic worth testing lives in pure functions under `src/renderer/src/model/` |
+| `src/shared/` | The IPC contract: channel names and `RendererApi` (`ipc.ts`), payload types (`types.ts`) |
 | `src/cli/` | Development harness (`npm run cli`), not shipped |
 | `examples/` | Example templates; `motivating.json` is the PRD's motivating example |
 | `tests/` | Mirrors `src/` |

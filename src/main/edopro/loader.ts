@@ -6,6 +6,9 @@ import { SetnameTable } from '../../core/cards/setnames';
 // The filesystem walk over an EDOPro install (TDD §4.4-4.5, §16). Node only —
 // no Electron — so the CLI harness and the tests use it as the app does.
 
+/** Where `collectCardSources` looks, for the message that says it found nothing. */
+export const CARD_DATABASE_LOCATIONS = 'cards.cdb, expansions/*.cdb or repositories/*/*.cdb';
+
 /** One `.cdb` file of an install, in load order. */
 export interface CardSourceFile {
   /** Absolute. */

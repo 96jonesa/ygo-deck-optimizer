@@ -61,7 +61,7 @@ flowchart TB
 ```
 
 - **Renderer**: UI only — `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, `setWindowOpenHandler` denying everything. It never touches the filesystem and never parses, compiles, or scores: every edit is sent to main and the returned `Analysis` (§9) is rendered.
-- **Main** owns all Node capabilities. The **card service** holds the `CardIndex` and the setname table; parse, analyze and compile run here, synchronously — they are microseconds-to-milliseconds (no enumeration), so they do not need a worker.
+- **Main** owns all Node capabilities, but `electron` itself is imported in exactly two files — `src/main/index.ts` and `src/preload/index.ts` — enforced by a Biome `noRestrictedImports` override. The wiring lives in an Electron-free `MainApp` (`src/main/app.ts`) that takes `ipcMain`, the user-data directory, the candidate install paths, the loader, and `createWindow` / `broadcast` / `pickDirectory` by injection, which is what makes "handlers are registered once" a *tested* property (a fake `ipcMain` that throws on a duplicate `handle`) rather than a convention. The **card service** holds the `CardIndex` and the setname table; parse, analyze and compile run here, synchronously — they are microseconds-to-milliseconds (no enumeration), so they do not need a worker.
 - **Optimizer worker**: a Node `worker_threads` worker, created per run through electron-vite's `?nodeWorker` import. It receives a compiled `Problem` (§8) — plain numbers, no card data, no sql.js — runs §10–11, posts progress, and posts the result. Cancel is `worker.terminate()` for an abandoned run; for a *graceful* stop that keeps partial results, `optimize` is synchronous and cannot receive a message mid-run, so `shouldCancel` reads an `Atomics` flag on a `SharedArrayBuffer` that main sets — polled at the progress cadence. The worker calibrates the scorer once at startup and passes `cost` to every run; a `needs-confirmation` result goes to the renderer, which re-runs with `force` once the user agrees. One run at a time; a new run cancels the previous one.
 
 **Why `worker_threads` and not the alternatives.** A renderer Web Worker needs `worker-src`/`blob:` CSP exceptions that only fail in packaged builds, and would put engine code in the renderer; `utilityProcess` buys crash isolation that a pure-arithmetic job does not need. The worker bundle imports only `core/`, so it has no unbundled-dependency problem.
@@ -430,7 +430,9 @@ Defined once in `src/shared/ipc.ts` as a channel-name constant plus a `RendererA
 | `template:open` / `template:save` | invoke | dialogs and file I/O in main; `→ Template \| null` / `Template → path \| null` |
 | `results:export` | invoke | `{ runId, format: 'csv' \| 'json' } → path \| null` |
 
-`template:analyze` is called on every edit (debounced ~150 ms in the renderer). Responses carry the request's sequence number and the renderer drops stale ones.
+`template:analyze` is called on every edit (debounced ~150 ms in the renderer). Sequencing is the IPC layer's job, not the services': requests and responses travel as `Sequenced<T> = { seq, payload }`, the services stay pure functions of their input, and the renderer keeps one `LatestOnly` per request kind and drops stale responses.
+
+Result shapes distinguish *why* there is no answer: `desc:parse` fails with `reason: 'parse' | 'not-ready' | 'invalid'`; `template:analyze` returns `{ ok: true, analysis } | NotReady | InvalidRequest`, where the outer `ok` means "an Analysis was produced" and `analysis.ok` means "this template can be run". `settings:set` takes a **patch** and returns the resulting `Settings`; it persists first, then triggers a card reload only if `workdir` or `includePrerelease` changed, without awaiting it — status arrives by push.
 
 ## 13. Settings
 
@@ -439,6 +441,8 @@ Defined once in `src/shared/ipc.ts` as a channel-name constant plus a `RendererA
 ```json
 { "version": 1, "workdir": "/Users/me/Applications/ProjectIgnis", "includePrerelease": true, "plateauDelta": 0.005 }
 ```
+
+A settings file that is corrupt or of an unknown version loads as defaults and never throws. The card service drops its index at the *start* of a load (so `loading` really is not-ready), joins an in-flight load for the same target, discards a stale load — success or failure — that finishes after a newer one, retries from `error`, and treats a stored install folder that has gone missing as an `error` rather than silently re-detecting. Measured on the real install: load and index 112 ms cold, 68 ms on re-index; a description parse with its match count 0.5–1.2 ms; a picker search 0.025 ms.
 
 There is no run history in v1: a run's inputs are the template file, and its outputs are exportable. Auto-detection tries `C:\ProjectIgnis`, `C:\Games\ProjectIgnis` on Windows and `~/ProjectIgnis`, `~/Applications/ProjectIgnis`, `/Applications/ProjectIgnis` on macOS before asking. The probe validates exactly what this tool needs — at least one non-empty `.cdb` — and *reports* (without failing on) a missing `strings.conf`; the sibling's script-root and executable checks are dropped.
 
@@ -460,7 +464,7 @@ Plain JSON, `version`ed, written only by the main process (§12).
   ],
   "remainder": { "min": 0, "max": null },
   "criteria": [{ "id": "c1", "name": "full combo", "text": "1x [..] and 1x [..]", "expr": { "op": "and", "args": [] } }],
-  "cardSnapshot": { "14558127": { "type": 4129, "attribute": 4, "race": 256, "level": 3, "atk": 0, "def": 1800, "setcodes": [] } }
+  "cardSnapshot": { "14558127": { "type": 4129, "attribute": 4, "race": 16, "level": 3, "atk": 0, "def": 1800, "setcodes": [] } }
 }
 ```
 
@@ -506,9 +510,11 @@ src/
     opt/      enumerate.ts  heap.ts  plateau.ts  calibrate.ts  optimizer.ts
     util/     normalize.ts  prng.ts  progress.ts   # progress lives here: prob/ and opt/ both report it
   main/
-    index.ts                  # lifecycle, window, CSP, IPC registration (once)
+    index.ts                  # the only main-side file that imports electron: a thin adapter
+    app.ts                    # MainApp: Electron-free wiring, IPC registration (once)
+    ipc.ts                    # registerIpc: thin handlers over the services
     edopro/   probe.ts  loader.ts          # fs walk -> bytes for core; no electron import, shared with the CLI
-    services/ cards.ts  runs.ts  templates.ts
+    services/ cards.ts  templates.ts  typeline.ts  runs.ts
     store/    settings.ts
   worker/     optimizer.worker.ts          # imports core only
   preload/    index.ts                     # emitted as index.cjs

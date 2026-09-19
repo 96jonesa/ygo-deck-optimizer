@@ -4,7 +4,12 @@ import initSqlJs from 'sql.js';
 import type { CardIndex } from '../core/cards/index';
 import type { SetnameTable } from '../core/cards/setnames';
 import { HAND_SIZES, type Template, validateTemplate } from '../core/model/template';
-import { collectStringsConf, loadCardIndex, loadSetnames } from '../main/edopro/loader';
+import {
+  CARD_DATABASE_LOCATIONS,
+  collectStringsConf,
+  loadCardIndex,
+  loadSetnames,
+} from '../main/edopro/loader';
 import { int, table } from './report';
 
 /** Where a command reads its environment and writes its output; `process` satisfies it. */
@@ -124,9 +129,7 @@ export async function loadInstall(workdir: string): Promise<Loaded<Install>> {
   if (status.databases === 0)
     return {
       ok: false,
-      errors: [
-        `no card database under ${workdir}: expected cards.cdb, expansions/*.cdb or repositories/*/*.cdb`,
-      ],
+      errors: [`no card database under ${workdir}: expected ${CARD_DATABASE_LOCATIONS}`],
     };
   const setnames = loadSetnames(workdir);
   const stringsFiles = collectStringsConf(workdir).length;

@@ -1,22 +1,21 @@
 import path from 'node:path';
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
-import type { AppInfo } from '../shared/ipc';
-import { IpcChannels } from '../shared/ipc';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type OpenDialogOptions,
+  session,
+  shell,
+} from 'electron';
+import initSqlJs from 'sql.js';
+import { MainApp } from './app';
 import { contentSecurityPolicy } from './csp';
+import { candidateWorkdirs } from './edopro/probe';
+import { installLoader } from './services/cards';
 
-/** Registered once at startup, never per window: a second window must not re-register handlers. */
-function registerIpc(): void {
-  ipcMain.handle(
-    IpcChannels.appInfo,
-    (): AppInfo => ({
-      version: app.getVersion(),
-      electron: process.versions.electron ?? '',
-      node: process.versions.node,
-      chrome: process.versions.chrome ?? '',
-      packaged: app.isPackaged,
-    }),
-  );
-}
+// The Electron adapter: everything else in src/main takes what it needs by
+// injection (TDD §3) and is tested without Electron; this file only wires.
 
 function applyContentSecurityPolicy(): void {
   const policy = contentSecurityPolicy(app.isPackaged);
@@ -52,12 +51,50 @@ function createWindow(): void {
   }
 }
 
+function broadcast(channel: string, payload: unknown): void {
+  for (const window of BrowserWindow.getAllWindows())
+    if (!window.isDestroyed() && !window.webContents.isDestroyed())
+      window.webContents.send(channel, payload);
+}
+
+async function pickDirectory(): Promise<string | null> {
+  const options: OpenDialogOptions = {
+    title: 'Choose your EDOPro folder',
+    properties: ['openDirectory'],
+  };
+  const parent = BrowserWindow.getFocusedWindow();
+  const result = await (parent === null
+    ? dialog.showOpenDialog(options)
+    : dialog.showOpenDialog(parent, options));
+  return result.canceled ? null : (result.filePaths[0] ?? null);
+}
+
+const main = new MainApp({
+  ipcMain,
+  userDataDir: app.getPath('userData'),
+  candidates: candidateWorkdirs(process.platform, app.getPath('home')),
+  appInfo: () => ({
+    version: app.getVersion(),
+    electron: process.versions.electron ?? '',
+    node: process.versions.node,
+    chrome: process.versions.chrome ?? '',
+    packaged: app.isPackaged,
+  }),
+  // sql.js stays unbundled in main (TDD §2), so a bare `initSqlJs()` finds its wasm.
+  loadCards: installLoader(() => initSqlJs()),
+  createWindow,
+  broadcast,
+  pickDirectory,
+  // `YGO_DEBUG=1`: one stderr line per change of the card status.
+  log: process.env.YGO_DEBUG ? (line) => process.stderr.write(`${line}\n`) : undefined,
+});
+
 void app.whenReady().then(() => {
   applyContentSecurityPolicy();
-  registerIpc();
-  createWindow();
+  // IPC handlers are registered in here — once — never per window.
+  void main.start();
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) main.openWindow();
   });
 });
 
