@@ -1,0 +1,56 @@
+# Builds a double-clickable app and attaches it to a release on this (private)
+# repo — which is all the distribution F2 asks for: Andy is authenticated, so
+# he can download his own release assets. Nothing here signs or notarizes.
+#
+# Push a tag to publish:      git tag v0.1.0 && git push origin v0.1.0
+# Or run it by hand for a dry run: the DMG lands as a workflow artifact instead.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          tag="${tag%%-*}"          # a -preview suffix on the tag is fine
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag v$tag does not match package.json version $pkg" >&2
+            exit 1
+          fi
+
+      - run: npm run package:mac
+
+      - name: Upload the DMG as a workflow artifact (dry run)
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmg-dry-run
+          path: dist/*.dmg
+          if-no-files-found: error
+
+      - name: Attach the DMG to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.dmg \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Unsigned local build. A downloaded DMG needs a right-click → Open the first time (see docs/INSTALL.md)." \
+            || gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber
