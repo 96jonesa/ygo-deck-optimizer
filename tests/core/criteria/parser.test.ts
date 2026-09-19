@@ -1,0 +1,464 @@
+import { describe, expect, it } from 'vitest';
+import type { Expr } from '../../../src/core/criteria/ast';
+import { parseCriterion } from '../../../src/core/criteria/parser';
+import { printCriterion } from '../../../src/core/criteria/print';
+import type { Description } from '../../../src/core/desc/ast';
+import { parse } from '../../../src/core/desc/parser';
+import { cardRecord, contextOf, FakeCards } from '../../helpers/desc-context';
+import { genExpr } from '../../helpers/gen-criteria';
+import { seededRng } from '../../helpers/prng';
+
+// Real names hold everything the criterion grammar gives meaning to.
+const ctx = contextOf(
+  new FakeCards([
+    cardRecord({ code: 1, name: 'C' }),
+    cardRecord({ code: 2, name: 'D' }),
+    cardRecord({ code: 3, name: 'E' }),
+    cardRecord({ code: 4, name: 'Nibiru, the Primal Being' }),
+    cardRecord({ code: 5, name: 'Live and Let Die or 2x No More (at most)' }),
+  ]),
+);
+
+const [C, D, E] = [card(1), card(2), card(3)] as [Description, Description, Description];
+
+function card(...passcodes: number[]): Description {
+  return { anyOf: passcodes.map((passcode) => ({ t: 'card', passcode })) };
+}
+
+/** A description, read by the description parser on its own. */
+function d(text: string): Description {
+  const result = parse(text, ctx);
+  if (!result.ok) throw new Error(`${text}: ${result.message}`);
+  return result.desc;
+}
+
+function req(n: number, desc: Description): Expr {
+  return { op: 'req', n, desc };
+}
+
+function atMost(n: number, desc: Description): Expr {
+  return { op: 'atMost', n, desc };
+}
+
+function and(...args: Expr[]): Expr {
+  return { op: 'and', args };
+}
+
+function or(...args: Expr[]): Expr {
+  return { op: 'or', args };
+}
+
+function expectExpr(text: string, expr: Expr) {
+  expect(parseCriterion(text, ctx), text).toEqual({ ok: true, expr });
+}
+
+/** The message of the error `text` must produce, and the piece of `text` its span covers. */
+function errorOf(text: string): { message: string; at: string; start: number } {
+  const result = parseCriterion(text, ctx);
+  if (result.ok) throw new Error(`${text}: expected an error, got ${JSON.stringify(result.expr)}`);
+  const { start, end } = result.span;
+  return { message: result.message, at: text.slice(start, end), start };
+}
+
+describe('parseCriterion', () => {
+  describe('requirements', () => {
+    it('reads a count and a description', () => {
+      expectExpr('1x monster', req(1, d('monster')));
+      expectExpr('3x level 4 or lower FIRE monster', req(3, d('level 4 or lower FIRE monster')));
+      expectExpr('60x card', req(60, d('card')));
+    });
+
+    it('accepts ×, a capital X and a space before either', () => {
+      for (const count of ['2x', '2X', '2×', '2 x', '2 ×', '02x'])
+        expectExpr(`${count} spell`, req(2, d('spell')));
+      expectExpr('2×spell', req(2, d('spell')));
+      expectExpr('2x[C]', req(2, C));
+    });
+
+    it('hands the description parser everything up to the next and', () => {
+      expectExpr(
+        '1x FIRE/WATER non-tuner "Sky Striker" monster and 1x [C]',
+        and(req(1, d('FIRE/WATER non-tuner "Sky Striker" monster')), req(1, C)),
+      );
+    });
+
+    it('leaves names alone, whatever words they hold', () => {
+      expectExpr('1x [Nibiru, the Primal Being], 1x [C]', and(req(1, card(4)), req(1, C)));
+      expectExpr(
+        '1x [Live and Let Die or 2x No More (at most)] or 2x [D]',
+        or(req(1, card(5)), req(2, D)),
+      );
+    });
+  });
+
+  describe('limits', () => {
+    it('reads at most with a count, zero included', () => {
+      expectExpr('at most 1x trap', atMost(1, d('trap')));
+      expectExpr('AT   Most 2× trap', atMost(2, d('trap')));
+      expectExpr('at most 0x trap', atMost(0, d('trap')));
+      expectExpr('at most 60x trap', atMost(60, d('trap')));
+    });
+
+    it('reads no as at most 0x', () => {
+      expectExpr('no trap', atMost(0, d('trap')));
+      expectExpr('No non-tuner', atMost(0, d('non-tuner')));
+      expectExpr('1x monster and no [C]', and(req(1, d('monster')), atMost(0, C)));
+    });
+
+    it('does not mistake non- or normal for no', () => {
+      expectExpr('1x non-tuner monster', req(1, d('non-tuner monster')));
+      expectExpr('no normal monster', atMost(0, d('normal monster')));
+    });
+  });
+
+  describe('and, the comma, or and parentheses', () => {
+    it('reads and and the comma alike', () => {
+      const expr = and(req(1, C), req(1, D), req(1, E));
+      expectExpr('1x [C] and 1x [D] and 1x [E]', expr);
+      expectExpr('1x [C], 1x [D], 1x [E]', expr);
+      expectExpr('1x [C], 1x [D] AND 1x [E]', expr);
+      expectExpr('1x [C],1x [D]and 1x [E]', expr);
+    });
+
+    it('binds and tighter than or', () => {
+      expectExpr('1x [C] or 1x [D] and 1x [E]', or(req(1, C), and(req(1, D), req(1, E))));
+      expectExpr('1x [C] and 1x [D] or 1x [E]', or(and(req(1, C), req(1, D)), req(1, E)));
+      expectExpr(
+        '1x [C], 1x [D] or 1x [E], no [C]',
+        or(and(req(1, C), req(1, D)), and(req(1, E), atMost(0, C))),
+      );
+    });
+
+    it('groups with parentheses', () => {
+      expectExpr('(1x [C] or 1x [D]) and 1x [E]', and(or(req(1, C), req(1, D)), req(1, E)));
+      expectExpr('1x [C] and (1x [D] or 2x [E])', and(req(1, C), or(req(1, D), req(2, E))));
+      expectExpr(
+        '1x [C] and (1x [D] or (2x [E] and (no [C] or no [D])))',
+        and(req(1, C), or(req(1, D), and(req(2, E), or(atMost(0, C), atMost(0, D))))),
+      );
+    });
+
+    it('returns the canonical form: redundant parentheses leave no trace', () => {
+      expectExpr('((1x [C]))', req(1, C));
+      expectExpr('(1x [C] and 1x [D]) and 1x [E]', and(req(1, C), req(1, D), req(1, E)));
+      expectExpr('1x [C] or (1x [D] or (1x [E]))', or(req(1, C), req(1, D), req(1, E)));
+      expectExpr('1x level 4/2/4 monster', req(1, d('level 2/4 monster')));
+    });
+
+    it('keeps repeats: two requirements are two cards', () => {
+      expectExpr('1x [C] and 1x [C]', and(req(1, C), req(1, C)));
+      expectExpr('1x [C] or 1x [C]', or(req(1, C), req(1, C)));
+    });
+  });
+
+  describe('the two ors', () => {
+    it('continues the description when no term follows', () => {
+      expectExpr('1x [C] or [E]', req(1, card(1, 3)));
+      expectExpr('1x [C] or [E] or [D]', req(1, card(1, 3, 2)));
+      expectExpr('1x level 4 monster or spell', req(1, d('level 4 monster or spell')));
+      expectExpr('no [C] or [E]', atMost(0, card(1, 3)));
+      expectExpr('at most 1x [C] or [E]', atMost(1, card(1, 3)));
+    });
+
+    it('chooses between terms when a count, at most or no follows', () => {
+      expectExpr('1x [C] or 2x [D]', or(req(1, C), req(2, D)));
+      expectExpr('1x [C] or 2×[D]', or(req(1, C), req(2, D)));
+      expectExpr('1x [C] or no [D]', or(req(1, C), atMost(0, D)));
+      expectExpr('1x [C] or at most 1x [D]', or(req(1, C), atMost(1, D)));
+      expectExpr('no [C] or no [D]', or(atMost(0, C), atMost(0, D)));
+    });
+
+    it('takes a description in parentheses after a count', () => {
+      expectExpr('1x ([C] or [E])', req(1, card(1, 3)));
+      expectExpr('1x (([C]) or ([E] or [D]))', req(1, card(1, 3, 2)));
+      expectExpr('no ([C] or [E])', atMost(0, card(1, 3)));
+      expectExpr('at most 2x ([C] or [E])', atMost(2, card(1, 3)));
+    });
+
+    it('looks through parentheses after or', () => {
+      expectExpr('1x [C] or ([E] or [D])', req(1, card(1, 3, 2)));
+      expectExpr('1x [C] or (([E]))', req(1, card(1, 3)));
+      expectExpr('1x [C] or (2x [D] and 1x [E])', or(req(1, C), and(req(2, D), req(1, E))));
+      expectExpr('1x [C] or ((2x [D]))', or(req(1, C), req(2, D)));
+      expectExpr('1x [C] or ((no [D]) and 1x [E])', or(req(1, C), and(atMost(0, D), req(1, E))));
+    });
+
+    it('looks through parentheses at the start of a term', () => {
+      expectExpr('(1x [C] or [E])', req(1, card(1, 3)));
+      expectExpr('((1x [C] or [E]) or 2x [D])', or(req(1, card(1, 3)), req(2, D)));
+      expectExpr('((no [C]))', atMost(0, C));
+    });
+
+    it('mixes them', () => {
+      expectExpr('1x [C] or [E] or 2x [D]', or(req(1, card(1, 3)), req(2, D)));
+      expectExpr('1x [C] or 2x [D] or [E]', or(req(1, C), req(2, card(2, 3))));
+      expectExpr('1x ([C] or [E]) or 2x ([D] or [E])', or(req(1, card(1, 3)), req(2, card(2, 3))));
+      expectExpr('1x ([C] or [E]) or ([D] or [E])', req(1, card(1, 3, 2)));
+      expectExpr('1x [C] or [E] and 1x [D]', and(req(1, card(1, 3)), req(1, D)));
+      expectExpr(
+        '(1x [C] or [E]) and (1x [D] or 1x [E])',
+        and(req(1, card(1, 3)), or(req(1, D), req(1, E))),
+      );
+    });
+
+    it('is not confused by or lower', () => {
+      expectExpr(
+        '1x level 4 or lower monster or 2x ATK 1500 or more monster or spell',
+        or(req(1, d('level 4 or lower monster')), req(2, d('ATK 1500 or more monster or spell'))),
+      );
+    });
+  });
+
+  describe('counts and hex codes', () => {
+    it('reads 0x2066 as one hex code, not as the count 0x', () => {
+      const warriors = d('"Warrior":0x2066 monster');
+      expectExpr('1x "Warrior":0x2066 monster', req(1, warriors));
+      expectExpr('1x"Warrior":0x2066 monster', req(1, warriors));
+      expectExpr('at most 0x "Warrior":0x2066 monster', atMost(0, warriors));
+      expectExpr('at most 0x"Warrior":0X2066 monster', atMost(0, warriors));
+      expectExpr(
+        '1x "Warrior":0x2066 monster or 2x "Warrior":0x66 monster',
+        or(req(1, warriors), req(2, d('"Warrior":0x66 monster'))),
+      );
+    });
+
+    it('explains a count that ran into the next word', () => {
+      expect(errorOf('at most 0xdark monster')).toMatchObject({
+        message: expect.stringContaining('space'),
+        at: '0xda',
+      });
+      expect(errorOf('0x2066 monster')).toMatchObject({ at: '0x2066' });
+    });
+
+    it('leaves a truncated hex code to the description parser', () => {
+      expect(errorOf('1x "Warrior":0x monster')).toMatchObject({
+        message: expect.stringContaining('hex setcode'),
+        start: 13,
+      });
+    });
+  });
+
+  describe('errors', () => {
+    it('asks for a term when there is nothing', () => {
+      for (const text of ['', '   '])
+        expect(errorOf(text)).toMatchObject({
+          message: expect.stringContaining('expected a requirement'),
+          at: '',
+          start: text.length,
+        });
+    });
+
+    it('asks for the count a description lacks', () => {
+      expect(errorOf('monster')).toMatchObject({
+        message: expect.stringContaining('count'),
+        at: 'monster',
+      });
+      expect(errorOf('1x [C] and level 4 monster')).toMatchObject({ at: 'level' });
+      expect(errorOf('([C] or [E])')).toMatchObject({
+        message: expect.stringContaining('count'),
+        at: '[C]',
+      });
+      expect(errorOf('2 monsters').message).toContain('2x');
+    });
+
+    it('refuses a requirement of no cards, pointing at no', () => {
+      expect(errorOf('1x [C] and 0x monster')).toMatchObject({
+        message: expect.stringMatching(/at least 1.*`no/),
+        at: '0x',
+      });
+    });
+
+    it('refuses a count above 60, however long', () => {
+      for (const count of ['61x', '99999999999999999999999x', `${'9'.repeat(400)}x`]) {
+        expect(errorOf(`${count} monster`)).toMatchObject({
+          message: expect.stringContaining('60'),
+          at: count,
+        });
+        expect(errorOf(`at most ${count} monster`)).toMatchObject({ at: count });
+      }
+    });
+
+    it('asks for the count at most lacks', () => {
+      expect(errorOf('at most monster')).toMatchObject({
+        message: expect.stringContaining('at most 1x'),
+        at: 'monster',
+      });
+      expect(errorOf('at most')).toMatchObject({ at: '', start: 7 });
+      expect(errorOf('at most 2 monster')).toMatchObject({ at: '2' });
+    });
+
+    it('reports a dangling and, comma or or', () => {
+      expect(errorOf('1x [C] and')).toMatchObject({
+        message: expect.stringContaining('after `and`'),
+        start: 10,
+      });
+      expect(errorOf('1x [C],')).toMatchObject({ message: expect.stringContaining('after `,`') });
+      expect(errorOf('1x [C] and and 1x [D]')).toMatchObject({ at: 'and', start: 11 });
+      expect(errorOf('and 1x [C]')).toMatchObject({ at: 'and', start: 0 });
+      expect(errorOf(', 1x [C]')).toMatchObject({ at: ',' });
+      expect(errorOf('or 1x [C]')).toMatchObject({ at: 'or', start: 0 });
+      expect(errorOf('1x [C] and or 1x [D]')).toMatchObject({ at: 'or' });
+      expect(errorOf('(1x [C] and) or 1x [D]')).toMatchObject({ at: ')' });
+      // After `or` a description may follow, so it is the description parser that speaks.
+      expect(errorOf('1x [C] or')).toMatchObject({
+        message: expect.stringContaining('after `or`'),
+        start: 9,
+      });
+      expect(errorOf('1x [C] or or 2x [D]')).toMatchObject({ at: 'or', start: 10 });
+      expect(errorOf('1x [C] or and 1x [D]')).toMatchObject({ at: 'and' });
+      expect(errorOf('(1x [C] or 1x [D]) or')).toMatchObject({
+        message: expect.stringContaining('after `or`'),
+        at: '',
+      });
+    });
+
+    it('reports unbalanced parentheses', () => {
+      expect(errorOf('(1x [C] and 1x [D]')).toMatchObject({
+        message: expect.stringContaining('never closed'),
+        at: '(',
+        start: 0,
+      });
+      expect(errorOf('((1x [C])')).toMatchObject({ at: '(', start: 0 });
+      expect(errorOf('1x [C])')).toMatchObject({
+        message: expect.stringContaining('no matching'),
+        at: ')',
+      });
+      expect(errorOf('(1x [C])) and 1x [D]')).toMatchObject({ at: ')', start: 8 });
+      expect(errorOf('1x ([C] or [E]')).toMatchObject({
+        message: expect.stringContaining('never closed'),
+        at: '(',
+        start: 3,
+      });
+    });
+
+    it('reports an empty group', () => {
+      expect(errorOf('()')).toMatchObject({
+        message: expect.stringContaining('nothing between'),
+        at: '()',
+      });
+      expect(errorOf('1x [C] and ( ( ) )')).toMatchObject({ at: '( ( )' });
+      expect(errorOf('1x [C] and (')).toMatchObject({ at: '', start: 12 });
+      expect(errorOf('1x ()')).toMatchObject({
+        message: expect.stringContaining('expected a description'),
+        at: ')',
+      });
+    });
+
+    it('asks for and or or between two terms', () => {
+      expect(errorOf('1x [C] 2x [D]')).toMatchObject({
+        message: expect.stringMatching(/`and`.*`or`/),
+        at: '2x',
+      });
+      expect(errorOf('1x monster no spell')).toMatchObject({ at: 'no' });
+      expect(errorOf('1x monster at most 1x spell')).toMatchObject({ at: 'at most' });
+      expect(errorOf('(1x [C]) 2x [D]')).toMatchObject({ at: '2x' });
+      expect(errorOf('(1x [C]) [D]')).toMatchObject({
+        message: expect.stringMatching(/`and`.*`or`/),
+        at: '[D]',
+      });
+      expect(errorOf('(1x [C]) (1x [D])')).toMatchObject({ at: '(', start: 9 });
+    });
+
+    it('keeps criterion words out of a description’s parentheses', () => {
+      expect(errorOf('1x ([C] and [E])')).toMatchObject({
+        message: expect.stringContaining('inside'),
+        at: 'and',
+      });
+      expect(errorOf('1x ([C], [E])')).toMatchObject({ at: ',' });
+      expect(errorOf('1x ([C] or 2x [D])')).toMatchObject({
+        message: expect.stringContaining('inside'),
+        at: '2x',
+      });
+      expect(errorOf('1x ([C] or no [D])')).toMatchObject({ at: 'no' });
+    });
+
+    it('caps the nesting', () => {
+      const deep = (n: number) => `${'('.repeat(n)}1x [C]${')'.repeat(n)}`;
+      expectExpr(deep(32), req(1, C));
+      expect(errorOf(deep(33))).toMatchObject({
+        message: expect.stringContaining('nested'),
+        at: '(',
+        start: 32,
+      });
+      expect(parseCriterion(deep(20000), ctx).ok).toBe(false);
+      expect(parseCriterion(`1x ${'('.repeat(20000)}`, ctx).ok).toBe(false);
+    });
+
+    describe('from the description, with spans into the whole text', () => {
+      it('passes on a parse error', () => {
+        const text = '1x monster and 2x levle 4 monster';
+        expect(errorOf(text)).toMatchObject({
+          message: expect.stringContaining('unknown word "levle"'),
+          at: 'levle',
+          start: 18,
+        });
+        expect(errorOf('no [C] or 1x [Nobody]')).toMatchObject({
+          message: expect.stringContaining('no card is named'),
+          at: '[Nobody]',
+        });
+        expect(errorOf('1x [C], 1x level 4 level 5 monster')).toMatchObject({ at: 'level 5' });
+        expect(errorOf('1x [C] monster or 2x [D]')).toMatchObject({ at: '[C]' });
+      });
+
+      it('points a missing description at what stands in its place', () => {
+        expect(errorOf('1x and 1x [C]')).toMatchObject({
+          message: expect.stringContaining('expected a description'),
+          at: 'and',
+        });
+        expect(errorOf('1x [C] and 2x')).toMatchObject({ at: '', start: 13 });
+        expect(errorOf('1x 2x [C]')).toMatchObject({ at: '2x' });
+        expect(errorOf('(no) and 1x [C]')).toMatchObject({ at: ')' });
+      });
+
+      it('passes on a lex error', () => {
+        expect(errorOf('1x monster and 1x [Unclosed')).toMatchObject({
+          message: expect.stringContaining('never closed'),
+          at: '[Unclosed',
+        });
+        expect(errorOf('1x monster & 1x spell')).toMatchObject({
+          message: expect.stringContaining('unexpected character &'),
+          at: '&',
+        });
+      });
+    });
+
+    it('never throws, and keeps every span inside the text', () => {
+      const rng = seededRng(0xc417e410);
+      const pieces = [
+        ...['1x', '2×', '0x', '61x', 'at most', 'no', 'and', ',', 'or', '(', ')', '[C]', '[D]'],
+        ...['[Nobody]', 'monster', 'spell', 'level 4', 'or lower', 'FIRE', 'non-', '0x66', '7'],
+        ...['"Warrior":0x2066', '#1', '#9', '{Starters}', 'ATK ?', '/', '-', ':', 'x', '×', 'at'],
+        ...['most', 'levle', '&', '['],
+      ];
+      const descriptions = ['[C]', '[D] or [E]', 'level 4 or lower monster', 'spell/trap'].map(d);
+      const options = {
+        desc: () => rng.pick(descriptions),
+        maxDepth: 3,
+        maxArgs: 3,
+        limitChance: 0.3,
+      };
+      let ok = 0;
+      let failed = 0;
+      for (let i = 0; i < 4000; i++) {
+        // A criterion that parses, with up to three words dropped, doubled or replaced.
+        const words = printCriterion(genExpr(rng, options), ctx).split(' ');
+        for (let edits = rng.int(0, 3); edits > 0; edits--) {
+          const at = rng.int(0, words.length - 1);
+          words.splice(at, rng.int(0, 1), ...rng.subset(pieces, 0, 2));
+        }
+        const text = words.join(rng.chance(0.9) ? ' ' : '');
+        const result = parseCriterion(text, ctx);
+        if (result.ok) ok++;
+        else {
+          failed++;
+          expect(result.message, text).not.toBe('');
+          expect(result.span.start, text).toBeGreaterThanOrEqual(0);
+          expect(result.span.end, text).toBeGreaterThanOrEqual(result.span.start);
+          expect(result.span.end, text).toBeLessThanOrEqual(text.length);
+        }
+      }
+      expect(ok).toBeGreaterThan(1000);
+      expect(failed).toBeGreaterThan(1000);
+    });
+  });
+});

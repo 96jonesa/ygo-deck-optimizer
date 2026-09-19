@@ -282,12 +282,13 @@ requirement := COUNT description                 -- COUNT := INT "x"
 limit       := "at most" COUNT description | "no" description
 ```
 
-The two `or`s (PRD §5.3) are separated with one token of lookahead: after `or`, a `COUNT`, `at most`, `no`, or `(`-followed-by-one-of-those starts a new *term* (criterion-level); anything else continues the *description*. So `1x [C] or 2x [D]` is a criterion-level choice, `1x [C] or [E]` is one slot either card can fill, and `1x ([C] or [E])` says the latter explicitly. In the app the criterion structure is built from rows and groups, not typed; the text form is the canonical serialization used by the CLI harness, tests, and copy/paste.
+The two `or`s (PRD §5.3) are separated with one token of lookahead: after `or`, a `COUNT`, `at most`, `no`, or `(`-followed-by-one-of-those starts a new *term* (criterion-level); anything else continues the *description*. So `1x [C] or 2x [D]` is a criterion-level choice, `1x [C] or [E]` is one slot either card can fill, and `1x ([C] or [E])` says the latter explicitly. Two consequences worth stating: a description-level `or` binds tighter than `and` (`1x [C] or [E] and 1x [D]` is two terms), and the printer always parenthesizes a description-level `or` (`1x (#1 or #2)`) — for the reader, since the lookahead re-parses the bare form identically. `COUNT` is digits then `x` only where the `x` *ends a word*, or `×` anywhere, so `"Warrior":0x2066` keeps its hex code; a hex token where a count belongs gets a message saying so. In the app the criterion structure is built from rows and groups, not typed; the text form is the canonical serialization used by the CLI harness, tests, and copy/paste.
 
 ```ts
 // src/core/criteria/ast.ts
 export type Expr =
-  | { op: 'and' | 'or'; args: Expr[] }
+  | { op: 'and'; args: Expr[] }
+  | { op: 'or'; args: Expr[] }        // two members, not 'and' | 'or': the merged form defeats narrowing
   | { op: 'req'; n: number; desc: Description }
   | { op: 'atMost'; n: number; desc: Description };   // "no X" = atMost 0
 
@@ -296,9 +297,9 @@ export interface FlatCriterion { reqs: { n: number; desc: Description }[]; limit
 
 ### 7.2 Expansion
 
-`expand(expr): FlatCriterion[]` distributes `and` over `or` (PRD §5.3). The template's list of criteria is an `or` at the root, so the engine receives one list of flat criteria. Guards: a flat criterion whose requirement slots exceed the hand size is dropped as unsatisfiable (with a warning if *every* alternative is dropped); duplicate flat criteria are removed; expansion aborts with a clear error above **256** flat criteria.
+`expand(expr): FlatCriterion[]` distributes `and` over `or` (PRD §5.3). The template's list of criteria is an `or` at the root, so the engine receives one list of flat criteria. Within a flat criterion, requirements with structurally identical descriptions merge by **summing** their counts (`1x A and 1x A` needs two distinct cards) and limits by taking the **minimum**. The order of the guards is merge → de-duplicate → cap → drop: duplicates are removed *during* distribution and the cap of **256** counts distinct alternatives, so forty copies of `(1x A or 1x A)` are one alternative while a genuine $`2^{40}`$ product fails fast without being built; alternatives whose slots exceed the hand size are dropped only at the end (`dropped` is reported, and an empty result with `dropped > 0` is the "can never be satisfied" warning). `expandAll` is called with the **largest** hand of a first/second blend — a six-slot alternative survives and is simply infeasible at $`H = 5`$.
 
-Subsumption (PRD §8.3): flat criterion $`A`$ is subsumed by $`B`$ when any hand satisfying $`A`$ satisfies $`B`$. The tool detects the sufficient condition that is cheap and common — $`B`$'s requirements inject into $`A`$'s with each $`A`$-slot description implying its $`B`$-slot's, and every limit of $`B`$ is implied by a limit of $`A`$ — and reports it as a notice. Subsumed criteria are still evaluated; this is advice, not an optimization the results depend on.
+Subsumption (PRD §8.3): flat criterion $`A`$ is subsumed by $`B`$ when any hand satisfying $`A`$ satisfies $`B`$. The tool detects the sufficient condition that is cheap and common — $`B`$'s requirements inject into $`A`$'s with each $`A`$-slot description implying its $`B`$-slot's, and every limit of $`B`$ is implied by a limit of $`A`$ — and reports it as a notice. The condition is sufficient, not necessary — measured once against brute force it missed about 4% of true subsumptions (two limits of $`A`$ jointly covering one of $`B`$, an unsatisfiable $`A`$) — which is acceptable precisely because subsumed criteria are still evaluated: this is advice, not an optimization the results depend on.
 
 ## 8. From template to problem
 
@@ -489,7 +490,7 @@ src/
   core/                       # pure TS: no electron, no node:, no DOM
     cards/    constants.ts  record.ts  index.ts  setnames.ts  vocabulary.ts
     desc/     ast.ts  lexer.ts  parser.ts  print.ts  evaluate.ts  boxes.ts  implies.ts
-    criteria/ ast.ts  parser.ts  print.ts  expand.ts
+    criteria/ ast.ts  lexer.ts  parser.ts  print.ts  expand.ts  subsumes.ts
     model/    template.ts  migrate.ts  problem.ts  compile.ts  analyze.ts
     prob/     binomial.ts  matcher.ts  success-set.ts  scorer.ts  montecarlo.ts
     opt/      enumerate.ts  optimizer.ts  progress.ts

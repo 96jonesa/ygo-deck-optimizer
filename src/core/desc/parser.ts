@@ -135,7 +135,8 @@ class Parser {
 
   constructor(
     private readonly tokens: readonly Token[],
-    private readonly textLength: number,
+    /** Where "something is missing" points once the tokens run out. */
+    private readonly end: Span,
     private readonly ctx: DescContext,
   ) {}
 
@@ -162,7 +163,7 @@ class Parser {
 
   /** Where "something is missing" points: the next token, or the end of the text. */
   private here(): Span {
-    return this.peek()?.span ?? { start: this.textLength, end: this.textLength };
+    return this.peek()?.span ?? this.end;
   }
 
   private endsAlternative(token: Token | undefined): boolean {
@@ -737,11 +738,18 @@ class Parser {
 export function parse(text: string, ctx: DescContext): ParseResult {
   const lexed = lex(text);
   if (!lexed.ok) return lexed;
+  return parseTokens(lexed.tokens, { start: text.length, end: text.length }, ctx);
+}
+
+/**
+ * `parse` for a description that is part of a longer text (a criterion, TDD
+ * §7.1): `tokens` are the description's own, with spans into the whole text,
+ * and `end` is what follows them there — the span an error about something
+ * missing after the last token points at.
+ */
+export function parseTokens(tokens: readonly Token[], end: Span, ctx: DescContext): ParseResult {
   try {
-    return {
-      ok: true,
-      desc: canonicalize(new Parser(lexed.tokens, text.length, ctx).parseAll()),
-    };
+    return { ok: true, desc: canonicalize(new Parser(tokens, end, ctx).parseAll()) };
   } catch (failure) {
     if (failure instanceof Failure)
       return { ok: false, message: failure.message, span: failure.span };
