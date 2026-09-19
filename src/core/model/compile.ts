@@ -177,9 +177,9 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
       desc = parsed.desc;
       text = line.text;
     }
+    // A generic line needs no existing card: it states what its cards are known to be, not
+    // which cards exist (PRD §5.1). `count` is reported, and analyze() notes a zero.
     const count = ctx.cards.count(matcher(desc, members));
-    if (count === 0 && 'text' in line)
-      errors.push(`${label}: \`${line.text}\` matches no card in the database — check for a typo`);
     const [only] = desc.anyOf;
     if (desc.anyOf.length === 1 && only?.t === 'card' && line.max > NAMED_CARD_MAX)
       errors.push(

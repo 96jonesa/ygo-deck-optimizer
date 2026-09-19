@@ -227,7 +227,7 @@ describe('issueSections', () => {
   it('leaves out a heading with nothing under it, and severities not asked for', () => {
     expect(issueSections(MOTIVATING, ['error', 'warning'])).toEqual([]);
     expect(issueSections(MOTIVATING, ['notice'])).toEqual([
-      'Notices\n  criterion "c2": adds nothing: every hand that meets it already meets criterion "c1"',
+      'Notices\n  line "fire-bw": `level 7 FIRE beast-warrior monster` matches no card in the database today — allowed: a line states what its cards are known to be, not which cards exist\n  criterion "c2": adds nothing: every hand that meets it already meets criterion "c1"',
     ]);
   });
 });

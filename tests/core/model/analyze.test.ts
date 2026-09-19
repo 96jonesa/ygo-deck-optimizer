@@ -226,16 +226,17 @@ describe('analyze', () => {
       expect(a.work.classVectors).toBeNull();
     });
 
-    it('makes a description that matches no card an ERROR: almost always a typo', () => {
+    it('only NOTES a generic description that matches no card: a line need not name cards that exist', () => {
       const a = analyze(
         templateOf([line('l7', 'level 7 FIRE beast-warrior monster')], ['1x monster']),
         ctx,
       );
       expect(lineOf(a, 'l7')).toMatchObject({ count: 0, samples: [] });
-      expect(codes(lineOf(a, 'l7').issues)).toEqual(['!no-match']);
-      expect(a.ok).toBe(false);
-      // It still parses, so it still has its place in the classes.
+      expect(lineOf(a, 'l7').issues).toMatchObject([{ severity: 'notice', code: 'no-match' }]);
+      expect(a.ok).toBe(true);
+      // It is an ordinary line: it has its place in the classes and fills `1x monster`.
       expect(a.classes!.classes[1]).toEqual({ lines: ['l7'], min: 0, max: 3 });
+      expect(requirementOf(a, 'monster').filledBy).toEqual(['l7']);
     });
 
     it('only WARNS about a picker card the database lacks', () => {

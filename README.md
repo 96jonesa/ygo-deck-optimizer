@@ -135,8 +135,9 @@ whatever is left of the deck — and must respect every line's range; without it
 at its `max` (`--at max`). The same `--seed` always gives the same estimate.
 
 The example is the PRD's motivating template, [`examples/motivating.json`](examples/motivating.json)
-— with Level 8 where the PRD first wrote Level 7, because no Level 7 FIRE Beast-Warrior exists
-and a line that matches no card is an error:
+— verbatim, including its `level 7 FIRE beast-warrior monster` line, which matches no existing
+card. That is allowed: a generic line states what its cards are known to be, not which cards
+exist, so the tool notes it and carries on:
 
 ```sh
 EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- estimate examples/motivating.json --samples 1000000
