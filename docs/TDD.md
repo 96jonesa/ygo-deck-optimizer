@@ -62,7 +62,7 @@ flowchart TB
 
 - **Renderer**: UI only — `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, `setWindowOpenHandler` denying everything. It never touches the filesystem and never parses, compiles, or scores: every edit is sent to main and the returned `Analysis` (§9) is rendered.
 - **Main** owns all Node capabilities. The **card service** holds the `CardIndex` and the setname table; parse, analyze and compile run here, synchronously — they are microseconds-to-milliseconds (no enumeration), so they do not need a worker.
-- **Optimizer worker**: a Node `worker_threads` worker, created per run through electron-vite's `?nodeWorker` import. It receives a compiled `Problem` (§8) — plain numbers, no card data, no sql.js — runs §10–11, posts progress, and posts the result. Cancel is `worker.terminate()`. One run at a time; a new run cancels the previous one.
+- **Optimizer worker**: a Node `worker_threads` worker, created per run through electron-vite's `?nodeWorker` import. It receives a compiled `Problem` (§8) — plain numbers, no card data, no sql.js — runs §10–11, posts progress, and posts the result. Cancel is `worker.terminate()` for an abandoned run; for a *graceful* stop that keeps partial results, `optimize` is synchronous and cannot receive a message mid-run, so `shouldCancel` reads an `Atomics` flag on a `SharedArrayBuffer` that main sets — polled at the progress cadence. The worker calibrates the scorer once at startup and passes `cost` to every run; a `needs-confirmation` result goes to the renderer, which re-runs with `force` once the user agrees. One run at a time; a new run cancels the previous one.
 
 **Why `worker_threads` and not the alternatives.** A renderer Web Worker needs `worker-src`/`blob:` CSP exceptions that only fail in packaged builds, and would put engine code in the renderer; `utilityProcess` buys crash isolation that a pure-arithmetic job does not need. The worker bundle imports only `core/`, so it has no unbundled-dependency problem.
 
@@ -388,6 +388,8 @@ P(n) = \frac{1}{\binom{N}{H}} \sum_{h \in \mathcal{S}} \prod_{c} \binom{n_c}{h_c
 
 Raw decisions are the line counts $`n_i \in [\min_i, \max_i]`$ with the remainder $`r = N - \sum_i n_i`$ inside its own range. The score depends only on **class totals**, so the optimizer enumerates class-total vectors $`t = (t_c)`$ with $`t_c`$ in the class range and $`\sum_c t_c = N`$, by depth-first search over the non-blank classes with the blank class absorbing the difference (pruned when the remaining classes cannot reach or must overshoot $`N`$). Every raw ratio that maps to the same $`t`$ is an exact tie and is never scored separately.
 
+One correction the optimizer's oracle forced (it found 168 counter-examples): a line no criterion can see is **not** always free. Its cards still occupy deck slots, so it is flat only while the blank class can absorb its copies; past that point it crowds out cards that matter. The remainder is the clearest case — in the brick example the best deck has 3 unspecified cards and the odds fall steadily as that number grows. Results therefore report irrelevant lines as `{ flat, best, cells? }`, with a sweep table whenever the line is not flat.
+
 For the motivating example (taking card A to be a Level 4 monster and card B a Normal Spell, as in PRD §6.2): the 7 lines allow 4 · 4 · 1 · 2 · 4 · 8 · 4 = 4,096 raw ratios, but the criteria can only tell five classes apart — `card A`, `card B`, `level 4 monster`, {`monster`, `level 7 FIRE beast-warrior monster`} merged (both fill `1x monster` and nothing else), and blank (`spell`, `normal spell`, remainder). That is 4 · 4 · 2 · 4 = 128 scored vectors. With every line at its maximum the exact answer is $`46{,}185 / 658{,}008 \approx 7.02\%`$ — computed three independent ways (the M0f exit test's enumeration, a separate hand calculation, and the Monte Carlo harness at $`10^6`$ samples: 0.0701) and the scorer's first anchor on a real template.
 
 ### 11.2 Outputs, all from one pass
@@ -395,14 +397,16 @@ For the motivating example (taking card A to be a Level 4 monster and card B a N
 | Output | How |
 | --- | --- |
 | Ranked table | Bounded max-heap of the top $`K`$ class vectors (default 200) by exact numerator |
-| Plateau | All vectors within $`\delta`$ of the running best, in a side buffer pruned whenever the best improves; capped (default 10,000) with a "plateau truncated" flag |
-| Sweep, others re-optimized | `best[line][count]` table: for each scored vector and each line $`i`$ in class $`c`$, the counts $`v`$ compatible with $`t_c`$ form the interval $`[\max(\min_i,\ t_c - \sum_{j \ne i} \max_j),\ \min(\max_i,\ t_c - \sum_{j \ne i} \min_j)]`$; update those cells. Every line's sweep is therefore free |
+| Plateau | All vectors within $`\delta`$ of the running best, in a side buffer pruned whenever the best improves; capped (default 10,000) with a "plateau truncated" flag. The plateau's **size stays exact under truncation** via a lazily built ring histogram of tolerance + 1 counters (`sizeExact: false` only past $`2^{23}`$ counters). Ties are ordered by the lexicographically smaller class vector, not by arrival, so shards can be merged later |
+| Sweep, others re-optimized | `best[line][count]` table: for each scored vector and each line $`i`$ in class $`c`$, the counts $`v`$ compatible with $`t_c`$ form the interval $`[\max(\min_i,\ t_c - \sum_{j \ne i} \max_j),\ \min(\max_i,\ t_c - \sum_{j \ne i} \min_j)]`$; update those cells. Every line's sweep is therefore free. *As built:* the pass keeps only the best key and a witness per (class, total) — $`k`$ comparisons per vector — and derives `best[line][count]` afterwards through `lineInterval`, the single source of that interval; the table is identical (the oracle compares every cell) at a fraction of the hot-loop cost |
 | Sweep, others held fixed | Direct scoring of at most four decks; no search |
 | Expansion to line ratios | A class vector expands to its raw ratios on demand for display: "3 copies among `level 4 monster`, `level 4 FIRE monster` — any split", enumerated up to a cap |
 
 ### 11.3 Cost, progress, cancellation
 
 Work is (scored vectors) × (success-set size) multiply-adds; `analyze` reports both before the run, with an ETA from a per-term cost calibrated once at startup. There is no hidden cap, but there *is* a wall: `analyze` measured a plausible 30-line template at $`4.8 \times 10^{10}`$ class vectors — about 23 days. So an estimate above a threshold (default 60 s) requires an explicit confirmation in the app and `--force` in the harness, and the vector total, which can itself pass $`2^{53}`$, is carried as a count (§9), never assumed to be a safe integer. Narrowing ranges, not waiting, is the intended response; heuristic search stays in PRD §9. The optimizer reports `{ done, total, elapsedMs, etaMs }` through a callback at most every 100 ms (the CLI harness prints it to stderr, flushed), and checks a cancellation flag at the same cadence. `total` is exact — the vector count is computed up front by a counting DP over class ranges.
+
+Measured on the brick example (7,200 vectors, 161 terms): about 736k vectors per second end to end, 97M per second for the bare walk, and a calibrated ~7.3 ns per term. `optimize` never throws — bad options come back as `status: 'error'` — and its statuses are `done`, `cancelled` (partial results, marked as such), `needs-confirmation`, `infeasible`, and `error`.
 
 The enumeration is shardable by the first class's value, so a multi-worker fan-out is a later drop-in; v1 runs one worker. A prefix-sharing trie over the success set (so partial products are reused across sibling vectors in the DFS) is the known next optimization; it is **not** built until measurement says it is needed.
 
@@ -499,7 +503,7 @@ src/
     criteria/ ast.ts  lexer.ts  parser.ts  print.ts  expand.ts  subsumes.ts
     model/    template.ts  migrate.ts  problem.ts  compile.ts  analyze.ts  ranges.ts
     prob/     binomial.ts  matcher.ts  success-set.ts  scorer.ts  montecarlo.ts
-    opt/      enumerate.ts  optimizer.ts
+    opt/      enumerate.ts  heap.ts  plateau.ts  calibrate.ts  optimizer.ts
     util/     normalize.ts  prng.ts  progress.ts   # progress lives here: prob/ and opt/ both report it
   main/
     index.ts                  # lifecycle, window, CSP, IPC registration (once)

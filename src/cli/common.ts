@@ -19,6 +19,8 @@ export const EXIT_OK = 0;
 export const EXIT_FAILED = 1;
 /** The command line is at fault. */
 export const EXIT_USAGE = 2;
+/** The run is too long to start unasked (TDD §11.3): nothing was scored; `--force` is the confirmation. */
+export const EXIT_NEEDS_CONFIRMATION = 3;
 
 export function wholeNumber(text: string): number | undefined {
   return /^[0-9]{1,15}$/.test(text) ? Number(text) : undefined;

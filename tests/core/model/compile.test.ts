@@ -7,6 +7,7 @@ import {
   compileProblem,
   countRawRatios,
   expandClassVector,
+  lineInterval,
   REMAINDER_ID,
   type ResolvedTemplate,
   resolveTemplate,
@@ -802,6 +803,35 @@ describe('compileProblem', () => {
       const result = compileProblem(inputOf(rows, flat), { handSizes: [{ H: 5, weight: 0.5 }] });
       expect(result).toEqual({ ok: false, errors: [expect.stringMatching(/weight/)] });
     });
+  });
+});
+
+describe('lineInterval', () => {
+  // A class of two lines, 1–3 and 0–2: its total runs from 1 to 5.
+  const cls = { min: 1, max: 5 };
+  const first = { min: 1, max: 3 };
+  const second = { min: 0, max: 2 };
+
+  it('is what the line can hold while the others make up the rest of the class total', () => {
+    expect(lineInterval(cls, first, 1)).toEqual({ min: 1, max: 1 });
+    expect(lineInterval(cls, second, 1)).toEqual({ min: 0, max: 0 });
+    expect(lineInterval(cls, first, 3)).toEqual({ min: 1, max: 3 });
+    expect(lineInterval(cls, second, 3)).toEqual({ min: 0, max: 2 });
+    // At 5 both are at their maximum; at 4 each is one short of it at most.
+    expect(lineInterval(cls, first, 5)).toEqual({ min: 3, max: 3 });
+    expect(lineInterval(cls, first, 4)).toEqual({ min: 2, max: 3 });
+    expect(lineInterval(cls, second, 4)).toEqual({ min: 1, max: 2 });
+  });
+
+  it('is the whole total for a class of one line', () => {
+    expect(lineInterval({ min: 0, max: 3 }, { min: 0, max: 3 }, 2)).toEqual({ min: 2, max: 2 });
+  });
+
+  it('is empty for a total outside the class range', () => {
+    for (const total of [0, 6]) {
+      const { min, max } = lineInterval(cls, first, total);
+      expect(min).toBeGreaterThan(max);
+    }
   });
 });
 

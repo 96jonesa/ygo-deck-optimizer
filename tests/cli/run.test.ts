@@ -17,6 +17,7 @@ describe('runCli', () => {
     expect(stderr).toMatch(/^usage: npm run cli -- <command>/);
     expect(stderr).toMatch(/analyze <template\.json>/);
     expect(stderr).toMatch(/estimate <template\.json>/);
+    expect(stderr).toMatch(/optimize <template\.json>/);
   });
 
   it('rejects an unknown command by name', async () => {
@@ -40,6 +41,16 @@ describe('runCli', () => {
     expect(help.stdout).toMatch(/^usage: npm run cli -- analyze/);
 
     const bare = await run(['analyze']);
+    expect(bare.code).toBe(EXIT_USAGE);
+    expect(bare.stderr).toMatch(/which template\?/);
+  });
+
+  it('hands `optimize` its own arguments', async () => {
+    const help = await run(['optimize', '--help']);
+    expect(help.code).toBe(EXIT_OK);
+    expect(help.stdout).toMatch(/^usage: npm run cli -- optimize/);
+
+    const bare = await run(['optimize']);
     expect(bare.code).toBe(EXIT_USAGE);
     expect(bare.stderr).toMatch(/which template\?/);
   });

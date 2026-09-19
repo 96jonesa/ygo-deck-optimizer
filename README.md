@@ -18,7 +18,7 @@ combinatorial probability plus a card-database lookup layer.
 | --- | --- |
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done (in review)**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
-| M1 — exact engine + optimizer (headless) | **In progress**: M1a exact scorer, M1b compile + analyze |
+| M1 — exact engine + optimizer (headless) | **Done (in review)**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
 | M2 — app MVP | Not started |
 | M3 — polish | Not started |
 | M4 — release | Not started |
@@ -105,6 +105,9 @@ card data, before there is an app around it.
 npm run cli -- analyze  <template.json> --workdir <EDOPro dir> [--hand 5|6] [--json]
 npm run cli -- estimate <template.json> --workdir <EDOPro dir> \
     [--samples 200000] [--seed 1] [--hand 5|6] [--ratio 3,3,5,2,0,7,3 | --at max|min]
+npm run cli -- optimize <template.json> --workdir <EDOPro dir> \
+    [--top 20] [--delta 0.5] [--sweep <lineId>] [--hand 5|6 | --blend 3:2] \
+    [--threshold 60] [--force] [--json]
 ```
 
 `analyze` prints everything the tool understands of a template **before anything is scored**
@@ -157,7 +160,64 @@ What the output means, top to bottom (all of it on stdout):
 Progress (`done / total`, percent, elapsed, ETA) goes to **stderr**, one plain line per report,
 so stdout can be piped and a log file stays readable. Exit codes: `0` success, `1` the template
 or the card data is at fault (every problem is listed, each naming its line or criterion), `2`
-the command line is.
+the command line is, `3` (`optimize` only) the run needs `--force`.
+
+`optimize` scores **every** deck ratio the template allows, exactly, in one pass
+(`src/core/opt`, [TDD §11](docs/TDD.md)), and answers the question the tool exists for. It walks
+the class-total vectors — 128 for the example, standing for its 4,096 raw ratios, every one of
+which ties exactly with its vector — and ranks them by exact integers, so equal scores are true
+ties (broken by the smaller class vector, blank class first).
+
+```sh
+EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- optimize examples/motivating.json --top 8
+```
+
+| Section | Content |
+| --- | --- |
+| Card database … Notices | The analysis, as `analyze` prints it: what the numbers below are numbers *of* |
+| Search | Class vectors scored of the exact total (counted up front), the raw ratios they stand for, the hand sizes, and the time estimate from a per-term cost **calibrated on this machine** at startup |
+| Best ratio | `P(success) = 46,185 / 658,008 = 7.0189%`, then the ratio **in lines**: a count, or a range where a class total splits freely among its lines (`8 copies among monster, fire-bw — any split`) |
+| Ranked | The top `--top` class vectors: percentage, exact fraction, the copies of each line that matters, the blank cards, and how many raw ratios tie in that vector |
+| Plateau | How many class vectors and raw ratios are within `--delta` percentage points of the best — decided in exact integers — and the copies each line takes across them: "2 or 3 are equally fine" |
+| Irrelevant lines | Lines no requirement or limit can see. Usually every count ties (`spell (0–7)`), said in one line instead of a table; when their copies can only come at the expense of cards that matter — the remainder past a point, always — the table is shown after all |
+| Sweeps | For **every** line that matters, the best `P` with the line held at each count and everything else re-optimized, the best count starred. `--sweep <lineId>` adds that line in detail: the deck behind each count, and `P` with the other lines *held fixed* at the best ratio |
+| Per criterion | The exact probability of each criterion by itself at the best ratio |
+
+`--blend 3:2` ranks by going first (5 cards) 60% of the time and second (6 cards) 40%: the
+template is resolved at a hand of 6, both hands are scored exactly, and ratios are ranked on
+their common denominator. `--json` prints the raw result — the value the app's results views
+will render — and nothing else.
+
+Progress goes to stderr as for `estimate`. **The wall**: before scoring anything, the vector
+count times the calibrated cost is compared with `--threshold` (default 60 s); over it,
+`optimize` scores nothing and exits `3`, naming the estimate — a plausible 30-line template is
+$`4.8 \times 10^{10}`$ vectors, about 23 days — and `--force` is the confirmation. Narrowing
+ranges, not waiting, is the intended response.
+
+The second example, [`examples/brick.json`](examples/brick.json), asks what the tool was first
+asked: *how many copies of a card that bricks in multiples?* It is a Blue-Eyes shell around three
+real cards — **Sage with Eyes of Blue** (the starter: its Normal Summon searches), **The White
+Stone of Ancients** (the extender: it fetches a Blue-Eyes from the deck, which is why at least one
+must be run), and **Blue-Eyes White Dragon** itself (the brick: a Level 8 Normal Monster that is
+fine to hold once and dead in multiples) — plus `level 4 or lower monster` 6–10, `spell` 8–12 and
+`trap` 3–8. Both criteria carry the limit `at most 1x [Blue-Eyes White Dragon]`, and one has a
+nested `or`. The sweep over the `brick` line is the headline answer:
+
+```sh
+EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- optimize examples/brick.json --sweep brick
+```
+
+```
+Sweep of `brick` — "held" keeps every other line at the best ratio, the remainder absorbing the difference
+  copies  re-optimized  exact                  held  the deck that does it
+  1 *         41.5744%  273,563 / 658,008  41.5744%  starter 3, extender 3, low-monsters 10, spells 12, traps 8
+  2           41.3428%  272,039 / 658,008  41.3428%  starter 3, extender 3, low-monsters 10, spells 12, traps 8
+  3           40.8933%  269,081 / 658,008  40.8933%  starter 3, extender 3, low-monsters 10, spells 12, traps 8
+```
+
+One copy is best, and each further copy costs a quarter to half a percentage point — so the
+second copy sits inside the 0.5-point plateau and the third does not. The run scores 7,200 class
+vectors in about 10 ms (roughly 700,000 vectors a second at 161 terms a score).
 
 The Monte Carlo engine is the project's independent oracle (TDD §10.4): it draws concrete cards
 tagged with their line and assigns them to requirement slots by brute force, sharing no code

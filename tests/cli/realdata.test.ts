@@ -1,5 +1,7 @@
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { EXIT_OK, runEstimate } from '../../src/cli/estimate';
+import { runOptimize } from '../../src/cli/optimize';
 import { captureIo } from '../helpers/cli-io';
 import { MOTIVATING_PATH, motivatingExact } from '../helpers/motivating';
 
@@ -63,5 +65,78 @@ describe.skipIf(!EDOPRO_WORKDIR)('M0 exit: the motivating example against a real
         `exact = ${exact.successes}/${exact.hands} = ${exact.p.toFixed(6)}; ` +
         `off by ${((hits / SAMPLES - exact.p) / sigma).toFixed(2)} standard errors`,
     );
+  });
+});
+
+// The M1 exit criterion (TDD §18): `optimize` over the motivating example — and over the
+// brick example, the question the tool was asked for — against a REAL install.
+describe.skipIf(!EDOPRO_WORKDIR)('M1 exit: optimize against a real install (oracle O4)', () => {
+  async function optimizeJson(template: string, ...flags: string[]) {
+    const captured = captureIo({ EDOPRO_WORKDIR });
+    const code = await runOptimize([template, '--json', ...flags], captured.io);
+    expect(captured.stderr()).not.toMatch(/error/);
+    expect(code).toBe(EXIT_OK);
+    return JSON.parse(captured.stdout());
+  }
+
+  it("finds the motivating example's optimum, sweeps and irrelevant lines as brute force does", async () => {
+    const { result } = await optimizeJson(MOTIVATING_PATH);
+    expect(result).toMatchObject({ status: 'done', done: 128, total: 128, rawRatios: 4096 });
+
+    // By a route that shares nothing with src/: every choice of the four counts that matter.
+    const rows: { counts: number[]; successes: number }[] = [];
+    for (let a = 0; a <= 3; a++)
+      for (let b = 0; b <= 3; b++)
+        for (let level4 = 2; level4 <= 3; level4++)
+          for (let fireBw = 0; fireBw <= 3; fireBw++) {
+            const counts = [a, b, 5, level4, fireBw, 0, 0];
+            rows.push({ counts, successes: motivatingExact(counts, 40, 5).successes });
+          }
+    const best = Math.max(...rows.map((row) => row.successes));
+    expect(best).toBe(46185);
+    expect(result.best.blend).toEqual({ num: best, den: 658008 });
+    // Classes: blank, A, B, {monster, fire-bw}, level4.
+    expect(result.best.classTotals).toEqual([23, 3, 3, 8, 3]);
+
+    for (const [lineId, at] of [
+      ['A', 0],
+      ['B', 1],
+    ] as const) {
+      const sweep = result.sweeps.find((s: { lineId: string }) => s.lineId === lineId);
+      expect(
+        sweep.cells.map((cell: { best: { blend: { num: number } } }) => cell.best.blend.num),
+      ).toEqual(
+        [0, 1, 2, 3].map((count) =>
+          Math.max(...rows.filter((row) => row.counts[at] === count).map((row) => row.successes)),
+        ),
+      );
+      expect(sweep.argmax).toEqual([3]);
+    }
+    expect(
+      result.irrelevant.map((line: { lineId: string; flat: boolean }) => [line.lineId, line.flat]),
+    ).toEqual([
+      ['spell', true],
+      ['normal-spell', true],
+      ['remainder', false],
+    ]);
+  });
+
+  it('answers the brick example: the odds fall with every further copy of the brick', async () => {
+    const brick = path.resolve(import.meta.dirname, '../../examples/brick.json');
+    const { result, sweepFixed } = await optimizeJson(brick, '--sweep', 'brick');
+    expect(result).toMatchObject({ status: 'done', done: 7200, total: 7200 });
+    const sweep = result.sweeps.find((s: { lineId: string }) => s.lineId === 'brick');
+    const nums = sweep.cells.map(
+      (cell: { best: { blend: { num: number } } }) => cell.best.blend.num,
+    );
+    expect(sweep.cells.map((cell: { count: number }) => cell.count)).toEqual([1, 2, 3]);
+    expect(nums[0]).toBeGreaterThan(nums[1]);
+    expect(nums[1]).toBeGreaterThan(nums[2]);
+    expect(sweep.argmax).toEqual([1]);
+    expect(sweepFixed.map((cell: { feasible: boolean }) => cell.feasible)).toEqual([
+      true,
+      true,
+      true,
+    ]);
   });
 });

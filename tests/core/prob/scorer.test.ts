@@ -52,7 +52,7 @@ const ONE_CLASS = problemOf(40, 2, [{ slots: [A], limits: [] }]);
 /**
  * The motivating example (PRD §4.2, TDD §11.1) over its five classes, built by
  * hand: blank, card A, card B, `level 4 monster`, and the merged `monster` +
- * `level 8 FIRE beast-warrior monster`. The criterion is `1x [A], 1x [B],
+ * `level 7 FIRE beast-warrior monster`. The criterion is `1x [A], 1x [B],
  * 1x monster`, and card A — a Level 4 monster — fills the third slot too.
  */
 const MOTIVATING = problemOf(40, 5, [{ slots: [0b00010, 0b00100, 0b11010], limits: [] }]);
