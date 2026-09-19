@@ -508,6 +508,21 @@ function checkTotals(classes: readonly CompiledClassInfo[], classTotals: ArrayLi
 const copies = (total: number) => (total === 1 ? '1 copy' : `${total} copies`);
 
 /**
+ * The counts ONE line of a class can take while the class holds `total` and
+ * the other lines make up the rest: at least what they cannot hold, at most
+ * what they must leave — `[max(min_i, t − Σ_{j≠i} max_j), min(max_i, t − Σ_{j≠i} min_j)]`,
+ * every value of which IS taken by some split (TDD §11.2). Empty (`min > max`)
+ * when `total` is outside the class range. `cls` is the class range — the sum
+ * of its lines' — so the others' sums need no loop.
+ */
+export function lineInterval(cls: IntRange, line: IntRange, total: number): IntRange {
+  return {
+    min: Math.max(line.min, total - (cls.max - line.max)),
+    max: Math.min(line.max, total - (cls.min - line.min)),
+  };
+}
+
+/**
  * What a class-total vector means in lines: a single-line class holds exactly
  * its total; a merged class holds its total "among" its lines, in any split
  * their ranges allow. `classes` is `compileProblem`'s — a `Problem` alone does
@@ -535,11 +550,7 @@ export function expandClassVector(
       cls,
       total,
       splits: toCount(countSums(lines, total)),
-      lines: lines.map((line) => ({
-        id: line.id,
-        min: Math.max(line.min, total - (max - line.max)),
-        max: Math.min(line.max, total - (min - line.min)),
-      })),
+      lines: lines.map((line) => ({ id: line.id, ...lineInterval({ min, max }, line, total) })),
       text:
         lines.length === 1
           ? `${copies(total)} of ${names}`
