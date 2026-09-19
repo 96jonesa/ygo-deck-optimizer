@@ -592,6 +592,38 @@ describe('CardIndex', () => {
       ]);
     });
 
+    it('puts a whole typed word ahead of a shorter name that cuts a word in half', () => {
+      // The case the picker is judged by: `ash` must find Ash Blossom, even
+      // though Ashoka Pillar is the shorter name.
+      const index = indexOf(named('Ashoka Pillar', 'Ash Blossom & Joyous Spring', 'Ashened Rider'));
+      expect(index.search('ash').map((card) => card.name)).toEqual([
+        'Ash Blossom & Joyous Spring',
+        'Ashened Rider',
+        'Ashoka Pillar',
+      ]);
+    });
+
+    it('still prefers the shorter name when both end the typed word', () => {
+      // The case a plain alphabetical rule would break: `pot` must find Pot of
+      // Greed, not the alphabetically earlier Pot of Acquisitiveness.
+      const index = indexOf(named('Pot of Acquisitiveness', 'Pot of Greed', 'Pot of Avarice'));
+      expect(index.search('pot').map((card) => card.name)).toEqual([
+        'Pot of Greed',
+        'Pot of Avarice',
+        'Pot of Acquisitiveness',
+      ]);
+    });
+
+    it('counts any non-alphanumeric character as the end of a word', () => {
+      const index = indexOf(named('Maxxed Out', 'Maxx "C"'));
+      expect(index.search('maxx').map((card) => card.name)).toEqual(['Maxx "C"', 'Maxxed Out']);
+    });
+
+    it('treats an exactly-matching name as ending the word', () => {
+      const index = indexOf(named('Winged Kuriboh', 'Wing'));
+      expect(index.search('wing').map((card) => card.name)).toEqual(['Wing', 'Winged Kuriboh']);
+    });
+
     it('lists a name that both starts with and later repeats the query once', () => {
       const index = indexOf(named('Wing Wing'));
       expect(index.search('wing')).toHaveLength(1);
