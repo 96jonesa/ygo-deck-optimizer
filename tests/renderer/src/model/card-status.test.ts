@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { statusHeadline, statusRows } from '../../../../src/renderer/src/model/card-status';
+import {
+  statusChips,
+  statusHeadline,
+  statusRows,
+  statusTone,
+} from '../../../../src/renderer/src/model/card-status';
 import type { CardStatus } from '../../../../src/shared/types';
 
 const READY: CardStatus = {
@@ -72,5 +77,45 @@ describe('statusRows', () => {
       ['State', 'idle'],
       ['Folder', '—'],
     ]);
+  });
+});
+
+describe('statusChips', () => {
+  it('counts cards, databases, archetype names and conflicts for the status bar', () => {
+    expect(statusChips(READY)).toEqual([
+      { label: 'cards', value: '12,132' },
+      { label: 'databases', value: '5' },
+      { label: 'archetypes', value: '604' },
+      { label: 'conflicts', value: '0' },
+    ]);
+  });
+
+  it('says archetype names are missing rather than showing none of them', () => {
+    expect(statusChips({ ...READY, setnames: null })).toContainEqual({
+      label: 'archetypes',
+      value: 'none',
+    });
+  });
+
+  it('has nothing to count before there is an index', () => {
+    expect(statusChips(IDLE)).toEqual([]);
+    expect(statusChips(null)).toEqual([]);
+    expect(statusChips({ ...READY, state: 'loading' })).toEqual([]);
+  });
+});
+
+describe('statusTone', () => {
+  it('tells a working index from one that needs attention', () => {
+    expect(statusTone(READY)).toBe('ok');
+    expect(statusTone(null)).toBe('busy');
+    expect(statusTone({ ...READY, state: 'loading' })).toBe('busy');
+    expect(statusTone(IDLE)).toBe('warn');
+    expect(statusTone({ ...IDLE, state: 'error', error: 'boom' })).toBe('bad');
+  });
+
+  it('calls out what deserves a look on an index that otherwise loaded fine', () => {
+    expect(statusTone({ ...READY, conflicts: 3 })).toBe('warn');
+    expect(statusTone({ ...READY, skippedDatabases: 1 })).toBe('warn');
+    expect(statusTone({ ...READY, setnames: null })).toBe('warn');
   });
 });
