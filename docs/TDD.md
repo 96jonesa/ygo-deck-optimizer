@@ -28,7 +28,7 @@ Lifted from [ygo-combo-solver-gui](https://github.com/96jonesa/ygo-combo-solver-
 | UI | React 18 + zustand 5, hand-written CSS | No component or CSS framework, as in the sibling |
 | SQLite | sql.js (wasm) | No native module: `npmRebuild: false`, identical behavior under Electron and vitest, ubuntu-only CI for both platforms. It works with a bare `initSqlJs()` **only because it stays unbundled in the main process** (`externalizeDepsPlugin`); it is never imported from the renderer or a bundled worker |
 | Tests | vitest 4, `environment: 'node'` | No jsdom; renderer logic worth testing lives in pure functions |
-| Lint/format | eslint (typescript-eslint) + prettier, **run in CI** | The sibling promised these and never wired them; here eslint also enforces `core/` purity (§16) |
+| Lint/format | Biome (lint + format in one), **run in CI** | The sibling promised eslint + prettier and never wired them — for a reason found in M0a: typescript-eslint's peer range stops below TypeScript 6.1, so it cannot be installed beside TypeScript 7. Biome has no dependency on the TypeScript API; its `noRestrictedImports` override also enforces `core/` purity (§16) |
 | CLI harness | `tsx` | Dev dependency only; not shipped |
 | Packaging | electron-builder 26 | §17 |
 
@@ -499,7 +499,7 @@ tests/        # mirrors src/
 scripts/      check-licenses.mjs  third-party-notices.mjs
 ```
 
-`core/` purity is enforced twice: its own `tsconfig.core.json` compiles with `lib: ["ES2022"]` and `types: []` (no DOM, no Node globals), and an eslint `no-restricted-imports` rule bans `electron`, `node:*`, and anything outside `core/` from inside it. sql.js reaches `core/cards/index.ts` as an injected instance, so `core/` never calls `initSqlJs()` itself.
+`core/` purity is enforced twice: its own `tsconfig.core.json` compiles with `lib: ["ES2022"]` and `types: []` (no DOM, no Node globals), and a Biome `noRestrictedImports` override bans `electron`, Node built-ins, and the app layers from inside it. The two are complementary — the tsconfig catches globals (`document`, `process`), the lint rule catches imports — and M0a verified that each fires on a deliberate violation. sql.js reaches `core/cards/index.ts` as an injected instance, so `core/` never calls `initSqlJs()` itself.
 
 ## 17. Packaging, CI, licensing
 
@@ -514,7 +514,7 @@ One PR per slice, stacked (a registered GitHub stack) where consecutive slices t
 
 | Slice | Contents |
 | --- | --- |
-| M0a | Scaffold lift: electron-vite, tsconfigs incl. `tsconfig.core.json`, eslint + prettier, vitest, CI with license check, `LICENSE`, README, empty window |
+| M0a | Scaffold lift: electron-vite, tsconfigs incl. `tsconfig.core.json`, Biome, vitest, CI with license check, `LICENSE`, README, empty window |
 | M0b | `core/cards`: constants (transcribed + pin tests), `CardRecord`, SQL-side decoding, population filter, alias handling, `CardIndex`, setnames, vocabulary; fixture-card helper; opt-in real-data tests |
 | M0c | `core/desc`: lexer, parser, printer, `evaluate` |
 | M0d | `core/desc`: boxes and `implies`, with the soundness and completeness oracles |

@@ -1,0 +1,10 @@
+{
+  // Purity gate for src/core (TDD §16): no DOM lib and no Node types, so a
+  // stray `document`, `process`, or `node:fs` import is a compile error.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": []
+  },
+  "include": ["src/core"]
+}

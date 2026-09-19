@@ -1,0 +1,22 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+body {
+  margin: 0;
+}
+
+.shell {
+  padding: 24px;
+}
+
+.shell h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+.shell .meta {
+  color: GrayText;
+}
