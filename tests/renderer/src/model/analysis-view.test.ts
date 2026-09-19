@@ -22,9 +22,9 @@ import type {
   Analysis,
   AnalyzeTemplateResult,
   Issue,
-  LineAnalysis,
   Severity,
 } from '../../../../src/shared/types';
+import { analysisOf, lineOf } from '../../../helpers/analysis';
 import { motivatingContext, motivatingTemplate } from '../../../helpers/motivating';
 
 /**
@@ -39,58 +39,6 @@ const issue = (severity: Severity, message = 'something'): Issue => ({
   code: 'no-match',
   message,
 });
-
-const lineOf = (id: string, over: Partial<LineAnalysis> = {}): LineAnalysis => ({
-  id,
-  text: id,
-  min: 0,
-  max: 3,
-  parsed: { ok: true, canonical: id, echo: id },
-  count: 1,
-  samples: [],
-  issues: [],
-  ...over,
-});
-
-/** An `Analysis` with only the fields one test cares about; the rest is the empty template's. */
-function analysisOf(over: Partial<Analysis>): Analysis {
-  return {
-    ok: true,
-    deckSize: 40,
-    handSize: 5,
-    lines: [],
-    remainder: {
-      id: 'remainder',
-      canonical: 'card',
-      echo: 'Any card',
-      count: 12132,
-      min: 0,
-      max: null,
-      range: { min: 0, max: 40 },
-      issues: [],
-    },
-    groups: [],
-    requirements: [],
-    limits: [],
-    criteria: [],
-    issues: [],
-    totals: {
-      feasible: true,
-      kinds: [],
-      lines: { min: 0, max: 0 },
-      remainder: { min: 0, max: 40 },
-    },
-    classes: null,
-    work: {
-      rawRatios: null,
-      classVectors: null,
-      hands: null,
-      estimatedMs: null,
-      cost: { perVectorUs: 0.05, perTermNs: 6 },
-    },
-    ...over,
-  };
-}
 
 describe('reduceAnalysis', () => {
   it('takes the analysis main produced', () => {

@@ -4,9 +4,13 @@ import { EXAMPLE_TEMPLATE } from '../../../../src/renderer/src/model/example-tem
 import {
   cardLines,
   EMPTY_TEMPLATE,
+  nextCriterionId,
   nextGroupId,
   nextLineId,
   withCardLine,
+  withCriterion,
+  withCriterionName,
+  withCriterionText,
   withDeckSize,
   withDescriptionLine,
   withGroup,
@@ -14,11 +18,14 @@ import {
   withHandSize,
   withLineRange,
   withLineText,
+  withMovedCriterion,
   withMovedLine,
+  withoutCriterion,
   withoutGroup,
   withoutGroupCard,
   withoutLine,
   withRenamedGroup,
+  withSuggestedLine,
 } from '../../../../src/renderer/src/model/template-edit';
 import type { CardHit, Template } from '../../../../src/shared/types';
 
@@ -41,6 +48,17 @@ function textOf(template: Template, id: string): string | undefined {
   const line = template.lines.find((candidate) => candidate.id === id);
   return line !== undefined && 'text' in line ? line.text : undefined;
 }
+
+function criterionIds(template: Template): string[] {
+  return template.criteria.map((criterion) => criterion.id);
+}
+
+function criterionTextOf(template: Template, id: string): string | undefined {
+  return template.criteria.find((candidate) => candidate.id === id)?.text;
+}
+
+/** One empty criterion and nothing else: what the editor starts a criterion from. */
+const EMPTY_TEMPLATE_WITH_C1: Template = withCriterion(EMPTY_TEMPLATE);
 
 /** A template of three description lines, to reorder and edit. */
 function three(): Template {
@@ -402,6 +420,205 @@ describe('withoutGroupCard', () => {
   });
 });
 
+describe('withSuggestedLine', () => {
+  it('adds a description line holding exactly the text it was given', () => {
+    const one = withSuggestedLine(EMPTY_TEMPLATE, 'level 4 or lower monster');
+    expect(one.lines).toEqual([{ id: 'line1', text: 'level 4 or lower monster', min: 0, max: 3 }]);
+  });
+
+  it('does not touch the text: a near miss suggestion is `analyze`’s own words', () => {
+    const odd = '#40044918';
+    expect(textOf(withSuggestedLine(EMPTY_TEMPLATE, odd), 'line1')).toBe(odd);
+  });
+
+  it('adds it at the end, after the lines already there', () => {
+    const four = withSuggestedLine(three(), 'level 4 or lower monster');
+    expect(lineIds(four)).toEqual(['line1', 'line2', 'line3', 'line4']);
+    expect(textOf(four, 'line4')).toBe('level 4 or lower monster');
+  });
+
+  it('gives the new line a copy range, so the deck can actually hold it', () => {
+    expect(withSuggestedLine(EMPTY_TEMPLATE, 'monster').lines[0]).toMatchObject({
+      min: 0,
+      max: 3,
+    });
+  });
+
+  it('leaves the template it was given alone', () => {
+    const before = three();
+    withSuggestedLine(before, 'monster');
+    expect(before.lines).toHaveLength(3);
+  });
+
+  it('keeps the criteria, which is what asked for the line', () => {
+    const one = withCriterionText(withCriterion(EMPTY_TEMPLATE), 'c1', '1x monster');
+    expect(withSuggestedLine(one, 'monster').criteria).toEqual(one.criteria);
+  });
+});
+
+describe('nextCriterionId', () => {
+  it('does not collide with a criterion that is already there', () => {
+    expect(nextCriterionId(EXAMPLE_TEMPLATE)).toBe('c3');
+  });
+
+  it('fills a gap left by a removal rather than growing forever', () => {
+    expect(nextCriterionId(withoutCriterion(EXAMPLE_TEMPLATE, 'c1'))).toBe('c1');
+  });
+
+  it('starts at c1 for a template with no criteria', () => {
+    expect(nextCriterionId(EMPTY_TEMPLATE)).toBe('c1');
+  });
+});
+
+describe('withCriterion', () => {
+  it('adds an empty criterion at the end', () => {
+    expect(withCriterion(EMPTY_TEMPLATE).criteria).toEqual([{ id: 'c1', text: '' }]);
+  });
+
+  /**
+   * As an empty LINE is (`withDescriptionLine`), and for the same reason. Note
+   * what this costs today: `validateTemplate` refuses empty `text`, so the
+   * template is structurally invalid until something is typed, and
+   * `template:analyze` answers `invalid` rather than the per-criterion parse
+   * error `analyze` would happily give. The renderer's answer is to refuse a
+   * run while the latest reply was `invalid` (`selectRunnable`); the real fix
+   * belongs in `core`.
+   */
+  it('makes a template `core` refuses until something is typed', () => {
+    expect(validateTemplate(withCriterion(EMPTY_TEMPLATE))).toMatchObject({ ok: false });
+  });
+
+  it('gives each new criterion an id of its own, however fast they are added', () => {
+    expect(criterionIds(withCriterion(withCriterion(EMPTY_TEMPLATE)))).toEqual(['c1', 'c2']);
+  });
+
+  it('adds no name: a criterion is named only if the user names it', () => {
+    expect(withCriterion(EMPTY_TEMPLATE).criteria[0]).not.toHaveProperty('name');
+  });
+
+  it('leaves the template it was given alone', () => {
+    const before = EXAMPLE_TEMPLATE.criteria;
+    withCriterion(EXAMPLE_TEMPLATE);
+    expect(before).toHaveLength(2);
+  });
+});
+
+describe('withoutCriterion', () => {
+  it('removes the criterion with that id', () => {
+    expect(criterionIds(withoutCriterion(EXAMPLE_TEMPLATE, 'c1'))).toEqual(['c2']);
+  });
+
+  it('leaves the template alone when the id is not there', () => {
+    expect(withoutCriterion(EXAMPLE_TEMPLATE, 'c9')).toBe(EXAMPLE_TEMPLATE);
+  });
+});
+
+describe('withCriterionText', () => {
+  it('replaces the text of that criterion and no other', () => {
+    const next = withCriterionText(EXAMPLE_TEMPLATE, 'c2', '1x trap');
+    expect(criterionTextOf(next, 'c2')).toBe('1x trap');
+    expect(criterionTextOf(next, 'c1')).toBe(criterionTextOf(EXAMPLE_TEMPLATE, 'c1'));
+  });
+
+  it('keeps the criterion in its place, and keeps its name', () => {
+    const next = withCriterionText(EXAMPLE_TEMPLATE, 'c1', '1x spell');
+    expect(criterionIds(next)).toEqual(['c1', 'c2']);
+    expect(next.criteria[0]).toMatchObject({ name: 'A, B and any monster' });
+  });
+
+  it('drops a stored AST the text no longer matches: the text is what gets parsed', () => {
+    const stored: Template = {
+      ...EMPTY_TEMPLATE,
+      criteria: [{ id: 'c1', text: '1x monster', expr: { op: 'and', args: [] } as never }],
+    };
+    expect(withCriterionText(stored, 'c1', '1x spell').criteria[0]).not.toHaveProperty('expr');
+  });
+
+  it('leaves the template alone when the id is not there', () => {
+    expect(withCriterionText(EXAMPLE_TEMPLATE, 'c9', '1x trap')).toBe(EXAMPLE_TEMPLATE);
+  });
+});
+
+describe('withCriterionName', () => {
+  it('names the criterion', () => {
+    expect(withCriterionName(EMPTY_TEMPLATE_WITH_C1, 'c1', 'the good hand').criteria[0]).toEqual({
+      id: 'c1',
+      text: '',
+      name: 'the good hand',
+    });
+  });
+
+  it('trims the name', () => {
+    expect(withCriterionName(EMPTY_TEMPLATE_WITH_C1, 'c1', '  spaced  ').criteria[0]).toMatchObject(
+      { name: 'spaced' },
+    );
+  });
+
+  it('drops the name entirely when it is cleared: a blank name is no name', () => {
+    const named = withCriterionName(EMPTY_TEMPLATE_WITH_C1, 'c1', 'x');
+    expect(withCriterionName(named, 'c1', '   ').criteria[0]).not.toHaveProperty('name');
+  });
+
+  it('keeps the text', () => {
+    const one = withCriterionText(EMPTY_TEMPLATE_WITH_C1, 'c1', '1x monster');
+    expect(withCriterionName(one, 'c1', 'a monster').criteria[0]).toMatchObject({
+      text: '1x monster',
+    });
+  });
+
+  it('gives back the same template when the name is the one it has', () => {
+    const named = withCriterionName(EMPTY_TEMPLATE_WITH_C1, 'c1', 'x');
+    expect(withCriterionName(named, 'c1', 'x')).toBe(named);
+  });
+
+  it('gives back the same template when a nameless criterion is cleared again', () => {
+    expect(withCriterionName(EMPTY_TEMPLATE_WITH_C1, 'c1', '')).toBe(EMPTY_TEMPLATE_WITH_C1);
+  });
+
+  it('leaves the template alone when the id is not there', () => {
+    expect(withCriterionName(EXAMPLE_TEMPLATE, 'c9', 'x')).toBe(EXAMPLE_TEMPLATE);
+  });
+});
+
+describe('withMovedCriterion', () => {
+  it('moves a criterion down one place', () => {
+    expect(criterionIds(withMovedCriterion(EXAMPLE_TEMPLATE, 'c1', 1))).toEqual(['c2', 'c1']);
+  });
+
+  it('moves a criterion up one place', () => {
+    expect(criterionIds(withMovedCriterion(EXAMPLE_TEMPLATE, 'c2', -1))).toEqual(['c2', 'c1']);
+  });
+
+  it('will not move the first criterion up off the top', () => {
+    expect(withMovedCriterion(EXAMPLE_TEMPLATE, 'c1', -1)).toBe(EXAMPLE_TEMPLATE);
+  });
+
+  it('will not move the last criterion down off the bottom', () => {
+    expect(withMovedCriterion(EXAMPLE_TEMPLATE, 'c2', 1)).toBe(EXAMPLE_TEMPLATE);
+  });
+
+  it('moves the middle criterion either way', () => {
+    const three = withCriterion(EXAMPLE_TEMPLATE);
+    expect(criterionIds(withMovedCriterion(three, 'c2', -1))).toEqual(['c2', 'c1', 'c3']);
+    expect(criterionIds(withMovedCriterion(three, 'c2', 1))).toEqual(['c1', 'c3', 'c2']);
+  });
+
+  it('is its own inverse', () => {
+    const there = withMovedCriterion(EXAMPLE_TEMPLATE, 'c1', 1);
+    expect(withMovedCriterion(there, 'c1', -1).criteria).toEqual(EXAMPLE_TEMPLATE.criteria);
+  });
+
+  it('keeps every criterion, and each one whole', () => {
+    const moved = withMovedCriterion(EXAMPLE_TEMPLATE, 'c1', 1);
+    expect(moved.criteria).toHaveLength(2);
+    expect(moved.criteria[1]).toEqual(EXAMPLE_TEMPLATE.criteria[0]);
+  });
+
+  it('leaves the template alone when the id is not there', () => {
+    expect(withMovedCriterion(EXAMPLE_TEMPLATE, 'c9', 1)).toBe(EXAMPLE_TEMPLATE);
+  });
+});
+
 describe('an edited template', () => {
   it('stays one `core` accepts, through every kind of edit', () => {
     let template = withCardLine(EMPTY_TEMPLATE, ASH);
@@ -412,6 +629,11 @@ describe('an edited template', () => {
     template = withDeckSize(template, 41);
     template = withHandSize(template, 6);
     template = withGroupCard(withGroup(template, 'starter'), 'g1', MAXX);
+    template = withSuggestedLine(template, 'level 4 or lower monster');
+    template = withCriterionText(withCriterion(template), 'c1', '1x monster');
+    template = withCriterionName(template, 'c1', 'any monster');
+    template = withCriterionText(withCriterion(template), 'c2', '1x spell');
+    template = withMovedCriterion(template, 'c2', -1);
     expect(validateTemplate(template)).toMatchObject({ ok: true });
   });
 

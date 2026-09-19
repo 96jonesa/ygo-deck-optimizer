@@ -38,11 +38,25 @@ export function IssueList({ issues }: { issues: readonly Issue[] }) {
   );
 }
 
-/** The parse error, with the word it is about marked in a copy of the text. */
-function ParseFailure({ text, message, span }: { text: string; message: string; span: Span }) {
+/**
+ * The parse error, with the word it is about marked in a copy of the text.
+ * Shared with the criterion row, whose text is parsed by a different grammar
+ * (TDD §7) but read back exactly the same way.
+ */
+export function ParseFailure({
+  text,
+  message,
+  span,
+  testId = 'line-parse-error',
+}: {
+  text: string;
+  message: string;
+  span: Span;
+  testId?: string;
+}) {
   const { before, at, after } = splitAtSpan(text, span);
   return (
-    <p className="line-error" data-testid="line-parse-error">
+    <p className="line-error" data-testid={testId}>
       {message}
       {text.trim() !== '' && (
         <>

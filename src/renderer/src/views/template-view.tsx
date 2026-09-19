@@ -224,11 +224,16 @@ export function TemplateView() {
       <GroupsEditor />
 
       <div className="actions spaced">
-        <button type="button" onClick={() => setTemplate(exampleTemplate())}>
+        <button
+          type="button"
+          data-testid="load-example"
+          onClick={() => setTemplate(exampleTemplate())}
+        >
           Load example
         </button>
         <button
           type="button"
+          data-testid="clear-template"
           disabled={lines.length === 0 && template.groups.length === 0}
           onClick={() => setTemplate(EMPTY_TEMPLATE)}
         >

@@ -10,6 +10,8 @@ import {
   selectAnalysis,
   selectCardState,
   selectCardsReady,
+  selectRunBlocker,
+  selectRunnable,
   selectShows,
   selectStage,
   selectStatusText,
@@ -362,6 +364,111 @@ describe('createAppStore', () => {
     });
   });
 
+  describe('addSuggestedLine', () => {
+    it('adds the near miss’s suggestion as a line, word for word', () => {
+      const store = createAppStore();
+      store.getState().addSuggestedLine('level 4 or lower monster');
+      expect(store.getState().template.lines).toMatchObject([
+        { id: 'line1', text: 'level 4 or lower monster' },
+      ]);
+    });
+
+    it('leaves the template it was editing alone, rather than adding the line to it', () => {
+      const store = createAppStore();
+      store.getState().setTemplate(EXAMPLE_TEMPLATE);
+      const before = store.getState().template.lines;
+      store.getState().addSuggestedLine('level 4 or lower monster');
+      expect(store.getState().template.lines).not.toBe(before);
+      expect(before).toHaveLength(7);
+      expect(EXAMPLE_TEMPLATE.lines).toHaveLength(7);
+    });
+
+    it('gives two suggestions taken in one tick two different ids', () => {
+      const store = createAppStore();
+      store.getState().addSuggestedLine('monster');
+      store.getState().addSuggestedLine('spell');
+      const ids = store.getState().template.lines.map((line) => line.id);
+      expect(new Set(ids).size).toBe(2);
+    });
+  });
+
+  describe('addCriterion', () => {
+    it('adds a criterion to the template being edited', () => {
+      const store = createAppStore();
+      store.getState().addCriterion();
+      expect(store.getState().template.criteria).toEqual([{ id: 'c1', text: '' }]);
+    });
+
+    it('gives two criteria added in one tick two different ids', () => {
+      const store = createAppStore();
+      store.getState().addCriterion();
+      store.getState().addCriterion();
+      const ids = store.getState().template.criteria.map((criterion) => criterion.id);
+      expect(new Set(ids).size).toBe(2);
+    });
+  });
+
+  describe('dropCriterion', () => {
+    it('removes that criterion', () => {
+      const store = createAppStore();
+      store.getState().setTemplate(EXAMPLE_TEMPLATE);
+      store.getState().dropCriterion('c1');
+      expect(store.getState().template.criteria).toHaveLength(1);
+    });
+
+    it('holds the template still when there is no such criterion', () => {
+      const store = createAppStore();
+      store.getState().setTemplate(EXAMPLE_TEMPLATE);
+      const before = store.getState().template;
+      store.getState().dropCriterion('c9');
+      expect(store.getState().template).toBe(before);
+    });
+  });
+
+  describe('setCriterionText', () => {
+    it('edits the criterion the user is typing into', () => {
+      const store = createAppStore();
+      store.getState().addCriterion();
+      store.getState().setCriterionText('c1', '1x monster');
+      expect(store.getState().template.criteria[0]).toMatchObject({ text: '1x monster' });
+    });
+  });
+
+  describe('setCriterionName', () => {
+    it('names the criterion', () => {
+      const store = createAppStore();
+      store.getState().addCriterion();
+      store.getState().setCriterionName('c1', 'the good hand');
+      expect(store.getState().template.criteria[0]).toMatchObject({ name: 'the good hand' });
+    });
+
+    it('holds the template still when the name is the one it has', () => {
+      const store = createAppStore();
+      store.getState().addCriterion();
+      store.getState().setCriterionName('c1', 'x');
+      const before = store.getState().template;
+      store.getState().setCriterionName('c1', 'x');
+      expect(store.getState().template).toBe(before);
+    });
+  });
+
+  describe('moveCriterion', () => {
+    it('moves a criterion down one place', () => {
+      const store = createAppStore();
+      store.getState().setTemplate(EXAMPLE_TEMPLATE);
+      store.getState().moveCriterion('c1', 1);
+      expect(store.getState().template.criteria.map((c) => c.id)).toEqual(['c2', 'c1']);
+    });
+
+    it('holds the template still at the end it cannot move past', () => {
+      const store = createAppStore();
+      store.getState().setTemplate(EXAMPLE_TEMPLATE);
+      const before = store.getState().template;
+      store.getState().moveCriterion('c1', -1);
+      expect(store.getState().template).toBe(before);
+    });
+  });
+
   describe('setDeckSize', () => {
     it('sets the deck size', () => {
       const store = createAppStore();
@@ -512,12 +619,80 @@ describe('createAppStore', () => {
   });
 });
 
+describe('selectRunBlocker', () => {
+  /** A store with an index, the example, and an analysis that found nothing wrong. */
+  function runnable(): AppStore {
+    const store = createAppStore();
+    store.getState().setCards(status());
+    store.getState().setTemplate(EXAMPLE_TEMPLATE);
+    store.getState().setAnalysis({ ok: true, analysis: { ok: true } as Analysis });
+    return store;
+  }
+
+  it('is nothing when there is an index, a template and an analysis without errors', () => {
+    expect(selectRunBlocker(runnable().getState())).toBeNull();
+    expect(selectRunnable(runnable().getState())).toBe(true);
+  });
+
+  it('refuses without a card index', () => {
+    const store = createAppStore();
+    store.getState().setTemplate(EXAMPLE_TEMPLATE);
+    expect(selectRunBlocker(store.getState())).toBe('A run needs the card database.');
+  });
+
+  it('refuses a template the analysis found errors in', () => {
+    const store = runnable();
+    store.getState().setAnalysis({ ok: true, analysis: { ok: false } as Analysis });
+    expect(selectRunBlocker(store.getState())).toContain('marked on the lines and criteria');
+  });
+
+  /**
+   * The empty line or criterion case. `validateTemplate` refuses empty `text`,
+   * so `template:analyze` answers `invalid` and `reduceAnalysis` KEEPS the
+   * previous analysis — whose `ok` is about the previous template. Run must
+   * not be live over it.
+   */
+  it('refuses while the latest analysis came back invalid, however well the last one went', () => {
+    const store = runnable();
+    store.getState().setAnalysis({
+      ok: false,
+      reason: 'invalid',
+      message: 'this is not a well-formed template',
+      errors: ['criteria[0] ("c1"): `text` must be non-empty text, not ""'],
+    });
+    expect(store.getState().analysis.analysis).toMatchObject({ ok: true });
+    expect(selectRunnable(store.getState())).toBe(false);
+    expect(selectRunBlocker(store.getState())).toContain('not complete yet');
+  });
+
+  it('refuses a template with no criterion, which no hand can pass', () => {
+    const store = runnable();
+    store.getState().setTemplate({ ...EXAMPLE_TEMPLATE, criteria: [] });
+    expect(selectRunBlocker(store.getState())).toContain('at least one line and one criterion');
+  });
+
+  it('refuses a template with no lines', () => {
+    const store = runnable();
+    store.getState().setTemplate({ ...EXAMPLE_TEMPLATE, lines: [] });
+    expect(selectRunBlocker(store.getState())).toContain('at least one line and one criterion');
+  });
+
+  it('does not refuse merely because nothing has been analysed yet', () => {
+    const store = createAppStore();
+    store.getState().setCards(status());
+    store.getState().setTemplate(EXAMPLE_TEMPLATE);
+    expect(selectRunnable(store.getState())).toBe(true);
+  });
+});
+
 describe('the selectors', () => {
   /** Every selector the components pass to `useStore`: a new object each call would re-render forever. */
   const selectors: ((state: AppState) => unknown)[] = [
     selectAnalysis,
     selectCardState,
     selectCardsReady,
+    selectRunBlocker,
+    selectRunnable,
     selectShows,
     selectStage,
     selectStatusText,
