@@ -152,7 +152,9 @@ describe('resolveTemplate', () => {
           'Level 4 · Monster',
           ctx.cards.count((c) => c.level === 4 && (c.type & 0x1) !== 0),
         ],
-        ['level 8 FIRE beast-warrior monster', 'Level 8 · FIRE · Beast-Warrior · Monster', 1],
+        // The originator's line, verbatim. No such card exists, in the fixture or in reality;
+        // a generic line does not need one (PRD §5.1).
+        ['level 7 FIRE beast-warrior monster', 'Level 7 · FIRE · Beast-Warrior · Monster', 0],
         ['spell', 'Spell', ctx.cards.count((card) => (card.type & 0x2) !== 0)],
         // The stand-in for card B, and the fixture's Link Spell: a Spell with no sub-kind bit.
         ['normal spell', 'Normal Spell', 2],
@@ -200,12 +202,16 @@ describe('resolveTemplate', () => {
   });
 
   describe('lines', () => {
-    it('rejects a generic line that matches no card: no Level 7 FIRE Beast-Warrior exists', () => {
-      expect(
-        errorsOf(templateOf([line('l1', 'level 7 FIRE beast-warrior monster')], ['1x monster'])),
-      ).toEqual([
-        'line "l1": `level 7 FIRE beast-warrior monster` matches no card in the database — check for a typo',
-      ]);
+    it('accepts a generic line that matches no card: no Level 7 FIRE Beast-Warrior exists, and none need to', () => {
+      const result = resolveTemplate(
+        templateOf([line('l1', 'level 7 FIRE beast-warrior monster')], ['1x monster']),
+        ctx,
+      );
+      if (!result.ok) throw new Error(result.errors.join('; '));
+      const [l1] = result.resolved.lines;
+      expect(l1).toMatchObject({ id: 'l1', count: 0 });
+      // Known to be a monster, so it fills `1x monster` like any other monster line.
+      expect(result.resolved.descriptions.find((d) => d.text === 'monster')?.lines).toContain(0);
     });
 
     it('names the line and carries the parser message when a description does not parse', () => {

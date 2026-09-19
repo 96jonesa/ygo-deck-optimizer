@@ -242,18 +242,17 @@ describe('runEstimate', () => {
       expect(stderr).not.toMatch(/P\(success\)/);
     });
 
-    it("rejects the PRD's Level 7 FIRE Beast-Warrior line: no such card exists", async () => {
+    it("accepts the PRD's Level 7 FIRE Beast-Warrior line although no such card exists", async () => {
       const bad = templateFile('level7', {
         ...MOTIVATING,
         lines: MOTIVATING.lines.map((line: { id: string }) =>
           line.id === 'fire-bw' ? { ...line, text: 'level 7 FIRE beast-warrior monster' } : line,
         ),
       });
-      const { code, stderr } = await run([bad, '--workdir', WORKDIR]);
-      expect(code).toBe(EXIT_FAILED);
-      expect(stderr).toMatch(
-        /line "fire-bw": .* matches no card in the database — check for a typo/,
-      );
+      const { code, stdout } = await run([bad, '--workdir', WORKDIR, '--samples', '2000']);
+      expect(code).toBe(EXIT_OK);
+      expect(stdout).toMatch(/P\(success\) = /);
+      expect(stdout).toMatch(/matches no card in the database today — allowed/);
     });
 
     it('names the criterion that does not parse', async () => {

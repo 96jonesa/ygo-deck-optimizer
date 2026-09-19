@@ -74,7 +74,7 @@ Success if the opening hand satisfies any one of:
 1x card A, 1x card B, 1x level 4 or lower monster
 ```
 
-One correction the card database makes to the example as written: **no Level 7 FIRE Beast-Warrior monster exists** (the Main Deck ones are Levels 1–6, 8 and 9), so that line is rejected as matching no card (§5.1) — exactly the kind of mistake the tool exists to catch. Tests and the harness use Level 8.
+One thing the card database shows about the example as written: **no Level 7 FIRE Beast-Warrior monster exists** (the Main Deck ones are Levels 1–6, 8 and 9). That is fine, and the line stands verbatim: a generic line states what its cards are *known to be*, not which cards exist (§5.1), so it needs no matching card — the originator may be planning around a card not yet printed, or sketching. The tool says so in a notice and carries on.
 
 Two observations. First, the lines look nested ("level 4 monster" inside "monster") and a named card may itself be a monster — how that is read is §6. Second, the lines sum to at most 27, so the model needs an explicit notion of the *remainder* of the deck (§5.1).
 
@@ -116,7 +116,7 @@ Terminology used from here on: a template has **lines**; a criterion has **requi
 - Lines are **disjoint and additive**: every physical card in the deck belongs to exactly one line, and the line counts sum to the deck size. What a line's cards are *known to be* is §6.
 - The deck size $`N`$ is a parameter: default 40, allowed 40–60.
 - The **remainder** — the cards no line accounts for — is an always-visible computed row ("Unspecified cards: 13–33"). It behaves as a line with the empty description: cards about which nothing is known. It can be bounded with an explicit `any card [min, max]` line.
-- Game rules the tool enforces on its own: a named card's `max` is capped at 3; a description that matches no card in the database is an error (almost always a typo).
+- Game rules the tool enforces on its own: a named card's `max` is capped at 3. A **named** card must exist in the database; a **generic** line need not match any existing card (decided by Andy, 2026-09-19) — it is an abstract statement of what the line's cards are known to be, consistent with §6. A description that matches nothing is reported as a notice, because it is sometimes a slip; an unknown *word* is still a parse error, which is what catches typos.
 
 ### 5.2 Descriptions
 

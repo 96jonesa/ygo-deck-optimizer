@@ -529,7 +529,10 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
         );
       } else if (count === 0 && 'text' in line)
         found.push(
-          error('no-match', `\`${line.text}\` matches no card in the database — check for a typo`),
+          notice(
+            'no-match',
+            `\`${line.text}\` matches no card in the database today — allowed: a line states what its cards are known to be, not which cards exist`,
+          ),
         );
       for (const alt of desc.anyOf) {
         if (alt.t !== 'group') continue;

@@ -8,7 +8,7 @@
     { "id": "B", "text": "[Reinforcement of the Army]", "min": 0, "max": 3 },
     { "id": "monster", "text": "monster", "min": 5, "max": 5 },
     { "id": "level4", "text": "level 4 monster", "min": 2, "max": 3 },
-    { "id": "fire-bw", "text": "level 8 FIRE beast-warrior monster", "min": 0, "max": 3 },
+    { "id": "fire-bw", "text": "level 7 FIRE beast-warrior monster", "min": 0, "max": 3 },
     { "id": "spell", "text": "spell", "min": 0, "max": 7 },
     { "id": "normal-spell", "text": "normal spell", "min": 0, "max": 3 }
   ],

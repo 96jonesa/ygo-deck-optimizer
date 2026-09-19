@@ -23,7 +23,9 @@ export const ROTA = 32807846;
 /**
  * Stand-ins for the cards the motivating example (PRD §4.2) needs and the
  * synthetic fixture lacks: card A, a Level 4 WIND Warrior; card B, a Normal
- * Spell; and one Level 8 FIRE Beast-Warrior, so that line matches a card.
+ * Spell; and one Level 8 FIRE Beast-Warrior — deliberately NOT the Level 7 the
+ * example's line asks for: no such card exists in reality either, and a generic
+ * line does not need one (PRD §5.1).
  */
 export const MOTIVATING_ROWS: readonly FixtureRow[] = [
   {
