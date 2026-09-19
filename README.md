@@ -248,6 +248,7 @@ npm run typecheck   # whole project, then src/core alone under its purity tsconf
 npm run lint        # biome: lint + format check  (npm run format to fix)
 npm run build       # electron-vite production build into out/
 npm run check:licenses
+npm run package:mac # a double-clickable app in dist/ (see docs/INSTALL.md)
 ```
 
 ### Running the app

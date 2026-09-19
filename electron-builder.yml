@@ -1,0 +1,43 @@
+# Packaging (TDD §17). Deliberately minimal: F2 was descoped on 2026-09-19 to
+# "a build Andy can run", so there is no signing identity, no notarization and
+# no update channel. Adding them later is config, not rework.
+#
+# No `asarUnpack` entry, and that is load-bearing rather than an omission: M2b
+# packed an `app.asar` by hand and ran the app out of it to prove that both
+# sql.js's wasm and the optimizer's worker thread load from inside the archive
+# (see the comment in src/main/worker-spawn.ts for the symptom if that ever
+# changes).
+appId: io.github.96jonesa.ygo-deck-optimizer
+productName: YGO Deck Optimizer
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**
+  - package.json
+  - LICENSE
+npmRebuild: false
+# The release workflow owns publishing; electron-builder must never try, which
+# it otherwise attempts on CI and fails wanting a token.
+publish: null
+
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+  category: public.app-category.utilities
+  # Unsigned: electron-builder applies an ad-hoc signature, which is all an
+  # arm64 Mac needs to run an app locally. A DMG *copied* to another machine
+  # picks up the quarantine flag and needs a right-click → Open the first time
+  # (docs/INSTALL.md). A Developer ID would remove that, and is deferred.
+  identity: null
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  license: LICENSE
