@@ -77,10 +77,20 @@ button:hover:not(:disabled) {
   background: var(--bg-soft);
 }
 
-button:disabled {
+button:disabled,
+button[aria-disabled="true"] {
   color: var(--text-dim);
   cursor: default;
   opacity: 0.6;
+}
+
+/* An unavailable button keeps its focus stop but not its hover affordance. */
+button[aria-disabled="true"]:hover {
+  background: var(--bg-panel);
+}
+
+button.quiet[aria-disabled="true"]:hover {
+  background: none;
 }
 
 button.primary {
@@ -619,35 +629,326 @@ code,
   color: var(--text);
 }
 
-.lines {
+/* --- the template editor ------------------------------------------------ */
+
+.dim {
+  color: var(--text-dim);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Deck size and hand size, above the lines: one wrapping row, so a narrow
+ * panel breaks it between the two controls rather than clipping either.
+ */
+.deck-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+  background: var(--bg-sunken);
+  font-size: var(--fs-sm);
+}
+
+.deck-controls .spacer {
+  flex: 1 1 var(--sp-4);
+}
+
+/* Two buttons welded into one control: 5 or 6, and nothing between. */
+.segmented {
+  display: inline-flex;
+}
+
+.segmented button {
+  border-radius: 0;
+  padding: 3px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.segmented button:first-child {
+  border-radius: var(--r-1) 0 0 var(--r-1);
+}
+
+.segmented button:last-child {
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+  margin-left: -1px;
+}
+
+.segmented button[aria-pressed="true"] {
+  position: relative;
+  z-index: 1;
+}
+
+.lines,
+.groups {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
+  gap: var(--sp-1);
   margin: 0 0 var(--sp-3);
   padding: 0;
   list-style: none;
 }
 
-.lines li {
-  display: flex;
+/*
+ * A line is a dense ROW, not a panel: ten to thirty of them have to stay
+ * scannable. One grid, so the id, the range and the buttons line up down the
+ * list however long a description is, and the readout hangs under the input.
+ */
+.line,
+.group {
+  padding: 2px 0;
+  border-radius: var(--r-1);
+}
+
+.line.bad {
+  background: light-dark(#fdf1f0, #2c1d1c);
+}
+
+.line-main,
+.group-main {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(6rem, 1fr) auto auto;
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
 }
 
-.lines .line-id {
-  flex: none;
-  width: 3.5rem;
+.line-id {
+  overflow: hidden;
   color: var(--text-dim);
   font-family: var(--mono);
   font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.lines .copies {
-  flex: none;
+/* The two copy fields around their en dash. */
+.range {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   color: var(--text-dim);
   font-size: var(--fs-sm);
+}
+
+input.count {
+  width: 3.2rem;
+  padding: 3px 4px;
+  text-align: center;
   font-variant-numeric: tabular-nums;
+  /* The spinners cost more width than they are worth; the arrow keys still step. */
+  appearance: textfield;
+}
+
+input.count::-webkit-inner-spin-button,
+input.count::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+input.count.wide {
+  width: 4rem;
+}
+
+.line-buttons {
+  display: inline-flex;
+  gap: 2px;
+}
+
+/*
+ * In a line row the chip has a column, not a panel, so the name takes what
+ * there is and the typeline gives way: the echo under the row names the card
+ * in full anyway.
+ */
+.line-main .card-chip .name {
+  max-width: 100%;
+}
+
+.line-main .card-chip .typeline {
+  flex: 0 1 auto;
+}
+
+button.icon {
+  width: 24px;
+  padding: 2px 0;
+  color: var(--text-dim);
+  line-height: 1.2;
+}
+
+button.icon:hover:not(:disabled):not([aria-disabled="true"]) {
+  color: var(--text);
+}
+
+/* Under the input, in the input's own column: what the tool understood. */
+.line-readout,
+.group-body {
+  grid-column: 2 / -1;
+  margin-left: calc(3.5rem + var(--sp-2));
+  min-width: 0;
+}
+
+.line-echo,
+.line-error {
+  margin: 0;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.line-echo {
+  color: var(--text-dim);
+}
+
+.line-error {
+  color: var(--bad);
+}
+
+.line-error code {
+  color: var(--text);
+}
+
+.line-error mark {
+  background: var(--mark-bg);
+  color: inherit;
+}
+
+.issues {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+}
+
+.issues .bad {
+  color: var(--bad);
+}
+.issues .warn {
+  color: var(--warn);
+}
+.issues .note {
+  color: var(--text-dim);
+}
+
+/* Two columns, so a wrapped issue lines up under its own first line rather
+   than under the severity tag. */
+.issues li {
+  display: grid;
+  grid-template-columns: 4.6rem minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
+
+/* The severity, said rather than only coloured. */
+.issues .tag {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.7;
+  text-transform: uppercase;
+}
+
+/* The remainder: a row in the list, but computed, so it has no controls. */
+.line.computed {
+  border-top: 1px dashed var(--line-strong);
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-2);
+  color: var(--text-dim);
+}
+
+.computed-text {
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.line.computed .range {
+  padding-right: var(--sp-2);
+}
+
+/* --- totals and groups --------------------------------------------------- */
+
+.totals {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-1);
+  background: var(--bg-sunken);
+}
+
+.totals p {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.totals .total-label {
+  flex: none;
+  width: 10rem;
+  color: var(--text-dim);
+}
+
+.totals strong {
+  flex: none;
+  width: 4rem;
+  text-align: right;
+}
+
+.totals .dim {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.totals .remainder {
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--line);
+}
+
+.totals .work {
+  margin-top: var(--sp-1);
+}
+
+.totals .line-error {
+  margin-top: var(--sp-1);
+}
+
+.group-body {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-1);
+  padding-bottom: var(--sp-2);
+}
+
+/* The picker's `flex: 1 1 18rem` is a WIDTH basis in the rows it was built
+   for; in this column it would be an 18rem-tall gap. */
+.group-body .picker {
+  flex: 0 0 auto;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A chip is as wide as its card needs, up to the panel; past that the
+   typeline gives way, as it does everywhere else. */
+.chips li {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+}
+
+input.narrow-name {
+  width: 10rem;
 }
 
 /* --- readouts and tables ------------------------------------------------ */

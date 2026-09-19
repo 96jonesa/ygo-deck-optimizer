@@ -1,6 +1,8 @@
-import { StrictMode, useEffect } from 'react';
+import { StrictMode, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { appStore, selectShows, useApp } from './store';
+import { ANALYZE_DEBOUNCE_MS, Debouncer } from './model/debounce';
+import { LatestOnly } from './model/latest';
+import { appStore, selectCardState, selectShows, useApp } from './store';
 import { CriteriaView } from './views/criteria-view';
 import { ResultsView } from './views/results-view';
 import { SettingsView } from './views/settings-view';
@@ -41,9 +43,37 @@ function useMainProcess(): void {
 }
 
 /**
+ * The Analysis (TDD §9), re-asked on every edit and whenever the card data
+ * changes under it. Held back ~150 ms, because an edit is a keystroke and an
+ * analysis is a round trip; the reply of a request a newer one has overtaken
+ * is dropped by its sequence number (TDD §12), so a slow answer can never
+ * overwrite a newer one. Asked for once, here, for the whole app: the template
+ * editor, the criteria editor and the results all read the one answer.
+ */
+function useAnalysis(): void {
+  const template = useApp((state) => state.template);
+  const cardState = useApp(selectCardState);
+  const setAnalysis = useApp((state) => state.setAnalysis);
+  const pending = useRef(new Debouncer(ANALYZE_DEBOUNCE_MS));
+  const latest = useRef(new LatestOnly());
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: cardState is a trigger, not an input — the template is analysed again against the new index
+  useEffect(() => {
+    const debouncer = pending.current;
+    debouncer.schedule(() => {
+      const seq = latest.current.next();
+      void window.api.analyzeTemplate({ seq, payload: template }).then((response) => {
+        if (latest.current.isCurrent(response.seq)) setAnalysis(response.payload);
+      });
+    });
+    return () => debouncer.cancel();
+  }, [template, cardState, setAnalysis]);
+}
+
+/**
  * What you edit on the left, what it scores on the right. The three regions
- * are the eventual template (M2d), criteria (M2e) and results (M2f) editors,
- * each already in the place and panel it will grow into.
+ * are the template (M2d), criteria (M2e) and results (M2f) editors, each in
+ * the place and panel it will grow into.
  */
 function Workspace() {
   return (
@@ -75,6 +105,7 @@ function Footer() {
 
 function App() {
   useMainProcess();
+  useAnalysis();
   // Settings is reachable in every state — including the one where the cards
   // will not load, which is often what it is needed for.
   const shows = useApp(selectShows);
