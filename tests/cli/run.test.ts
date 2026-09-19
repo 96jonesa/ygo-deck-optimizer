@@ -15,6 +15,7 @@ describe('runCli', () => {
     expect(code).toBe(EXIT_USAGE);
     expect(stdout).toBe('');
     expect(stderr).toMatch(/^usage: npm run cli -- <command>/);
+    expect(stderr).toMatch(/analyze <template\.json>/);
     expect(stderr).toMatch(/estimate <template\.json>/);
   });
 
@@ -31,6 +32,16 @@ describe('runCli', () => {
       expect(stdout).toMatch(/^usage: npm run cli -- <command>/);
       expect(stderr).toBe('');
     }
+  });
+
+  it('hands `analyze` its own arguments', async () => {
+    const help = await run(['analyze', '--help']);
+    expect(help.code).toBe(EXIT_OK);
+    expect(help.stdout).toMatch(/^usage: npm run cli -- analyze/);
+
+    const bare = await run(['analyze']);
+    expect(bare.code).toBe(EXIT_USAGE);
+    expect(bare.stderr).toMatch(/which template\?/);
   });
 
   it('hands `estimate` its own arguments', async () => {

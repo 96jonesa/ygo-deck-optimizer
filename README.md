@@ -18,7 +18,7 @@ combinatorial probability plus a card-database lookup layer.
 | --- | --- |
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done (in review)**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
-| M1 — exact engine + optimizer (headless) | **In progress**: M1a exact scorer |
+| M1 — exact engine + optimizer (headless) | **In progress**: M1a exact scorer, M1b compile + analyze |
 | M2 — app MVP | Not started |
 | M3 — polish | Not started |
 | M4 — release | Not started |
@@ -102,9 +102,30 @@ product** and is not shipped: it exists so the engine can be driven, and checked
 card data, before there is an app around it.
 
 ```sh
+npm run cli -- analyze  <template.json> --workdir <EDOPro dir> [--hand 5|6] [--json]
 npm run cli -- estimate <template.json> --workdir <EDOPro dir> \
     [--samples 200000] [--seed 1] [--hand 5|6] [--ratio 3,3,5,2,0,7,3 | --at max|min]
 ```
+
+`analyze` prints everything the tool understands of a template **before anything is scored**
+(`src/core/model/analyze.ts`, the Analysis API of [TDD §9](docs/TDD.md)) — the same value the
+app will recompute on every edit. It scores nothing and lists nothing: ratios and class vectors
+are counted in closed form, so it stays instant when there are $`10^{17}`$ of them. `--json`
+prints the raw `Analysis` value and nothing else. It exits `1` when the template has errors, and
+prints the whole report either way — a line that does not parse costs only what needed it.
+
+```sh
+EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- analyze examples/motivating.json
+```
+
+| Section | Content |
+| --- | --- |
+| Card database, Template, Criteria | As for `estimate`, below, without the chosen counts; a line or criterion that was not understood says so |
+| Matching | Per requirement, the lines that fill it, then the **near misses** — lines that could hold such a card but do not say so — each with what is unstated and the line that *would* count: ``near miss: monster — Level unstated; a `level 4 or lower monster` line would count``. Per limit, the lines it counts and the under-specified lines it **ignores**, with how many cards they can hold. Last, the lines that match nothing and so cannot affect the odds |
+| Totals | Read-only totals by kind, from the lines that *imply* the kind: `Known monsters 7–14`, `Known spells 0–13`, and `Unspecified 13–33` — what the lines leave of the deck |
+| Classes | What `compileProblem` hands the engine: lines the criteria cannot tell apart are merged into one class whose range is the sum of theirs, and lines that match nothing form the blank class. The example's seven lines and remainder are five classes |
+| Work | Raw ratios (4,096), class vectors an exhaustive run would score (128), products summed per score, and the time that comes to |
+| Errors, Warnings, Notices | Each named by the line, group or criterion it belongs to: a description that matches no card, a named card over three copies, lines that share a copy limit (Harpie Lady and Harpie Lady 1) and together exceed it, ranges that cannot sum to the deck size; a requirement no line fills, a criterion that can never be met or names a card the template lacks; a criterion another already covers, a limit that ignores under-specified cards |
 
 `estimate` loads the install's card databases and `strings.conf` layers, resolves a template
 file ([TDD §14](docs/TDD.md)), and estimates the odds of a successful opening hand **at one
@@ -128,8 +149,8 @@ What the output means, top to bottom (all of it on stdout):
 | Card database | Databases loaded and skipped, cards in the Main Deck population, `replacedRows` (rows a later database updated — a delta repository doing its job), `conflicts` (ids on which two repositories disagree — the one figure worth worrying about), and how many archetype names were found, or that no `strings.conf` was |
 | Template | Each line as written, the parse echo ("understood as"), how many cards in the database match it, its range, and the count chosen for this estimate; the remainder last |
 | Criteria | Each criterion as written and the flat alternatives it expands to; a hand succeeds if it meets any one |
-| Matching | For every distinct requirement or limit description, the lines that fill it (or that it counts). This is where `monster` visibly does **not** fill `level 4 or lower monster`, and where lines that match nothing — and so cannot affect the odds — are listed |
-| Warnings | A requirement no line fills, alternatives that need more cards than a hand, a picker-chosen card missing from the database |
+| Matching | For every distinct requirement or limit description, the lines that fill it (or that it counts), and its near misses, as in `analyze`. This is where `monster` visibly does **not** fill `level 4 or lower monster`, and where lines that match nothing — and so cannot affect the odds — are listed |
+| Warnings, Notices | As in `analyze`: a requirement no line fills, a criterion that can never be met, a picker-chosen card missing from the database; a criterion another already covers |
 | `P(success) = 0.0701  (95% CI 0.0696–0.0706, 1,000,000 samples, seed 1)` | The estimate, its 95% **Wilson score** interval, then the hit count and the standard error |
 
 Progress (`done / total`, percent, elapsed, ETA) goes to **stderr**, one plain line per report,

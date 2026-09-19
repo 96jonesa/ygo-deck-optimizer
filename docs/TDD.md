@@ -324,7 +324,9 @@ Steps:
 
 1. **Match matrix.** For every line (plus the remainder) and every distinct description appearing in any flat criterion, compute `implies(line, desc)`.
 2. **Classes.** Lines with identical rows in the match matrix are interchangeable for scoring and merge into one class whose count is the sum of theirs; the class range is the sum of the line ranges (integer intervals sum to an integer interval). Lines with an all-false row are *irrelevant* (PRD §5.6) and form the **blank** class (index 0), whose bit appears in no mask. The remainder usually joins them — but **not always**: its description is the universe, so it fills any requirement that is itself the universe (`1x card`), and then it is an ordinary class with its own bit while the blank class may be empty (no lines, total 0). Found by the M1a oracle, which hit this in over 30 generated problems; `compile` must not assume the remainder is blank. Class count is capped at 30 **including blank**, so every mask is a non-negative 32-bit integer; exceeding it is a clear error. `validateProblem` enforces this along with "the blank bit appears in no mask" — which M1a showed is a contract for merging rather than a numerical necessity (the scorer never reads the blank count), and is kept because it makes classes unambiguous.
-3. **Slots and limits** become class bitmasks.
+3. **Slots and limits** become class bitmasks. A limit that can never bind ($`n \ge`$ the largest hand) or that counts nothing (mask 0) is dropped and listed in `droppedLimits` so the UI can say so; a *slot* with mask 0 is kept — nothing fills it, and the criterion scores 0.
+
+`compileProblem` returns the `Problem` together with what a `Problem` deliberately forgets: per-class member lines with their ranges (for expanding a class vector back to line ratios, and for the sweep tables of §11.2) and `classOfLine`. Classes are ordered blank, then by first member line in template order, remainder last. A first/second blend is compiled from a template resolved at the **larger** hand; compiling for a hand larger than the one the criteria were expanded for is refused, since its six-slot alternatives are already gone.
 
 ## 9. Analysis API
 
@@ -339,7 +341,9 @@ Steps:
 | totals | derived read-only totals by kind; remainder range; an error if the ranges cannot sum to $`N`$ |
 | work | number of raw ratios, number of scored class vectors, size of the success set, and an ETA from a calibrated per-term cost |
 
-"Compatible" for near misses is box intersection being non-empty — the only place that relation is used, and only to produce advice.
+"Compatible" for near misses is box intersection being non-empty — the only place that relation is used, and only to produce advice. A near miss names the **first** dimension (kind, Level, ATK, DEF, Attribute, Type, flags, sub-kind, archetype) on which the line's boxes escape the requirement's, with a reason (*unstated*, *too broad*, *differs*); the suggestion is the conjunction of line and requirement, normalized by the axioms, and offered only if it prints, re-parses, implies both, and is satisfiable — true of 97% of generated near misses. Every generic line is technically a near miss of a *named-card* requirement; those are kept in the data but hidden once some line fills the requirement, since a generic line stands for cards other than the template's named ones (§6.2).
+
+Severities are `error` (blocks a run), `warning`, and `notice` (subsumption, a limit ignoring under-specified lines). Derived totals, the remainder range and a limit's ignored total are the **achievable** range given the deck size, not the plain sum of line ranges (30–35, not a naive 27–35, when the rest of the template forces it). Counts that can pass $`2^{53}`$ are `number | string` — exact decimal digits as a string, computed with BigInt inside the counting DP only. Measured against the real 12,132-card index: 4.8 ms cold and 0.55 ms with the caller-owned match memo for the motivating example; 54 ms cold in the worst case (30 lines, 27 criteria, 30 classes) — inside the 150 ms debounce throughout.
 
 ## 10. Probability engine
 
@@ -398,7 +402,7 @@ For the motivating example (taking card A to be a Level 4 monster and card B a N
 
 ### 11.3 Cost, progress, cancellation
 
-Work is (scored vectors) × (success-set size) multiply-adds; `analyze` reports both before the run, with an ETA from a per-term cost calibrated once at startup. There is no hidden cap: the UI shows the estimate and lets the user run, narrow ranges, or cancel. The optimizer reports `{ done, total, elapsedMs, etaMs }` through a callback at most every 100 ms (the CLI harness prints it to stderr, flushed), and checks a cancellation flag at the same cadence. `total` is exact — the vector count is computed up front by a counting DP over class ranges.
+Work is (scored vectors) × (success-set size) multiply-adds; `analyze` reports both before the run, with an ETA from a per-term cost calibrated once at startup. There is no hidden cap, but there *is* a wall: `analyze` measured a plausible 30-line template at $`4.8 \times 10^{10}`$ class vectors — about 23 days. So an estimate above a threshold (default 60 s) requires an explicit confirmation in the app and `--force` in the harness, and the vector total, which can itself pass $`2^{53}`$, is carried as a count (§9), never assumed to be a safe integer. Narrowing ranges, not waiting, is the intended response; heuristic search stays in PRD §9. The optimizer reports `{ done, total, elapsedMs, etaMs }` through a callback at most every 100 ms (the CLI harness prints it to stderr, flushed), and checks a cancellation flag at the same cadence. `total` is exact — the vector count is computed up front by a counting DP over class ranges.
 
 The enumeration is shardable by the first class's value, so a multi-worker fan-out is a later drop-in; v1 runs one worker. A prefix-sharing trie over the success set (so partial products are reused across sibling vectors in the DFS) is the known next optimization; it is **not** built until measurement says it is needed.
 
@@ -491,9 +495,9 @@ Tests mirror sources in a parallel tree (`src/core/desc/implies.ts` → `tests/c
 src/
   core/                       # pure TS: no electron, no node:, no DOM
     cards/    constants.ts  record.ts  index.ts  setnames.ts  vocabulary.ts
-    desc/     ast.ts  lexer.ts  parser.ts  print.ts  evaluate.ts  boxes.ts  implies.ts
+    desc/     ast.ts  context.ts  lexer.ts  parser.ts  print.ts  evaluate.ts  boxes.ts  implies.ts  near-miss.ts
     criteria/ ast.ts  lexer.ts  parser.ts  print.ts  expand.ts  subsumes.ts
-    model/    template.ts  migrate.ts  problem.ts  compile.ts  analyze.ts
+    model/    template.ts  migrate.ts  problem.ts  compile.ts  analyze.ts  ranges.ts
     prob/     binomial.ts  matcher.ts  success-set.ts  scorer.ts  montecarlo.ts
     opt/      enumerate.ts  optimizer.ts
     util/     normalize.ts  prng.ts  progress.ts   # progress lives here: prob/ and opt/ both report it

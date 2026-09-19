@@ -152,6 +152,22 @@ describe('subsumes', () => {
     });
   });
 
+  it('decides by a relation of the caller’s, given one in place of a context', () => {
+    const A = flat([[1, 'level 4 monster']], [[1, 'trap']]);
+    const B = flat([[1, 'monster']], [[2, 'counter trap']]);
+    const asked: string[] = [];
+    const relation = (L: Description, q: Description) => {
+      asked.push(`${JSON.stringify(L)} => ${JSON.stringify(q)}`);
+      return implies(L, q, ctx);
+    };
+    expect(subsumes(B, A, relation)).toBe(subsumes(B, A, ctx));
+    expect(subsumes(A, B, relation)).toBe(subsumes(A, B, ctx));
+    // B over A: B's limit against A's, then A's slot against B's. A over B asks nothing:
+    // B's looser limit cannot cover A's. `implies` was never called behind the relation's back.
+    expect(asked).toHaveLength(2);
+    expect(subsumes(B, A, () => false)).toBe(false);
+  });
+
   it('is only a sufficient condition: two limits of A never combine to cover one of B', () => {
     // No monster and no spell is no "monster or spell" — true of every hand, and not detected.
     const A = flat(
@@ -198,6 +214,12 @@ describe('findSubsumed', () => {
       flat([[1, 'level 0-2 monster or level 3-4 monster']]),
     ];
     expect(findSubsumed(criteria, ctx)).toEqual([{ subsumed: 2, by: 0 }]);
+  });
+
+  it('takes a relation in place of a context, as `subsumes` does', () => {
+    const criteria = [flat([[1, 'level 4 monster']]), flat([[1, 'monster']])];
+    expect(findSubsumed(criteria, (L, q) => implies(L, q, ctx))).toEqual([{ subsumed: 0, by: 1 }]);
+    expect(findSubsumed(criteria, () => false)).toEqual([]);
   });
 
   it('passes the hand size on', () => {
