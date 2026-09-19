@@ -199,12 +199,32 @@ describe('validateTemplate', () => {
   });
 
   it('wants text on a text line, and an object for a stored AST', () => {
-    expect(errorsOf(withLine({ id: 'l1', text: '  ', min: 0, max: 1 }))).toEqual([
-      'lines[0] ("l1"): `text` must be non-empty text, not "  "',
+    expect(errorsOf(withLine({ id: 'l1', text: 7, min: 0, max: 1 }))).toEqual([
+      'lines[0] ("l1"): `text` must be text, not 7',
     ]);
     expect(
       errorsOf(withLine({ id: 'l1', text: 'monster', desc: 'monster', min: 0, max: 1 })),
     ).toEqual(['lines[0] ("l1"): `desc` must be a description object, not "monster"']);
+  });
+
+  it('accepts a line or criterion whose text is still empty', () => {
+    // A half-written template is full of these: the user has added a line and
+    // not typed it yet. Rejecting it here would make the WHOLE template
+    // invalid, so `analyze` could answer nothing at all and the editor would
+    // lose every other line's readout. An empty description is just a
+    // description that does not parse, which `analyze` reports on its own line.
+    expect(errorsOf(withLine({ id: 'l1', text: '', min: 0, max: 1 }))).toEqual([]);
+    expect(errorsOf(withLine({ id: 'l1', text: '   ', min: 0, max: 1 }))).toEqual([]);
+    expect(errorsOf(withField('criteria', [{ id: 'c1', text: '' }]))).toEqual([]);
+  });
+
+  it('still wants non-empty text where a blank would be meaningless', () => {
+    expect(errorsOf(withLine({ id: '', text: 'monster', min: 0, max: 1 }))).toEqual([
+      'lines[0] (""): `id` must be non-empty text, not ""',
+    ]);
+    expect(
+      errorsOf(withLine({ id: 'l1', card: { passcode: 14558127, name: '' }, min: 0, max: 1 })),
+    ).toEqual(['lines[0] ("l1"): `card.name` must be non-empty text, not ""']);
   });
 
   it('rejects duplicate ids within lines, criteria and groups — once each', () => {
