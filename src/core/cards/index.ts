@@ -176,6 +176,30 @@ function byRank(a: Entry, b: Entry): number {
   return a.card.name.length - b.card.name.length || byName(a, b);
 }
 
+/** True when `name` has a word boundary at `at` — the end of the name, or a
+ * character that is not a letter or digit. */
+function endsWord(name: string, at: number): boolean {
+  const next = name[at];
+  return next === undefined || !/[\p{L}\p{N}]/u.test(next);
+}
+
+/**
+ * Ranking within the prefix class. A query that ends on a word boundary beats
+ * one that cuts a word in half, and only then do shorter names win.
+ *
+ * Length alone is not enough, and neither is alphabetical order: `ash` has to
+ * find Ash Blossom & Joyous Spring rather than the shorter Ashoka Pillar,
+ * while `pot` has to find Pot of Greed rather than the alphabetically earlier
+ * Pot of Acquisitiveness. A whole typed word separates the two cases.
+ */
+function byPrefixRank(needle: string): (a: Entry, b: Entry) => number {
+  return (a, b) => {
+    const aWord = endsWord(a.normalized, needle.length);
+    if (aWord !== endsWord(b.normalized, needle.length)) return aWord ? -1 : 1;
+    return byRank(a, b);
+  };
+}
+
 /** First index in `entries` (sorted by `byName`) for which `pred` is false. */
 function partitionPoint(entries: readonly Entry[], pred: (entry: Entry) => boolean): number {
   let lo = 0;
@@ -377,7 +401,7 @@ export class CardIndex {
       this.alphabetical,
       (e) => e.normalized < needle || e.normalized.startsWith(needle),
     );
-    const hits = this.alphabetical.slice(start, end).sort(byRank).slice(0, limit);
+    const hits = this.alphabetical.slice(start, end).sort(byPrefixRank(needle)).slice(0, limit);
 
     for (const entry of this.ranked) {
       if (hits.length >= limit) break;

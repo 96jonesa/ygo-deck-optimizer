@@ -107,6 +107,16 @@ describe.skipIf(!BABELCDB_PATH)('BabelCDB@47fc046 cards.cdb', async () => {
     expect(index.search('Dark Magician').filter((c) => c.name === 'Dark Magician')).toHaveLength(1);
   });
 
+  it('finds the cards a player actually types three letters of', () => {
+    // Ranking regression guards, on the real pool rather than a fixture: both
+    // of these were wrong under one of the two obvious ranking rules.
+    expect(index.search('ash')[0]?.name).toBe('Ash Blossom & Joyous Spring');
+    expect(index.search('pot')[0]?.name).toBe('Pot of Greed');
+    expect(index.search('maxx')[0]?.name).toBe('Maxx "C"');
+    expect(index.search('nibiru')[0]?.name).toBe('Nibiru, the Primal Being');
+    expect(index.search('called by')[0]?.name).toBe('Called by the Grave');
+  });
+
   it('keeps Black Luster Soldier 10000100 as its own record, limited with the Ritual', () => {
     expect(index.get(10000100)).toMatchObject({ name: 'Black Luster Soldier', limitCode: 5405694 });
     expect(index.get(5405694)).toMatchObject({ name: 'Black Luster Soldier', limitCode: 5405694 });
