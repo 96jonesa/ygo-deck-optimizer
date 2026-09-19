@@ -17,8 +17,8 @@ combinatorial probability plus a card-database lookup layer.
 | Milestone | State |
 | --- | --- |
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
-| M0 — de-risk spike (headless) | **Done, pending review**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
-| M1 — exact engine + optimizer (headless) | Not started |
+| M0 — de-risk spike (headless) | **Done (in review)**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
+| M1 — exact engine + optimizer (headless) | **In progress**: M1a exact scorer |
 | M2 — app MVP | Not started |
 | M3 — polish | Not started |
 | M4 — release | Not started |
@@ -81,6 +81,20 @@ A hand succeeds if it meets any one criterion (`src/core/criteria`: `parseCriter
 printer always uses. Nesting is surface syntax: `1x [A] and 1x [B] and (1x [C] or 2x [D])` expands
 to the flat alternatives `(A, B, C)` and `(A, B, 2× D)`, all the engine sees (at most 256 of them).
 
+## Exact probabilities
+
+Adjacent ratios differ by well under a percentage point — less than the noise of any affordable
+sample — so decks are ranked by **exact** odds (`src/core/prob`: `binomial`, `matcher`,
+`success-set`, `scorer`). Whether a hand succeeds depends only on how many cards of each class
+it holds (decided by Hall's condition, no search), so the successful hand compositions are found
+once per problem and every candidate deck is then a short sum of products of binomials.
+`createScorer(problem, H).score(classTotals)` returns `{ num, den }`: two exact integers — every
+numerator is at most $`\binom{60}{6} = 50{,}063{,}860`$, far below $`2^{53}`$, so there is no
+rounding, no BigInt and no epsilon; two decks tie iff their numerators are equal (`compareScores`
+ranks a going-first / going-second blend the same way). The Monte Carlo engine below shares no code
+with any of this and is the cross-check: the two must agree within five standard errors on generated
+problems at real deck sizes, and the scorer must match a count of every hand of small decks exactly.
+
 ## Command-line harness
 
 A development harness over `src/core` (`src/cli`, run through `tsx`). It is **not the
@@ -125,7 +139,7 @@ the command line is.
 
 The Monte Carlo engine is the project's independent oracle (TDD §10.4): it draws concrete cards
 tagged with their line and assigns them to requirement slots by brute force, sharing no code
-with the exact engine that M1 builds and will be tested against it. With `EDOPRO_WORKDIR` set,
+with the exact engine (`src/core/prob/scorer.ts`), which is tested against it. With `EDOPRO_WORKDIR` set,
 `tests/cli/realdata.test.ts` runs this command on the example against the real install and
 checks the estimate against the exact value (46,185 / 658,008 ≈ 0.0702), computed in the test
 by an independent route.
