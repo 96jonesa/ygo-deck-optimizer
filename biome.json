@@ -29,6 +29,30 @@
       }
     },
     {
+      "includes": ["src/renderer/**", "src/preload/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**/core/**", "**/main/**", "**/worker/**", "**/cli/**"],
+                    "message": "The renderer is UI only (TDD §3): it talks to main through window.api and takes its types from src/shared, never from the engine or the main process."
+                  },
+                  {
+                    "group": ["node:*", "fs", "path", "os", "child_process", "worker_threads"],
+                    "message": "The renderer is sandboxed (TDD §3): no Node built-ins."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/core/**"],
       "linter": {
         "rules": {

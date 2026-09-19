@@ -19,14 +19,23 @@ combinatorial probability plus a card-database lookup layer.
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done (in review)**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | **Done (in review)**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`) |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker) |
 | M3 — polish | Not started |
 | M4 — release | Not started |
 
-Today the app finds your EDOPro install, loads its cards, and shows what it loaded, with one
-box that parses a description against them — a placeholder window that proves the main process
-end to end (see [Running the app](#running-the-app)). Scoring and optimizing are reachable only
-through the [command-line harness](#command-line-harness).
+### What the app does so far
+
+A single window with a status bar — cards, databases, archetype names, conflicts, and
+**Re-index** — over a workspace laid out as *template* and *criteria* on the left, *results* on
+the right. With no EDOPro install found, a first-run panel explains what EDOPro is, why it is
+needed, and that nothing is uploaded anywhere, then asks for the folder; a settings panel holds
+the folder, the pre-release toggle and the plateau width. You can search the card database by
+name in a keyboard-operable picker and add named cards to the template, type a description and
+see it parsed and counted against the real cards, and load the motivating example and score it.
+
+The template and criteria **editors** (lines, groups, copy ranges, criterion rows) are M2d and
+M2e, and the full results view — ranked table, plateau, sweep chart, per-criterion breakdown —
+is M2f; until then those live in the [command-line harness](#command-line-harness).
 
 ## Description language
 

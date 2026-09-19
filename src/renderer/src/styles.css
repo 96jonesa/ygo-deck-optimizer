@@ -1,29 +1,692 @@
+/*
+ * One hand-written stylesheet, as the sibling has: no framework, no CSS-in-JS.
+ * Light and dark come from `color-scheme: light dark` plus `light-dark()`, so
+ * every colour is declared once and the OS setting picks the side; native
+ * controls and system colours follow the same switch on their own.
+ */
+
 :root {
   color-scheme: light dark;
+
+  --bg: light-dark(#f7f7f9, #191a1d);
+  --bg-panel: light-dark(#ffffff, #212328);
+  --bg-sunken: light-dark(#f0f1f4, #16171a);
+  --bg-soft: light-dark(#f4f5f7, #2a2c32);
+  --text: light-dark(#191a1d, #e8eaed);
+  --text-dim: light-dark(#5b6068, #9aa0aa);
+  --line: light-dark(#dfe1e6, #33363c);
+  --line-strong: light-dark(#c2c6cd, #4a4e56);
+  --accent: light-dark(#2d5fd0, #7ea6ff);
+  --accent-soft: light-dark(#e9efff, #1d2942);
+  --ok: light-dark(#1c7a3e, #5ec983);
+  --warn: light-dark(#8a5300, #e3a94a);
+  --bad: light-dark(#b3261e, #f28b82);
+  --mark-bg: light-dark(#fbe1a8, #59431a);
+  --shadow-pop: 0 8px 24px light-dark(rgba(22, 24, 30, 0.16), rgba(0, 0, 0, 0.55));
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  --r-1: 4px;
+  --r-2: 8px;
+  --r-pill: 999px;
+
+  --fs-sm: 12px;
+  --fs-base: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 14px;
+  font-size: var(--fs-base);
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
 }
 
-.shell {
-  padding: 24px;
+/* One ring, everywhere, and never suppressed: keyboard use has to be visible. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-.shell h1 {
-  margin: 0 0 8px;
-  font-size: 20px;
+button {
+  font: inherit;
+  color: inherit;
+  padding: 5px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-1);
+  background: var(--bg-panel);
+  cursor: pointer;
 }
 
-.shell .meta {
-  color: GrayText;
+button:hover:not(:disabled) {
+  background: var(--bg-soft);
 }
 
-.shell h2 {
-  margin: 24px 0 8px;
-  font-size: 15px;
+button:disabled {
+  color: var(--text-dim);
+  cursor: default;
+  opacity: 0.6;
+}
+
+button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: light-dark(#ffffff, #10131a);
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* A disabled primary keeps no fill: a faded accent still reads as "press me". */
+button.primary:disabled {
+  border-color: var(--line-strong);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+button.quiet {
+  border-color: transparent;
+  background: none;
+}
+
+button.quiet:hover:not(:disabled) {
+  background: var(--bg-soft);
+}
+
+button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+input,
+select {
+  font: inherit;
+  color: inherit;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-1);
+  background: var(--bg-panel);
+}
+
+input:read-only {
+  background: var(--bg-sunken);
+  color: var(--text-dim);
+}
+
+input.narrow {
+  width: 6rem;
+  min-width: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+code,
+.mono {
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* --- the shell ----------------------------------------------------------- */
+
+.app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100vh;
+}
+
+/*
+ * Title and card-database status. Three columns — title, status, actions —
+ * so the actions never move when the status text changes length; the status
+ * itself truncates instead of pushing anything about.
+ */
+.statusbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+
+.statusbar h1 {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.status-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--text-dim);
+}
+
+.dot.ok {
+  background: var(--ok);
+}
+.dot.warn {
+  background: var(--warn);
+}
+.dot.bad {
+  background: var(--bad);
+}
+.dot.busy {
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.counts {
+  display: flex;
+  flex: none;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.counts li {
+  display: flex;
+  gap: 5px;
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--bg-soft);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.counts b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.statusbar-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.main {
+  overflow: auto;
+  padding: var(--sp-5);
+}
+
+/*
+ * The workspace: what you edit on the left, what it scores on the right, so a
+ * ratio and its odds are on screen together. The template and criteria editors
+ * (M2d, M2e) fill the left column; results (M2f) the right, which is the wider
+ * one — it holds the ranked table and the sweep chart.
+ */
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: var(--sp-5);
+  align-items: start;
+  max-width: 1500px;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  min-width: 0;
+}
+
+@media (max-width: 1000px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.panel {
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  background: var(--bg-panel);
+}
+
+.panel > h2 {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.panel > h3 {
+  margin: var(--sp-4) 0 var(--sp-2);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.hint {
+  margin: 0 0 var(--sp-3);
+  max-width: 62ch;
+  color: var(--text-dim);
+}
+
+.hint.flush {
+  margin: 0;
+}
+
+/* A hint that follows something rather than introducing it. */
+.hint.trailing {
+  margin: var(--sp-3) 0 0;
+}
+
+/* What a later slice puts here, said once and quietly. */
+.seam {
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 2px solid var(--line-strong);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.footer {
+  display: flex;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-top: 1px solid var(--line);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+/* --- forms -------------------------------------------------------------- */
+
+.row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+/* The row's leading label. `:not(.check)` because a checkbox's own wrapper is a
+   label too, and giving it this width breaks its text onto a second line. */
+.row > label:not(.check) {
+  flex: none;
+  width: 11rem;
+  color: var(--text-dim);
+}
+
+.row input[type="text"] {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+/* Beats the flex-basis above, which would otherwise stretch a 3-character field. */
+.row input.narrow {
+  flex: 0 0 6rem;
+}
+
+.row .after {
+  color: var(--text-dim);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  cursor: pointer;
+}
+
+.field-note {
+  margin: calc(-1 * var(--sp-2)) 0 var(--sp-3) 11rem;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.field-note.bad {
+  color: var(--bad);
+}
+
+/* A row of buttons; `spaced` when it follows prose rather than a heading. */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.actions.spaced {
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+}
+
+/* --- setup -------------------------------------------------------------- */
+
+/* A column of prose: 62ch is the measure the first-run explanation reads at. */
+.setup {
+  max-width: 62ch;
+  margin: var(--sp-6) auto;
+}
+
+/* Settings is rows, not prose, and a folder path needs the room. */
+.setup.wide {
+  max-width: 80ch;
+}
+
+.setup p {
+  margin: 0 0 var(--sp-3);
+}
+
+.probe {
+  margin-top: var(--sp-4);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ok);
+  border-radius: var(--r-1);
+  background: var(--bg-sunken);
+}
+
+.probe.bad {
+  border-left-color: var(--bad);
+}
+
+.probe p {
+  margin: 0;
+}
+
+.probe .path {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+
+.probe ul {
+  margin: var(--sp-2) 0 0;
+  padding-left: var(--sp-4);
+}
+
+.probe .problem {
+  color: var(--bad);
+}
+
+.probe .note {
+  color: var(--text-dim);
+}
+
+/* Shows up only if a load ever takes long enough to be worth saying. */
+.spinner {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: var(--r-pill);
+  opacity: 0;
+  animation:
+    spin 0.8s linear infinite,
+    show 1ms linear 400ms forwards;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes show {
+  to {
+    opacity: 1;
+  }
+}
+
+/* --- the card picker ---------------------------------------------------- */
+
+.picker {
+  position: relative;
+  min-width: 0;
+  flex: 1 1 18rem;
+}
+
+.picker input {
+  width: 100%;
+}
+
+/*
+ * As wide as its rows need, and never narrower than the field. Card names run
+ * long ("Black Luster Soldier - Envoy of the Beginning") and the name is what
+ * is being read, so the popup grows rather than cutting it off.
+ */
+.hits {
+  position: absolute;
+  z-index: 10;
+  left: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: min(42rem, 80vw);
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-1);
+  max-height: 17rem;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-2);
+  /* Opaque: the popup sits over whatever is behind it. */
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-pop);
+}
+
+.hit {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-1);
+  cursor: pointer;
+}
+
+.hit[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+/* Past the popup's own maximum the typeline gives way first: it is the hint, the name is the answer. */
+.hit-name {
+  flex: 0 0 auto;
+  max-width: 62%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.hit-type {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Two cards can share a name: then the typeline is the only thing that tells them apart. */
+.hit.ambiguous .hit-type {
+  color: var(--text);
+}
+
+.picker-note {
+  margin: var(--sp-1) 0 0;
+  min-height: 1.45em;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.card-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 3px 3px var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--bg-soft);
+}
+
+/*
+ * In a narrow row the typeline gives way and the name stays: the name is the
+ * card, the typeline only tells it from a namesake. The shrink weights do
+ * that — 20 against 1 — while still letting a very long name ellipsis rather
+ * than push the remove button out of the chip.
+ */
+.card-chip .name {
+  flex: 0 0 auto;
+  max-width: 62%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.card-chip .typeline {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.card-chip button {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--text-dim);
+  line-height: 1;
+}
+
+.card-chip button:hover {
+  background: var(--line);
+  color: var(--text);
+}
+
+.lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  padding: 0;
+  list-style: none;
+}
+
+.lines li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.lines .line-id {
+  flex: none;
+  width: 3.5rem;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+}
+
+.lines .copies {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- readouts and tables ------------------------------------------------ */
+
+.desc {
+  width: 100%;
+}
+
+.readout {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: var(--r-1);
+  background: var(--bg-sunken);
+}
+
+.readout p {
+  margin: 0 0 var(--sp-1);
+}
+
+.readout p:last-child {
+  margin-bottom: 0;
+}
+
+.readout.bad {
+  color: var(--bad);
+}
+
+.readout.bad code {
+  color: var(--text);
+}
+
+ul.readout {
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-5);
+}
+
+.readout mark {
+  background: var(--mark-bg);
+  color: inherit;
 }
 
 .rows {
@@ -31,47 +694,55 @@ body {
 }
 
 .rows th {
-  padding: 2px 16px 2px 0;
+  padding: 2px var(--sp-4) 2px 0;
   text-align: left;
   font-weight: normal;
-  color: GrayText;
+  color: var(--text-dim);
 }
 
-.probe.bad,
-.readout.bad {
-  color: #b3261e;
-}
-
-.probe .note {
-  color: GrayText;
-}
-
-.desc {
-  width: 100%;
-  max-width: 560px;
-  padding: 6px 8px;
-  font: inherit;
-}
-
-.readout mark {
-  background: #f9dedc;
-  color: inherit;
+.rows td {
+  padding: 2px var(--sp-4) 2px 0;
+  overflow-wrap: anywhere;
 }
 
 .rows td.num {
-  padding: 2px 16px 2px 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
 .rows td.note {
-  color: GrayText;
+  color: var(--text-dim);
+}
+
+/*
+ * A table of numbers does not wrap: `46,185 / 658,008` broken over three lines
+ * is unreadable. It overflows its `.scroll-x` box instead. Prose cells — the
+ * note beside a ratio — are the exception.
+ */
+.rows.tight th,
+.rows.tight td {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.rows.tight td.note {
+  white-space: normal;
+}
+
+.scroll-x {
+  overflow-x: auto;
 }
 
 .rows.ranked {
-  margin-top: 12px;
+  margin-top: var(--sp-3);
 }
 
 .rows.ranked th {
   text-align: right;
+  border-bottom: 1px solid var(--line);
+}
+
+.progress {
+  margin: var(--sp-3) 0 0;
+  font-variant-numeric: tabular-nums;
 }
