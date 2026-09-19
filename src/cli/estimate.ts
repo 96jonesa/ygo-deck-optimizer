@@ -1,29 +1,23 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import path from 'node:path';
-import initSqlJs from 'sql.js';
-import {
-  type ResolvedFlat,
-  type ResolvedLine,
-  type ResolvedTemplate,
-  resolveTemplate,
-} from '../core/model/compile';
-import { HAND_SIZES, validateTemplate } from '../core/model/template';
+import { analyze } from '../core/model/analyze';
+import { type ResolvedLine, type ResolvedTemplate, resolveTemplate } from '../core/model/compile';
 import { estimate } from '../core/prob/montecarlo';
 import type { Progress } from '../core/util/progress';
-import { collectStringsConf, loadCardIndex, loadSetnames } from '../main/edopro/loader';
+import {
+  type CliIo,
+  EXIT_OK,
+  EXIT_USAGE,
+  fail,
+  handArg,
+  loadInstall,
+  parseFlags,
+  readTemplate,
+  templateArg,
+  wholeNumber,
+  workdirArg,
+} from './common';
+import { formatEstimateReport, int } from './report';
 
-/** Where a command reads its environment and writes its output; `process` satisfies it. */
-export interface CliIo {
-  stdout: { write(text: string): unknown };
-  stderr: { write(text: string): unknown };
-  env: Record<string, string | undefined>;
-}
-
-export const EXIT_OK = 0;
-/** The template, or the card data, is at fault. */
-export const EXIT_FAILED = 1;
-/** The command line is at fault. */
-export const EXIT_USAGE = 2;
+export { type CliIo, EXIT_FAILED, EXIT_OK, EXIT_USAGE } from './common';
 
 export const ESTIMATE_USAGE = `usage: npm run cli -- estimate <template.json> [options]
 
@@ -54,39 +48,17 @@ export type ParsedArgs =
   | { ok: false; message: string };
 
 const VALUE_FLAGS = ['--workdir', '--samples', '--seed', '--hand', '--ratio', '--at'] as const;
-type ValueFlag = (typeof VALUE_FLAGS)[number];
-
-function wholeNumber(text: string): number | undefined {
-  return /^[0-9]{1,15}$/.test(text) ? Number(text) : undefined;
-}
 
 /** Parse `estimate`'s arguments; both `--flag value` and `--flag=value` are read. */
 export function parseEstimateArgs(argv: readonly string[], env: CliIo['env']): ParsedArgs {
-  if (argv.includes('-h') || argv.includes('--help')) return { ok: true, help: true };
-  const values = new Map<ValueFlag, string>();
-  const positional: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (!arg.startsWith('--')) {
-      positional.push(arg);
-      continue;
-    }
-    const equals = arg.indexOf('=');
-    const flag = (equals < 0 ? arg : arg.slice(0, equals)) as ValueFlag;
-    if (!VALUE_FLAGS.includes(flag)) return { ok: false, message: `unknown option ${flag}` };
-    if (values.has(flag)) return { ok: false, message: `${flag} is given twice` };
-    const value = equals < 0 ? argv[++i] : arg.slice(equals + 1);
-    if (value === undefined || value === '') return { ok: false, message: `${flag} needs a value` };
-    values.set(flag, value);
-  }
-
-  if (positional.length === 0) return { ok: false, message: 'which template? give a .json file' };
-  if (positional.length > 1)
-    return { ok: false, message: `one template at a time, not ${positional.join(' and ')}` };
-
-  const workdir = values.get('--workdir') ?? env.EDOPRO_WORKDIR;
-  if (workdir === undefined || workdir === '')
-    return { ok: false, message: 'no EDOPro install: pass --workdir <dir> or set EDOPRO_WORKDIR' };
+  const flags = parseFlags(argv, VALUE_FLAGS);
+  if (!flags.ok) return flags;
+  if (flags.help) return { ok: true, help: true };
+  const { values } = flags;
+  const template = templateArg(flags.positional);
+  if (!template.ok) return template;
+  const workdir = workdirArg(values.get('--workdir'), env);
+  if (!workdir.ok) return workdir;
 
   const samples = wholeNumber(values.get('--samples') ?? '200000');
   if (samples === undefined || samples < 1)
@@ -101,15 +73,16 @@ export function parseEstimateArgs(argv: readonly string[], env: CliIo['env']): P
       message: `--seed must be a whole number below 2^32, not ${values.get('--seed')}`,
     };
 
-  const args: EstimateArgs = { template: positional[0]!, workdir, samples, seed, ratio: 'max' };
-
-  const hand = values.get('--hand');
-  if (hand !== undefined) {
-    const size = wholeNumber(hand);
-    if (size === undefined || !HAND_SIZES.includes(size as 5 | 6))
-      return { ok: false, message: `--hand must be ${HAND_SIZES.join(' or ')}, not ${hand}` };
-    args.hand = size;
-  }
+  const args: EstimateArgs = {
+    template: template.value,
+    workdir: workdir.value,
+    samples,
+    seed,
+    ratio: 'max',
+  };
+  const hand = handArg(values.get('--hand'));
+  if (!hand.ok) return hand;
+  if (hand.value !== undefined) args.hand = hand.value;
 
   const ratio = values.get('--ratio');
   const at = values.get('--at');
@@ -132,10 +105,6 @@ export function parseEstimateArgs(argv: readonly string[], env: CliIo['env']): P
   return { ok: true, args };
 }
 
-function int(value: number): string {
-  return value.toLocaleString('en-US');
-}
-
 function seconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
@@ -146,116 +115,8 @@ export function formatProgress({ done, total, elapsedMs, etaMs }: Progress): str
   return `estimate: ${int(done)} / ${int(total)} samples (${percent}%), elapsed ${seconds(elapsedMs)}, ETA ${seconds(etaMs)}\n`;
 }
 
-/** Left-aligned columns, except those named in `right`; two spaces apart, indented by two. */
-function table(rows: readonly (readonly string[])[], right: readonly number[] = []): string {
-  const widths: number[] = [];
-  for (const row of rows)
-    row.forEach((cell, i) => {
-      widths[i] = Math.max(widths[i] ?? 0, cell.length);
-    });
-  return rows
-    .map((row) =>
-      `  ${row.map((cell, i) => (right.includes(i) ? cell.padStart(widths[i]!) : cell.padEnd(widths[i]!))).join('  ')}`.trimEnd(),
-    )
-    .join('\n');
-}
-
-function nameOf(line: ResolvedLine): string {
-  return line.isRemainder ? '(remainder)' : line.id;
-}
-
 function rangeOf(line: ResolvedLine): string {
   return line.max === null ? `${line.min}+` : `${line.min}-${line.max}`;
-}
-
-function formatFlat(flat: ResolvedFlat, resolved: ResolvedTemplate): string {
-  const counted = (prefix: string, desc: number) => {
-    const { text, desc: parsed } = resolved.descriptions[desc]!;
-    return `${prefix} ${parsed.anyOf.length > 1 ? `(${text})` : text}`;
-  };
-  const parts = [
-    ...flat.reqs.map(({ n, desc }) => counted(`${n}x`, desc)),
-    ...flat.limits.map(({ n, desc }) => counted(n === 0 ? 'no' : `at most ${n}x`, desc)),
-  ];
-  return parts.length === 0 ? '(nothing: every hand meets it)' : parts.join(', ');
-}
-
-/** Everything the estimate is an estimate OF: what was loaded, what was understood, what matches what. */
-function formatReport(
-  resolved: ResolvedTemplate,
-  counts: readonly number[],
-  templatePath: string,
-): string {
-  const out: string[] = [];
-  const remainder = resolved.deckSize - counts.reduce((sum, n) => sum + n, 0);
-
-  out.push(
-    `Template — ${templatePath}: deck of ${resolved.deckSize}, hand of ${resolved.handSize}`,
-  );
-  out.push(
-    table(
-      [
-        ['line', 'description', 'understood as', 'matches', 'range', 'count'],
-        ...resolved.lines.map((line, i) => [
-          nameOf(line),
-          line.text,
-          line.echo,
-          int(line.count),
-          rangeOf(line),
-          String(line.isRemainder ? remainder : counts[i]),
-        ]),
-      ],
-      [3, 5],
-    ),
-  );
-
-  out.push('', 'Criteria — a hand succeeds if it meets any one');
-  for (const criterion of resolved.criteria) {
-    const title =
-      criterion.name === undefined ? criterion.id : `${criterion.id} (${criterion.name})`;
-    out.push(`  ${title}: ${criterion.text}`);
-    criterion.alternatives.forEach((flat, i) => {
-      out.push(`      ${i + 1}. ${formatFlat(flat, resolved)}`);
-    });
-    if (criterion.dropped > 0)
-      out.push(`      (${criterion.dropped} more need over ${resolved.handSize} cards: never met)`);
-  }
-  out.push(`  judged as ${resolved.flat.length} distinct flat alternative(s)`);
-
-  out.push(
-    '',
-    'Matching — a line fills a requirement, or counts toward a limit, only if its description implies it',
-  );
-  if (resolved.descriptions.length > 0)
-    out.push(
-      table(
-        resolved.descriptions.map((description) => {
-          const role =
-            description.inRequirement && description.inLimit
-              ? 'requirement+limit'
-              : description.inLimit
-                ? 'limit'
-                : 'requirement';
-          const lines = description.lines.map((line) => nameOf(resolved.lines[line]!));
-          const verb = description.inLimit && !description.inRequirement ? 'counts' : 'filled by';
-          return [
-            role,
-            description.text,
-            `[${description.echo}]`,
-            `${verb}: ${lines.length === 0 ? '(no line)' : lines.join(', ')}`,
-          ];
-        }),
-      ),
-    );
-  const idle = resolved.lines.filter((_, i) => resolved.matrix[i]!.every((fills) => !fills));
-  if (idle.length > 0)
-    out.push(`  match nothing, so they cannot affect the odds: ${idle.map(nameOf).join(', ')}`);
-
-  if (resolved.warnings.length > 0) {
-    out.push('', 'Warnings');
-    for (const warning of resolved.warnings) out.push(`  ${warning}`);
-  }
-  return `${out.join('\n')}\n`;
 }
 
 type Counts = { ok: true; counts: number[] } | { ok: false; message: string };
@@ -314,51 +175,21 @@ export async function runEstimate(argv: readonly string[], io: CliIo): Promise<n
     return EXIT_OK;
   }
   const { args } = parsed;
-  const fail = (messages: readonly string[]): number => {
-    for (const message of messages) io.stderr.write(`error: ${message}\n`);
-    return EXIT_FAILED;
-  };
 
-  let json: unknown;
-  try {
-    json = JSON.parse(readFileSync(path.resolve(args.template), 'utf8'));
-  } catch (failure) {
-    return fail([`cannot read ${args.template}: ${(failure as Error).message}`]);
-  }
-  const validated = validateTemplate(json);
-  if (!validated.ok) return fail(validated.errors.map((e) => `${args.template}: ${e}`));
-  const template =
-    args.hand === undefined
-      ? validated.template
-      : { ...validated.template, hand: { size: args.hand } };
-
-  if (!existsSync(args.workdir) || !statSync(args.workdir).isDirectory())
-    return fail([`${args.workdir} is not a directory`]);
-  const cards = loadCardIndex(args.workdir, await initSqlJs());
-  const status = cards.status;
-  if (status.databases === 0)
-    return fail([
-      `no card database under ${args.workdir}: expected cards.cdb, expansions/*.cdb or repositories/*/*.cdb`,
-    ]);
-  const setnames = loadSetnames(args.workdir);
-  const stringsFiles = collectStringsConf(args.workdir).length;
-  io.stdout.write(
-    `Card database — ${args.workdir}\n${table([
-      ['databases', `${status.databases} loaded, ${status.skippedDatabases} skipped`],
-      ['cards', int(status.cards)],
-      ['replacedRows', `${int(status.replacedRows)} (rows a later database updated: expected)`],
-      ['conflicts', `${int(status.conflicts)} (ids on which two repositories disagree)`],
-      [
-        'setnames',
-        setnames === null
-          ? 'none — no strings.conf found, so archetype descriptions are unavailable'
-          : `${int(setnames.size)} archetype names from ${stringsFiles} strings.conf file(s)`,
-      ],
-    ])}\n\n`,
-  );
+  const read = readTemplate(args.template, args.hand);
+  if (!read.ok) return fail(io, read.errors);
+  const template = read.value;
+  const install = await loadInstall(args.workdir);
+  if (!install.ok) return fail(io, install.errors);
+  const { cards, setnames, header } = install.value;
+  io.stdout.write(header);
 
   const result = resolveTemplate(template, { cards, setnames });
-  if (!result.ok) return fail(result.errors.map((e) => `${args.template}: ${e}`));
+  if (!result.ok)
+    return fail(
+      io,
+      result.errors.map((e) => `${args.template}: ${e}`),
+    );
   const { resolved } = result;
 
   const chosen = countsOf(resolved, args.ratio);
@@ -366,7 +197,9 @@ export async function runEstimate(argv: readonly string[], io: CliIo): Promise<n
     io.stderr.write(`error: ${chosen.message}\n`);
     return EXIT_USAGE;
   }
-  io.stdout.write(formatReport(resolved, chosen.counts, args.template));
+  // The report is the analysis's: `estimate` and `analyze` say the same things the same way.
+  const analysis = analyze(template, { cards, setnames });
+  io.stdout.write(formatEstimateReport(analysis, args.template, chosen.counts));
 
   const { hits, samples, p, stderr, ci95 } = estimate(resolved, chosen.counts, {
     handSize: resolved.handSize,

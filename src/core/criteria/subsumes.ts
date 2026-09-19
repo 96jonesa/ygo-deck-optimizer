@@ -1,5 +1,17 @@
+import type { Description } from '../desc/ast';
 import { type ImpliesContext, implies } from '../desc/implies';
 import type { Counted, FlatCriterion } from './ast';
+
+/**
+ * How subsumption decides `L ⇒ q`: a context for `implies`, or a relation of
+ * the caller's own — `analyze` passes a memo over the template's distinct
+ * descriptions, since the same few pairs are asked about again and again.
+ */
+export type Implication = ImpliesContext | ((L: Description, q: Description) => boolean);
+
+function relationOf(ctx: Implication): (L: Description, q: Description) => boolean {
+  return typeof ctx === 'function' ? ctx : (L, q) => implies(L, q, ctx);
+}
 
 /** `flat[subsumed]` is subsumed by `flat[by]`: it adds no hand that `flat[by]` does not already accept. */
 export interface Subsumption {
@@ -14,9 +26,13 @@ export interface Subsumption {
  * sit on the only slot `level 4 monster` could take — and counts run to 60,
  * where trying every assignment would not end.
  */
-function slotsInject(B: readonly Counted[], A: readonly Counted[], ctx: ImpliesContext): boolean {
+function slotsInject(
+  B: readonly Counted[],
+  A: readonly Counted[],
+  holds: (L: Description, q: Description) => boolean,
+): boolean {
   // Decided once per pair of requirements, not per pair of slots.
-  const accepts = B.map((b) => A.map((a) => implies(a.desc, b.desc, ctx)));
+  const accepts = B.map((b) => A.map((a) => holds(a.desc, b.desc)));
   const groupOfSlot = (reqs: readonly Counted[]) =>
     reqs.flatMap(({ n }, group) => Array.from({ length: n }, () => group));
   const slotsB = groupOfSlot(B);
@@ -62,13 +78,14 @@ function slotsInject(B: readonly Counted[], A: readonly Counted[], ctx: ImpliesC
 export function subsumes(
   B: FlatCriterion,
   A: FlatCriterion,
-  ctx: ImpliesContext,
+  ctx: Implication,
   maxHandSize = Number.POSITIVE_INFINITY,
 ): boolean {
+  const holds = relationOf(ctx);
   const covered = B.limits.every(
-    (b) => b.n >= maxHandSize || A.limits.some((a) => a.n <= b.n && implies(b.desc, a.desc, ctx)),
+    (b) => b.n >= maxHandSize || A.limits.some((a) => a.n <= b.n && holds(b.desc, a.desc)),
   );
-  return covered && slotsInject(B.reqs, A.reqs, ctx);
+  return covered && slotsInject(B.reqs, A.reqs, holds);
 }
 
 /**
@@ -79,7 +96,7 @@ export function subsumes(
  */
 export function findSubsumed(
   flat: readonly FlatCriterion[],
-  ctx: ImpliesContext,
+  ctx: Implication,
   maxHandSize?: number,
 ): Subsumption[] {
   /** `holds[by][subsumed]` */
