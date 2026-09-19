@@ -62,9 +62,11 @@ flowchart TB
 
 - **Renderer**: UI only — `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, `setWindowOpenHandler` denying everything. It never touches the filesystem and never parses, compiles, or scores: every edit is sent to main and the returned `Analysis` (§9) is rendered.
 - **Main** owns all Node capabilities, but `electron` itself is imported in exactly two files — `src/main/index.ts` and `src/preload/index.ts` — enforced by a Biome `noRestrictedImports` override. The wiring lives in an Electron-free `MainApp` (`src/main/app.ts`) that takes `ipcMain`, the user-data directory, the candidate install paths, the loader, and `createWindow` / `broadcast` / `pickDirectory` by injection, which is what makes "handlers are registered once" a *tested* property (a fake `ipcMain` that throws on a duplicate `handle`) rather than a convention. The **card service** holds the `CardIndex` and the setname table; parse, analyze and compile run here, synchronously — they are microseconds-to-milliseconds (no enumeration), so they do not need a worker.
-- **Optimizer worker**: a Node `worker_threads` worker, created per run through electron-vite's `?nodeWorker` import. It receives a compiled `Problem` (§8) — plain numbers, no card data, no sql.js — runs §10–11, posts progress, and posts the result. Cancel is `worker.terminate()` for an abandoned run; for a *graceful* stop that keeps partial results, `optimize` is synchronous and cannot receive a message mid-run, so `shouldCancel` reads an `Atomics` flag on a `SharedArrayBuffer` that main sets — polled at the progress cadence. The worker calibrates the scorer once at startup and passes `cost` to every run; a `needs-confirmation` result goes to the renderer, which re-runs with `force` once the user agrees. One run at a time; a new run cancels the previous one.
+- **Optimizer worker**: a Node `worker_threads` worker, created per run through electron-vite's `?nodeWorker` import. It receives a compiled `Problem` (§8) — plain numbers, no card data, no sql.js — runs §10–11, posts progress, and posts the result. Cancel is `worker.terminate()` for an abandoned run; for a *graceful* stop that keeps partial results, `optimize` is synchronous and cannot receive a message mid-run, so `shouldCancel` reads an `Atomics` flag on a `SharedArrayBuffer` that main sets — polled at the progress cadence, and **verified end to end** (a real run stopped 115 ms after the click with `partial: true`, 102,546 of 5,758,374 vectors scored and its best-so-far intact). A graceful cancel carries a 5 s deadline, after which the thread is abandoned, so the UI can never stick on "Stopping…". Every started run ends in exactly one terminal event — `result`, `cancelled` or `error` — a superseded run included; `needs-confirmation` is not terminal, and neither superseding nor cancelling a run that is *waiting* to be confirmed costs the warm thread. The worker calibrates the scorer once at startup and passes `cost` to every run; a `needs-confirmation` result goes to the renderer, which re-runs with `force` once the user agrees. One run at a time; a new run cancels the previous one.
 
-**Why `worker_threads` and not the alternatives.** A renderer Web Worker needs `worker-src`/`blob:` CSP exceptions that only fail in packaged builds, and would put engine code in the renderer; `utilityProcess` buys crash isolation that a pure-arithmetic job does not need. The worker bundle imports only `core/`, so it has no unbundled-dependency problem.
+**Why `worker_threads` and not the alternatives.** A renderer Web Worker needs `worker-src`/`blob:` CSP exceptions that only fail in packaged builds, and would put engine code in the renderer; `utilityProcess` buys crash isolation that a pure-arithmetic job does not need. The worker bundle imports only `core/`, so it has no unbundled-dependency problem — confirmed on the built output, whose worker chunk imports nothing but `node:worker_threads` and one shared `core/` chunk.
+
+The thread is **three files, not one**: `worker/session.ts` is the message handler (pure, `core/`-only, drivable directly in tests), `worker/optimizer.worker.ts` is the thread entry that binds it to `parentPort`, and `worker/protocol.ts` the message types. A single file with a top-level `parentPort.on` could not be imported under vitest at all — in the `threads` pool it would hijack vitest's own port. `main/worker-spawn.ts` is the only file that knows the thread is real, and the only user of electron-vite's `?nodeWorker`.
 
 Deliberate departures from the sibling, each fixing something the survey found:
 
@@ -425,8 +427,10 @@ Defined once in `src/shared/ipc.ts` as a channel-name constant plus a `RendererA
 | `cards:get` | invoke | `passcode[] → CardInfo[]` (display fields for chips and snapshots) |
 | `desc:parse` | invoke | `text → { ok: true, desc, echo, count, samples } \| { ok: false, message, span }` |
 | `template:analyze` | invoke | `Template → Analysis` (§9) |
-| `run:start` / `run:cancel` | invoke | `{ template, options } → runId` / `runId → void` |
-| `run:event` | main→renderer push | `{ runId, progress? , result?, error? }` |
+| `run:start` / `run:cancel` / `run:confirm` | invoke | `{ template, options } → { ok, runId }` and control results; `cancel` resolves when the run has actually ended |
+| `run:event` | main→renderer push | `started` → `progress`* → optional `needs-confirmation` → exactly one of `result` / `cancelled` / `error`, all carrying `runId` |
+
+Push-only channels live in a separate `IpcEvents` constant, so "every `IpcChannels` entry has a registered handler" can stay an asserted invariant. A renderer must subscribe *before* calling `run:start`: `started` can arrive before the invoke resolves.
 | `template:open` / `template:save` | invoke | dialogs and file I/O in main; `→ Template \| null` / `Template → path \| null` |
 | `results:export` | invoke | `{ runId, format: 'csv' \| 'json' } → path \| null` |
 
@@ -511,12 +515,13 @@ src/
     util/     normalize.ts  prng.ts  progress.ts   # progress lives here: prob/ and opt/ both report it
   main/
     index.ts                  # the only main-side file that imports electron: a thin adapter
+    worker-spawn.ts           # the only user of electron-vite's ?nodeWorker
     app.ts                    # MainApp: Electron-free wiring, IPC registration (once)
     ipc.ts                    # registerIpc: thin handlers over the services
     edopro/   probe.ts  loader.ts          # fs walk -> bytes for core; no electron import, shared with the CLI
     services/ cards.ts  templates.ts  typeline.ts  runs.ts
     store/    settings.ts
-  worker/     optimizer.worker.ts          # imports core only
+  worker/     protocol.ts  session.ts  optimizer.worker.ts   # imports core only
   preload/    index.ts                     # emitted as index.cjs
   renderer/   index.html  src/{app.tsx, store.ts, views/*, styles.css}
   shared/     ipc.ts  types.ts
@@ -530,7 +535,7 @@ scripts/      check-licenses.mjs  third-party-notices.mjs
 
 ## 17. Packaging, CI, licensing
 
-- **electron-builder**: `files: [out/**, package.json, LICENSE, THIRD-PARTY-NOTICES.txt]`, `npmRebuild: false`, `publish: null`; mac `dmg` arm64, win `nsis` x64. No `extraResources` and no `asarUnpack` — sql.js's wasm is read transparently from inside the asar. An app icon is added (the sibling ships Electron's default).
+- **electron-builder**: `files: [out/**, package.json, LICENSE, THIRD-PARTY-NOTICES.txt]`, `npmRebuild: false`, `publish: null`; mac `dmg` arm64, win `nsis` x64. No `extraResources` and no `asarUnpack` — sql.js's wasm is read transparently from inside the asar, and so is the optimizer worker's own bundle: M2b confirmed this the only way that settles it, by hand-packing an `app.asar` and running the full app out of it (thread loads from `…/app.asar/out/main/…`, shared memory intact, cards loaded). The contingency, if a future Electron ever breaks it, is recorded beside the spawn in `src/main/worker-spawn.ts`. An app icon is added (the sibling ships Electron's default).
 - **Signing is new work, not a lift.** The sibling builds unsigned (`identity: null`; its notarization is an open issue), so the PRD's "sibling's signing setup" does not exist — corrected in the PRD by this change. Signing, notarization, and the distribution channel (F2, YGO-8) are all M4.
 - **CI** (ubuntu, every PR and `main`): `npm ci` → lint → typecheck (all tsconfigs) → test → build → **license check**. Packaging runs on tags only (M4).
 - **License check**: `scripts/check-licenses.mjs` walks the installed tree and fails on any license outside an **allowlist** (MIT, ISC, BSD-2/3-Clause, Apache-2.0, BlueOak-1.0.0, 0BSD, CC0-1.0, Python-2.0, CC-BY-4.0, WTFPL) — an allowlist, because a denylist passes anything it has not heard of. `third-party-notices.mjs` generates the notices file from production dependencies at package time (PRD §4.4). `package.json` is `"private": true`, `"license": "UNLICENSED"`.
@@ -568,7 +573,7 @@ M3 and M4 are sliced when M2 is in hand.
 | An axiom is wrong (implication too strong) | Soundness oracle against the fixture and, opt-in, the real database |
 | Repositories loaded in sorted rather than `configs.json` order | Conflict count surfaced in card status (§4.4); revisit if a real install shows a non-zero count |
 | Normal/Effect and other monster flags treated as independent dimensions | Sound by construction (no axiom claimed); costs at most a missed implication nobody writes (`effect ⇒ non-normal`) |
-| `?nodeWorker` bundling or asar path resolution for the worker | Proven in M2b before the UI depends on it; fallback is an explicit second rollup input for the worker |
+| ~~`?nodeWorker` bundling or asar path resolution for the worker~~ | **Retired (M2b).** Proven in `npm run dev`, in the built app, and inside a hand-packed `app.asar`; the fallback (a second rollup input) was not needed |
 | Scored-vector count explodes on very wide templates | Exact count and ETA shown before the run; cancel; shard-ready enumeration; prefix-sharing trie held in reserve (§11.3) |
 | Class cap of 30 | A template with more than 30 *distinguishable* classes is far outside the use case; clear error rather than silent BigInt slow path |
 | A collapsed alternate-art passcode (`#36996508`) resolves to "no such card", since the index keeps no alias → target map | Add `CardIndex.resolve(code)` when `.ydk` import lands (M3): decklists routinely carry alt-art passcodes |

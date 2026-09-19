@@ -6,6 +6,10 @@ import type {
   CardStatus,
   DescParseRequest,
   DescParseResult,
+  RunControlResult,
+  RunEvent,
+  RunStartRequest,
+  RunStartResult,
   Sequenced,
   Settings,
   SettingsPatch,
@@ -17,8 +21,9 @@ export type { AppInfo };
 
 /**
  * The IPC contract (TDD §12), defined once: main registers a handler per
- * invoke channel, the preload implements `RendererApi` over them. `run:*`,
- * `template:open` / `template:save` and `results:export` arrive with their slices.
+ * invoke channel — every entry here is one — and the preload implements
+ * `RendererApi` over them. `template:open` / `template:save` and
+ * `results:export` arrive with their slices.
  */
 export const IpcChannels = {
   appInfo: 'app:info',
@@ -33,9 +38,17 @@ export const IpcChannels = {
   cardsGet: 'cards:get',
   descParse: 'desc:parse',
   templateAnalyze: 'template:analyze',
+  runStart: 'run:start',
+  runCancel: 'run:cancel',
+  runConfirm: 'run:confirm',
 } as const;
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels];
+
+/** Main→renderer pushes that are ONLY pushes: nothing to invoke, so no handler is registered for them. */
+export const IpcEvents = {
+  runEvent: 'run:event',
+} as const;
 
 /** The api exposed on window.api by the preload bridge. */
 export interface RendererApi {
@@ -57,4 +70,20 @@ export interface RendererApi {
   parseDescription(request: Sequenced<DescParseRequest>): Promise<Sequenced<DescParseResult>>;
   /** The template is validated again in main: a structurally broken one comes back as `invalid`. */
   analyzeTemplate(request: Sequenced<Template>): Promise<Sequenced<AnalyzeTemplateResult>>;
+  /**
+   * Start searching the template, cancelling any run before it (one run at a
+   * time, app-wide). What happens next arrives by `onRunEvent` under the
+   * `runId` — `started` possibly BEFORE this resolves, so subscribe first.
+   */
+  startRun(request: RunStartRequest): Promise<RunStartResult>;
+  /**
+   * Graceful: the search stops at its next progress report and its partial
+   * result arrives as the `cancelled` event. Otherwise the run is abandoned.
+   * Resolves when the run has ended.
+   */
+  cancelRun(runId: number, opts?: { graceful?: boolean }): Promise<RunControlResult>;
+  /** The user's yes to a `needs-confirmation` event: the run goes ahead. */
+  confirmRun(runId: number): Promise<RunControlResult>;
+  /** Called on every event of the active run. Returns the unsubscribe. */
+  onRunEvent(listener: (event: RunEvent) => void): () => void;
 }

@@ -6,6 +6,8 @@ import type {
   CardInfo,
   CardStatus,
   DescParseResult,
+  RunControlResult,
+  RunStartResult,
   Sequenced,
   Settings,
   SettingsPatch,
@@ -22,7 +24,7 @@ export interface IpcMainLike {
   handle(channel: string, listener: (event: unknown, ...args: unknown[]) => unknown): void;
 }
 
-/** What the handlers delegate to. `SettingsStore`, `CardService` and `TemplateService` satisfy it. */
+/** What the handlers delegate to. `SettingsStore`, `CardService`, `TemplateService` and `RunService` satisfy it. */
 export interface IpcDeps {
   appInfo(): AppInfo;
   settings: { get(): Settings; set(patch: SettingsPatch): Settings };
@@ -36,6 +38,11 @@ export interface IpcDeps {
   templates: {
     parseDescription(text: unknown, groups: unknown): DescParseResult;
     analyzeTemplate(template: unknown): AnalyzeTemplateResult;
+  };
+  runs: {
+    start(template: unknown, options: unknown): RunStartResult;
+    cancel(runId: unknown, opts: { graceful: boolean }): Promise<RunControlResult>;
+    confirm(runId: unknown): RunControlResult;
   };
   probe(dir: string): WorkdirHealth;
   /** The system's folder dialog; `null` when it is cancelled. */
@@ -64,7 +71,7 @@ function sequenced<T>(request: unknown, answer: (payload: unknown) => T): Sequen
  * handler checks what it is given before it delegates.
  */
 export function registerIpc(ipcMain: IpcMainLike, deps: IpcDeps): void {
-  const { settings, cards, templates } = deps;
+  const { settings, cards, templates, runs } = deps;
 
   ipcMain.handle(IpcChannels.appInfo, () => deps.appInfo());
 
@@ -118,4 +125,18 @@ export function registerIpc(ipcMain: IpcMainLike, deps: IpcDeps): void {
   ipcMain.handle(IpcChannels.templateAnalyze, (_event, request) =>
     sequenced(request, (payload) => templates.analyzeTemplate(payload)),
   );
+
+  // What a run says comes by push (`run:event`), under the id this returns.
+  ipcMain.handle(IpcChannels.runStart, (_event, request) => {
+    const { template, options } = isObject(request) ? request : {};
+    return runs.start(template, options);
+  });
+
+  // Resolves when the run has ended: at once when abandoned, at the partial result when graceful.
+  ipcMain.handle(IpcChannels.runCancel, (_event, request) => {
+    const { runId, graceful } = isObject(request) ? request : {};
+    return runs.cancel(runId, { graceful: graceful === true });
+  });
+
+  ipcMain.handle(IpcChannels.runConfirm, (_event, runId) => runs.confirm(runId));
 }

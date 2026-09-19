@@ -2,7 +2,13 @@ import { readFileSync } from 'node:fs';
 import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
 import { isMonster } from '../../../src/core/cards/record';
-import { analyze, SAMPLE_SIZE } from '../../../src/core/model/analyze';
+import {
+  analyze,
+  type CostModel,
+  DEFAULT_COST,
+  SAMPLE_SIZE,
+} from '../../../src/core/model/analyze';
+import { compileProblem, resolveTemplate } from '../../../src/core/model/compile';
 import { CardService } from '../../../src/main/services/cards';
 import { MEMO_LIMIT, TemplateService } from '../../../src/main/services/templates';
 import type { TemplateGroup } from '../../../src/shared/types';
@@ -25,7 +31,7 @@ const STARTERS: TemplateGroup[] = [
 ];
 
 /** Both services, `ready` on the fixture plus the motivating example's cards. */
-async function readyServices(setnames?: null) {
+async function readyServices(setnames?: null, cost?: () => CostModel | undefined) {
   const cards = new CardService(
     immediateLoader(() =>
       setnames === null ? loadedCards(SQL, ROWS, null) : loadedCards(SQL, ROWS),
@@ -33,7 +39,7 @@ async function readyServices(setnames?: null) {
     () => {},
   );
   await cards.reload('/fixture', { includePrerelease: true });
-  return { cards, templates: new TemplateService(cards) };
+  return { cards, templates: new TemplateService(cards, cost) };
 }
 
 describe('TemplateService', () => {
@@ -242,6 +248,105 @@ describe('TemplateService', () => {
         message: 'no EDOPro folder is set, so there is no card data yet',
       });
       expect(templates.analyzeTemplate(null)).toMatchObject({ reason: 'not-ready' });
+    });
+
+    it('estimates at the cost it is given, asked for anew each time — and at the default until there is one', async () => {
+      let cost: CostModel | undefined;
+      const { templates } = await readyServices(undefined, () => cost);
+      const work = () => {
+        const result = templates.analyzeTemplate(motivatingTemplate());
+        if (!result.ok) throw new Error('expected an analysis');
+        return result.analysis.work;
+      };
+      const before = work();
+      expect(before.cost).toEqual(DEFAULT_COST);
+
+      // What a worker calibrates, some time after the service was built.
+      cost = { perVectorUs: 5, perTermNs: 700 };
+      const after = work();
+      expect(after.cost).toEqual(cost);
+      expect(after.estimatedMs).toBeGreaterThan((before.estimatedMs ?? Number.NaN) * 50);
+    });
+  });
+
+  describe('compileTemplate', () => {
+    it('returns the analysis, the compiled problem and the criteria — what a run is made of', async () => {
+      const { cards, templates } = await readyServices();
+      const ready = cards.ready();
+      if (ready === null) throw new Error('not ready');
+      const resolved = resolveTemplate(motivatingTemplate(), ready);
+      if (!resolved.ok) throw new Error('expected the template to resolve');
+
+      const result = templates.compileTemplate(JSON.parse(readFileSync(MOTIVATING_PATH, 'utf8')));
+      if (!result.ok) throw new Error(`expected a compiled template, got ${result.reason}`);
+      expect(result.analysis.ok).toBe(true);
+      expect(result.compiled).toEqual(compileProblem(resolved.resolved));
+      expect(result.compiled.classes).toHaveLength(5);
+      expect(result.criteria).toEqual([
+        {
+          id: 'c1',
+          name: 'A, B and any monster',
+          alternatives: resolved.resolved.criteria[0]?.alternatives,
+        },
+        {
+          id: 'c2',
+          name: 'A, B and a low-Level monster',
+          alternatives: resolved.resolved.criteria[1]?.alternatives,
+        },
+      ]);
+    });
+
+    it('is plain data: what it returns can be posted to a worker as it is', async () => {
+      const { templates } = await readyServices();
+      const result = templates.compileTemplate(motivatingTemplate());
+      expect(structuredClone(result)).toEqual(result);
+      expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    });
+
+    it('carries the same analysis `analyzeTemplate` gives, at the same cost', async () => {
+      const cost = { perVectorUs: 5, perTermNs: 700 };
+      const { templates } = await readyServices(undefined, () => cost);
+      const compiled = templates.compileTemplate(motivatingTemplate());
+      const analyzed = templates.analyzeTemplate(motivatingTemplate());
+      if (!compiled.ok || !analyzed.ok) throw new Error('expected both to succeed');
+      expect(compiled.analysis).toEqual(analyzed.analysis);
+      expect(compiled.analysis.work.cost).toEqual(cost);
+    });
+
+    it('refuses a template with errors, handing back the analysis that says where', async () => {
+      const { templates } = await readyServices();
+      const template = motivatingTemplate();
+      template.lines[2] = { id: 'typo', text: 'level 4 monstr', min: 0, max: 3 };
+      const result = templates.compileTemplate(template);
+      if (result.ok || result.reason !== 'template-errors') throw new Error('expected errors');
+      expect(result.analysis.ok).toBe(false);
+      expect(result.analysis.lines[2]?.parsed.ok).toBe(false);
+    });
+
+    it('refuses a template whose ranges cannot fill the deck', async () => {
+      const { templates } = await readyServices();
+      const template = motivatingTemplate();
+      template.remainder = { min: 0, max: 1 };
+      expect(templates.compileTemplate(template)).toMatchObject({
+        ok: false,
+        reason: 'template-errors',
+        analysis: { ok: false, totals: { feasible: false } },
+      });
+    });
+
+    it('answers a structurally invalid template with `invalid`, never an exception', async () => {
+      const { templates } = await readyServices();
+      for (const junk of [null, undefined, 'text', 7, [], { version: 2 }])
+        expect(templates.compileTemplate(junk)).toMatchObject({ ok: false, reason: 'invalid' });
+    });
+
+    it('is not-ready before there is an index, in the shape `analyzeTemplate` uses', () => {
+      const cards = new CardService(new ControllableLoader().load, () => {});
+      const templates = new TemplateService(cards);
+      expect(templates.compileTemplate(motivatingTemplate())).toEqual(
+        templates.analyzeTemplate(motivatingTemplate()),
+      );
+      expect(templates.compileTemplate(null)).toMatchObject({ reason: 'not-ready', state: 'idle' });
     });
   });
 });
