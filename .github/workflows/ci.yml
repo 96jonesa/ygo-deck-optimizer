@@ -20,3 +20,23 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run check:licenses
+
+  # The suite on Windows, because the app is released for Windows and nothing
+  # else ever exercises it there: Andy runs macOS, and `check` above runs
+  # Linux. Path separators, case-insensitive file systems and CRLF are the
+  # things this is here to catch, and a release that installs and then cannot
+  # read a deck folder is the failure it exists to prevent.
+  #
+  # Only the platform-sensitive steps: lint, typecheck and the licence check
+  # are platform-independent and stay on one runner.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

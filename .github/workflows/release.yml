@@ -1,9 +1,11 @@
-# Builds a double-clickable app and attaches it to a release on this (private)
-# repo — which is all the distribution F2 asks for: Andy is authenticated, so
-# he can download his own release assets. Nothing here signs or notarizes.
+# Builds double-clickable apps for macOS and Windows and attaches them to a
+# release on this (private) repo — which is all the distribution F2 asks for:
+# Andy is authenticated, so he can download his own release assets. Nothing
+# here signs or notarizes.
 #
-# Push a tag to publish:      git tag v0.1.0 && git push origin v0.1.0
-# Or run it by hand for a dry run: the DMG lands as a workflow artifact instead.
+# Push a tag to publish:      git tag v0.2.0 && git push origin v0.2.0
+# Or run it by hand for a dry run: both installers land as workflow artifacts
+# and no release is touched.
 name: release
 
 on:
@@ -12,8 +14,58 @@ on:
   workflow_dispatch:
 
 jobs:
-  mac:
-    runs-on: macos-latest
+  # One job creates the release, so the two build jobs never race to create it
+  # and then fall back to uploading. They only ever upload.
+  create:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          tag="${tag%%-*}"          # a -preview suffix on the tag is fine
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag v$tag does not match package.json version $pkg" >&2
+            exit 1
+          fi
+      - name: Create the release if it does not exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && exit 0
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "$(cat <<'NOTES'
+          Unsigned local builds — both platforms warn on first launch, once.
+
+          - **macOS (Apple Silicon)** — `.dmg`. Right-click the app → **Open** → **Open**. It will not run on an Intel Mac.
+          - **Windows (x64)** — `.exe`. SmartScreen says "Windows protected your PC": **More info** → **Run anyway**.
+
+          [EDOPro](https://projectignis.github.io/) must be installed; the app reads its card data and never uploads anything. See `docs/INSTALL.md`.
+          NOTES
+          )"
+
+  build:
+    needs: [create]
+    # `always()` so a dry run, where `create` is skipped, still builds.
+    if: always() && (needs.create.result == 'success' || needs.create.result == 'skipped')
+    strategy:
+      fail-fast: false        # one platform failing must not hide the other's result
+      matrix:
+        include:
+          - os: macos-latest
+            script: package:mac
+            pattern: dist/*.dmg
+            artifact: dmg
+          - os: windows-latest
+            script: package:win
+            pattern: dist/*.exe
+            artifact: exe
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
     steps:
@@ -23,34 +75,19 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run ${{ matrix.script }}
 
-      - name: Check the tag matches package.json
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          tag="${tag%%-*}"          # a -preview suffix on the tag is fine
-          pkg="$(node -p "require('./package.json').version")"
-          if [ "$tag" != "$pkg" ]; then
-            echo "tag v$tag does not match package.json version $pkg" >&2
-            exit 1
-          fi
-
-      - run: npm run package:mac
-
-      - name: Upload the DMG as a workflow artifact (dry run)
+      - name: Upload as a workflow artifact (dry run)
         if: "!startsWith(github.ref, 'refs/tags/v')"
         uses: actions/upload-artifact@v4
         with:
-          name: dmg-dry-run
-          path: dist/*.dmg
+          name: ${{ matrix.artifact }}-dry-run
+          path: ${{ matrix.pattern }}
           if-no-files-found: error
 
-      - name: Attach the DMG to the release
+      - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.dmg \
-            --title "$GITHUB_REF_NAME" \
-            --notes "Unsigned local build. A downloaded DMG needs a right-click → Open the first time (see docs/INSTALL.md)." \
-            || gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber
+        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.pattern }} --clobber
