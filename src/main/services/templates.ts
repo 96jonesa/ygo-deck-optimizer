@@ -1,7 +1,14 @@
+import {
+  archetypeInsert,
+  type CompletionSite,
+  cardInsert,
+  completionSiteAt,
+  groupInsert,
+} from '../../core/desc/completion';
 import type { DescContext } from '../../core/desc/context';
 import { matcher } from '../../core/desc/evaluate';
 import { parse } from '../../core/desc/parser';
-import { echo, print } from '../../core/desc/print';
+import { echo, formatSetcode, print } from '../../core/desc/print';
 import { type Analysis, analyze, type CostModel, SAMPLE_SIZE } from '../../core/model/analyze';
 import {
   compileProblem,
@@ -12,9 +19,12 @@ import {
 } from '../../core/model/compile';
 import { type Template, type TemplateGroup, validateTemplate } from '../../core/model/template';
 import type { BreakdownCriterion, Compiled } from '../../core/opt/optimizer';
+import { normalize } from '../../core/util/normalize';
 import type {
   AnalyzeTemplateResult,
   CardStatus,
+  CompleteNameResult,
+  CompletionOption,
   DescParseResult,
   InvalidRequest,
   NotReady,
@@ -23,6 +33,7 @@ import type {
   TemplateErrors,
 } from '../../shared/types';
 import type { ReadyCards } from './cards';
+import { typeline } from './typeline';
 
 // Parse and analyze, in main and synchronous (TDD §3): microseconds to
 // milliseconds, so no worker. Node-free and Electron-free; the card service
@@ -43,6 +54,51 @@ export const MEMO_LIMIT = 5000;
 
 /** What the template editor calls the computed line, so the results call it the same thing. */
 export const REMAINDER_LABEL = 'Unspecified cards';
+
+/** Rows the completion popup offers at most: the card picker's own limit. */
+export const COMPLETION_LIMIT = 20;
+
+/**
+ * The template's groups whose name `prefix` matches — prefix hits first, then
+ * substring hits, each in template order. An EMPTY prefix matches every group,
+ * unlike the card and archetype searches, which answer nothing: a template's
+ * groups are a handful of names the user invented themselves, so `{` on its
+ * own is how they are recalled, while 12,000 cards are not a list.
+ *
+ * A group whose name holds the closing brace is left out rather than offered:
+ * the grammar cannot carry it, so no text would insert it.
+ */
+function groupOptions(
+  groups: readonly TemplateGroup[],
+  prefix: string,
+  limit: number,
+): CompletionOption[] {
+  const needle = normalize(prefix);
+  const prefixed: TemplateGroup[] = [];
+  const inside: TemplateGroup[] = [];
+  for (const group of groups) {
+    const at = normalize(group.name).indexOf(needle);
+    if (at === 0) prefixed.push(group);
+    else if (at > 0) inside.push(group);
+  }
+  const seen = new Map<string, number>();
+  for (const group of groups)
+    seen.set(normalize(group.name), (seen.get(normalize(group.name)) ?? 0) + 1);
+  const options: CompletionOption[] = [];
+  for (const group of [...prefixed, ...inside]) {
+    const insert = groupInsert(group.name);
+    if (insert === null) continue;
+    options.push({
+      label: group.name,
+      detail: `${group.cards.length} card${group.cards.length === 1 ? '' : 's'}`,
+      insert,
+      key: group.id,
+      // `{name}` has no way to say WHICH of two same-named groups is meant.
+      ambiguous: (seen.get(normalize(group.name)) ?? 0) > 1,
+    });
+  }
+  return options.slice(0, limit);
+}
 
 /**
  * What each line is CALLED on screen, by line id: the answer to "how many
@@ -202,6 +258,32 @@ export class TemplateService {
   }
 
   /**
+   * The names that could go where the caret is (PRD §5.2). Three things are
+   * decided here rather than in the renderer (TDD §3): whether the caret is
+   * inside a name at all — `completionSiteAt` reads that off the lexer —
+   * which names match what has been typed, and how each is written back.
+   *
+   * That last one is the rule the whole feature rests on: **every option
+   * inserts text that resolves to the row that was picked.** A card name two
+   * records share goes in as its passcode, an archetype name that names two
+   * setcodes carries its code, and a group name the grammar cannot carry is
+   * not offered at all. Nothing here can be picked into a parse error.
+   */
+  completeName(text: unknown, caret: unknown, groups: unknown): CompleteNameResult {
+    const ready = this.source.ready();
+    if (ready === null) return this.notReady();
+    if (typeof text !== 'string') return invalid('a description is text', ['`text` must be text']);
+    if (!Number.isInteger(caret))
+      return invalid('the caret is an offset into the text', ['`caret` must be a whole number']);
+    const errors = groupErrors(groups);
+    if (errors.length > 0) return invalid('the groups are not well-formed', errors);
+
+    const site = completionSiteAt(text, caret as number);
+    if (site === null) return { ok: true, site: null, options: [] };
+    return { ok: true, site, options: this.optionsFor(site, ready, groups as TemplateGroup[]) };
+  }
+
+  /**
    * The Analysis of a template (TDD §9), over the card service's index and
    * its match memo. The template comes from the renderer as JSON, so it is
    * validated structurally first; one that is not a template at all comes
@@ -249,6 +331,41 @@ export class TemplateService {
       criterionLimits: runLimits(analysis, labels),
       droppedLimits: runDroppedLimits(analysis),
     };
+  }
+
+  /** The rows for one site. The typed text is trimmed here; the SITE keeps it as typed. */
+  private optionsFor(
+    site: CompletionSite,
+    ready: ReadyCards,
+    groups: readonly TemplateGroup[],
+  ): CompletionOption[] {
+    const prefix = site.prefix.trim();
+    switch (site.kind) {
+      case 'card':
+        return ready.cards.search(prefix, COMPLETION_LIMIT).map((card) => {
+          const unique = ready.cards.findByName(card.name).length === 1;
+          return {
+            label: card.name,
+            detail: typeline(card),
+            insert: cardInsert(card.name, card.code, unique),
+            key: `#${card.code}`,
+            ambiguous: !unique,
+          };
+        });
+      case 'archetype':
+        // No `strings.conf`, no names: archetypes are then written by code only (TDD §4.5).
+        return (ready.setnames?.search(prefix, COMPLETION_LIMIT) ?? []).map(
+          ({ code, name, ambiguous }) => ({
+            label: name,
+            detail: formatSetcode(code),
+            insert: archetypeInsert(name, code, !ambiguous),
+            key: `${formatSetcode(code)}:${name}`,
+            ambiguous,
+          }),
+        );
+      case 'group':
+        return groupOptions(groups, prefix, COMPLETION_LIMIT);
+    }
   }
 
   private analysisOf(template: Template, ready: ReadyCards): Analysis {

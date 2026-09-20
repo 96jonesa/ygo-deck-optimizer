@@ -168,6 +168,46 @@ describe.skipIf(!EDOPRO_WORKDIR)('a real EDOPro install', () => {
     expect(table.lookup('Fusion')).toContain(0x46);
   });
 
+  // What inline completion is for (PRD §5.2). `"Warrior"` is a PARSE ERROR on
+  // this install — the delta layer gives the name to 0x2066 as well as 0x66 —
+  // so a completion that did not carry the code would offer a dead end.
+  describe('search', () => {
+    it('offers both setcodes of "Warrior", each written so the parser takes it', () => {
+      expect(table.lookup('Warrior')).toEqual([0x66, 0x2066]);
+      expect(table.search('Warrior').slice(0, 2)).toEqual([
+        { code: 0x66, name: 'Warrior', ambiguous: true },
+        { code: 0x2066, name: 'Warrior', ambiguous: true },
+      ]);
+    });
+
+    it('finds the two Sky Striker setcodes from a half-typed name, longest last', () => {
+      expect(table.search('Sky Strik')).toEqual([
+        { code: 0x115, name: 'Sky Striker', ambiguous: false },
+        { code: 0x1115, name: 'Sky Striker Ace', ambiguous: false },
+      ]);
+    });
+
+    it('finds an alternate spelling, not only the display name', () => {
+      expect(table.nameOf(0x46)).toBe('Polymerization');
+      expect(table.search('Fusio').map((hit) => [hit.name, hit.code])).toContainEqual([
+        'Fusion',
+        0x46,
+      ]);
+    });
+
+    it('never offers a row whose name it would then refuse to resolve', () => {
+      for (const query of ['a', 'e', 'ma', 'dark', 'war', 'blue'])
+        for (const hit of table.search(query, 50))
+          expect(table.lookup(hit.name)).toContain(hit.code);
+    });
+
+    it('answers a picker-sized query in well under a millisecond', () => {
+      const started = performance.now();
+      for (let i = 0; i < 200; i++) table.search('dark m');
+      expect((performance.now() - started) / 200).toBeLessThan(1);
+    });
+  });
+
   it("agrees with the client's own race and attribute strings", () => {
     // `!system 1020+i` names race bit i; `!system 1010+i` names attribute bit i.
     const system = new Map<number, string>();

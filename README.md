@@ -19,7 +19,7 @@ combinatorial probability plus a card-database lookup layer.
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done (in review)**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | **Done (in review)**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote) |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), inline name completion in both editors (`[card]`, `{group}`, `"archetype"`) |
 | M3 — polish | Not started |
 | M4 — release | Not started |
 
@@ -42,6 +42,18 @@ remainder (`Unspecified cards: 13–33`), the derived totals by kind with the li
 up, and a clear error when the ranges cannot sum to the deck size. Named **groups** — `starter`,
 `brick` — are created, renamed, filled from the picker and used in any description as
 `{starter}`. Load the motivating example, or clear it, and score it.
+
+**You do not have to remember how anything is spelled.** Typing an opening delimiter in any
+description or criterion field — `[` for a card, `{` for a group, `"` for an archetype — opens a
+list at the name being typed, walked with ↑/↓, taken with Enter or a click, dismissed with
+Escape. Whether the caret is inside a name at all is read off the *lexer*, so a `]` inside a
+quoted archetype and a quote inside a card name (`["A" Cell Breeding Device]`) are content, as
+the parser says they are. What is offered, and how each row is written back, are decided in main
+over `desc:complete`, under one rule: **every row inserts text that resolves to the row you
+picked**. So a card name two records share goes in as its passcode rather than as an ambiguous
+`[Name]`, and an archetype name that names two setcodes carries its code — `"Warrior"` alone is
+a parse error on a real install (it is both `0x66` and `0x2066`), and completion turns that dead
+end into the two rows that resolve it.
 
 **You can write the success criteria, and see what they mean.** Criteria are added, removed,
 reordered, named and edited as text in the criterion language (`1x [Ash Blossom], 1x monster, at

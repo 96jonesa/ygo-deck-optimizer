@@ -1,6 +1,7 @@
 import type { CriterionAnalysis, TemplateCriterion } from '../../../shared/types';
 import { issuesToList, parseFailureOf, worstSeverity } from '../model/analysis-view';
 import { canonicalText, expansionPreview } from '../model/criteria-readout';
+import { CompletingInput } from './completing-input';
 import { useField } from './fields';
 import { IssueList, ParseFailure } from './line-row';
 
@@ -52,18 +53,14 @@ export function CriterionRow({
         <span className="line-id" title="a criterion">
           {id}
         </span>
-        <input
-          type="text"
-          className="desc"
+        <CompletingInput
+          id={`criterion-text-${id}`}
           value={text}
-          aria-label={`Criterion ${id}`}
-          data-testid={`criterion-text-${id}`}
+          label={`Criterion ${id}`}
           placeholder="1x [Ash Blossom], 1x monster, at most 1x [Brick]"
-          spellCheck={false}
-          autoComplete="off"
-          onChange={(event) => {
-            setText(event.target.value);
-            onText(event.target.value);
+          onChange={(next) => {
+            setText(next);
+            onText(next);
           }}
         />
         {/*

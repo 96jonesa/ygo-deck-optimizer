@@ -1,20 +1,20 @@
 import type { CardHit, CardState } from '../../../shared/types';
+import { activeOptionId, clampActive, type ListNav, moveActive, optionId } from './listbox';
 
 // The card picker's state, as a reducer over what the user and the search do
 // to it (TDD §3: the renderer holds logic only about what is on screen). The
-// component around it is props in, JSX out.
+// component around it is props in, JSX out. What the arrow keys do is
+// `model/listbox.ts`, shared with the inline completion.
 
-export interface PickerState {
+export { activeOptionId, optionId };
+
+export interface PickerState extends ListNav {
   /** What is typed. */
   query: string;
   /** The rows on screen. */
   hits: CardHit[];
   /** The query `hits` are the answer to; `null` before the first answer. */
   answered: string | null;
-  /** Whether the listbox is showing. */
-  open: boolean;
-  /** The active row, `-1` for none: what `aria-activedescendant` points at and Enter picks. */
-  active: number;
 }
 
 export const EMPTY_PICKER: PickerState = {
@@ -37,10 +37,6 @@ export type PickerEvent =
   /** Back to an empty picker, after a pick. */
   | { type: 'reset' };
 
-function clamp(at: number, last: number): number {
-  return Math.min(Math.max(at, 0), last);
-}
-
 export function reducePicker(state: PickerState, event: PickerEvent): PickerState {
   switch (event.type) {
     case 'query':
@@ -51,22 +47,17 @@ export function reducePicker(state: PickerState, event: PickerEvent): PickerStat
     case 'hits': {
       // The answer to a query that is no longer typed is not what to show.
       if (event.query !== state.query) return state;
-      const active = state.active < 0 ? -1 : clamp(state.active, event.hits.length - 1);
       return {
         ...state,
         hits: event.hits,
         answered: event.query,
-        active: event.hits.length === 0 ? -1 : active,
+        active: clampActive(state.active, event.hits.length),
       };
     }
-    case 'move': {
-      const last = state.hits.length - 1;
-      if (last < 0) return state;
-      // Nothing active yet: down starts at the top, up at the bottom.
-      const active =
-        state.active < 0 ? (event.by > 0 ? 0 : last) : clamp(state.active + event.by, last);
-      return { ...state, open: true, active };
-    }
+    case 'move':
+      // The same state, not a copy of it, when there is nothing to move through.
+      if (state.hits.length === 0) return state;
+      return { ...state, ...moveActive(state, state.hits.length, event.by) };
     case 'close':
       return { ...state, open: false, active: -1 };
     case 'reset':
@@ -91,16 +82,6 @@ export function pickerStatus(state: PickerState, cardState: CardState): PickerSt
 /** The row Enter would pick, or `null`: a closed list has no active row. */
 export function activeHit(state: PickerState): CardHit | null {
   return state.hits[state.active] ?? null;
-}
-
-/** The DOM id of one row. Every picker on the page has its own `listId`. */
-export function optionId(listId: string, at: number): string {
-  return `${listId}-option-${at}`;
-}
-
-/** What `aria-activedescendant` should be, or `undefined` to leave the attribute off. */
-export function activeOptionId(listId: string, state: PickerState): string | undefined {
-  return state.active < 0 ? undefined : optionId(listId, state.active);
 }
 
 export interface PickerRow {
