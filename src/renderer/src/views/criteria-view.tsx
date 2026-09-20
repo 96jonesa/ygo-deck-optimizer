@@ -1,3 +1,4 @@
+import { CRITERION_SYNTAX } from '../../../shared/syntax';
 import { criterionAnalysisOf } from '../model/analysis-view';
 import {
   criteriaIssues,
@@ -11,6 +12,7 @@ import {
 import { selectAnalysis, useApp } from '../store';
 import { CriterionRow } from './criterion-row';
 import { IssueList } from './line-row';
+import { SyntaxReference } from './syntax-reference';
 
 // The criteria editor (PRD §8.3), and the two readouts that make the tool's
 // semantics visible: which lines fill which requirement and why the others do
@@ -225,11 +227,11 @@ export function CriteriaView() {
       <h2>Criteria</h2>
       <p className="hint">
         A hand succeeds if it meets <strong>any one</strong> criterion. Each is a list of
-        requirements — <code>1x [Ash Blossom]</code> — and limits — <code>at most 1x [Brick]</code>{' '}
-        — joined by <code>and</code>, with <code>or</code> in parentheses for alternatives that
-        differ. Each criterion says which hand it is for; one that applies either way is written
-        once.
+        requirements — <code>2x level 4 monster</code> — and limits — <code>no trap</code> — joined
+        by <code>and</code>. Each criterion says which hand it is for; one that applies either way
+        is written once.
       </p>
+      <SyntaxReference section={CRITERION_SYNTAX} />
 
       {SECTIONS.map((section) => {
         const mine = criteria
@@ -264,15 +266,14 @@ export function CriteriaView() {
         </p>
       )}
 
+      {/* What this readout is FOR — the implication rule and the one-click
+          split — and not what the syntax of a requirement is, which the
+          disclosure above now owns. */}
       <h3>Requirements</h3>
       <p className="hint flush">
         A line fills a requirement only if what it says <em>implies</em> it: a <code>monster</code>{' '}
         line does not count toward <code>level 4 or lower monster</code>, because its Level is
-        unstated. Where one nearly does, the split that would count is one click away. A requirement
-        written as a range — <code>1-2x monster</code> — also sets a ceiling: a hand holding more
-        matching cards than that fails, unless another requirement takes them. When both ends are
-        the same number, <code>exactly 1x monster</code> says it more plainly, and means the same as{' '}
-        <code>1-1x monster</code>.
+        unstated. Where one nearly does, the split that would count is one click away.
       </p>
       {requirements.length === 0 ? (
         <p className="seam" data-testid="no-requirements">

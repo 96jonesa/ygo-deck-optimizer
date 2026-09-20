@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { DESCRIPTION_SYNTAX, RUN_MODE_REFERENCE } from '../../../shared/syntax';
 import {
   kindTotals,
   lineAnalysisOf,
@@ -28,6 +29,7 @@ import { useField } from './fields';
 import { FileActions } from './file-actions';
 import { GroupsEditor } from './groups-editor';
 import { LineRow } from './line-row';
+import { FactReference, SyntaxReference } from './syntax-reference';
 
 // The template editor (PRD §8.2). Everything it says about what a template
 // MEANS — what a line matched, what fills what, the remainder, the totals, the
@@ -114,6 +116,16 @@ function DeckControls() {
   );
 }
 
+/** The mode control, and — closed — what the three runs actually differ in. */
+function DeckSection() {
+  return (
+    <>
+      <DeckControls />
+      <FactReference section={RUN_MODE_REFERENCE} />
+    </>
+  );
+}
+
 /** The read-only totals: derived from the lines, since nothing states a total (PRD §6.4). */
 function Totals() {
   const analysis = useApp(selectAnalysis);
@@ -177,8 +189,9 @@ export function TemplateView() {
         and additive: <code>monster</code> and <code>level 4 monster</code> are different cards, and
         a line only ever fills what it says.
       </p>
+      <SyntaxReference section={DESCRIPTION_SYNTAX} />
 
-      <DeckControls />
+      <DeckSection />
 
       {/* The panel's toolbar, and deliberately at the TOP of it: opening a
           file and importing a deck are how a template STARTS, and the first

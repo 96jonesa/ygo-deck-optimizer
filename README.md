@@ -43,6 +43,15 @@ up, and a clear error when the ranges cannot sum to the deck size. Named **group
 `brick` — are created, renamed, filled from the picker and used in any description as
 `{starter}`. Load the motivating example, or clear it, and score it.
 
+**Every input format is written down where you are typing it.** Each panel carries a collapsed
+disclosure — *Syntax: describing cards* under the template's lines, *Syntax: writing criteria*
+under the criteria, and short ones for the three runs, the file buttons and the two exports.
+The content is data in `src/shared/syntax.ts`, and `tests/shared/syntax.test.ts` feeds **every**
+row of it to `core`'s own parsers: an example that stops parsing, an error example whose message
+drifts, or a card name that is not a real card fails the build. The split is by level and
+nothing is written twice — the description language is explained once, in the template panel,
+and the criteria disclosure points at it rather than repeating the half it shares.
+
 **You do not have to remember how anything is spelled.** Typing an opening delimiter in any
 description or criterion field — `[` for a card, `{` for a group, `"` for an archetype — opens a
 list at the name being typed, walked with ↑/↓, taken with Enter or a click, dismissed with
@@ -479,7 +488,7 @@ BABELCDB_PATH=~/repos/deps/babelcdb/cards.cdb EDOPRO_WORKDIR=~/Applications/Proj
 | `src/worker/` | The optimizer's `worker_threads` thread, bundled through electron-vite's `?nodeWorker` import. Imports `src/core` only — a run arrives compiled, as plain numbers. `optimizer.worker.ts` is the thread's entry; `session.ts` is what a message does (calibrate once, search, report progress, stop gracefully on a shared-memory flag), tested without a thread; `protocol.ts` types the messages |
 | `src/preload/` | The typed `window.api` bridge (emitted as CommonJS — see `electron.vite.config.ts`) |
 | `src/renderer/` | React UI; sandboxed, talks only through `window.api`. Logic worth testing lives in pure functions under `src/renderer/src/model/` |
-| `src/shared/` | The IPC contract: channel names and `RendererApi` (`ipc.ts`), payload types (`types.ts`) |
+| `src/shared/` | The IPC contract: channel names and `RendererApi` (`ipc.ts`), payload types (`types.ts`); and the in-app syntax reference (`syntax.ts`), which imports nothing at runtime because the renderer bundles it |
 | `src/cli/` | Development harness (`npm run cli`), not shipped |
 | `examples/` | Example templates; `motivating.json` is the PRD's motivating example, `first-and-second.json` the one where the three run modes disagree |
 | `tests/` | Mirrors `src/` |

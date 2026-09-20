@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { EXPORT_REFERENCE } from '../../../shared/syntax';
 import type { RunResult } from '../../../shared/types';
 import { exportStatus } from '../model/files';
 import {
@@ -29,6 +30,7 @@ import {
 import { deltaFromPoints, deltaToPoints } from '../model/settings-form';
 import { selectRunnable, selectRunSentence, useApp } from '../store';
 import { SweepCharts } from './sweep-chart';
+import { FactReference } from './syntax-reference';
 
 // The results region (PRD §8.4): the answer the whole tool exists to give.
 // Everything on screen is READ off the `RunResult` the worker sent — the
@@ -471,6 +473,7 @@ function Export({ runId }: { runId: number }) {
           Everything (JSON)
         </button>
       </div>
+      <FactReference section={EXPORT_REFERENCE} />
       {status !== null && (
         <ul
           className={status.tone === 'bad' ? 'readout bad' : 'readout'}

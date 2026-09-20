@@ -1580,3 +1580,158 @@ ul.readout {
 .export {
   margin: var(--sp-3) 0;
 }
+
+/* --- the syntax reference ------------------------------------------------ */
+
+/*
+ * A disclosure inside the panel it is about, closed until someone wonders
+ * (Andy, 2026-09-19). `<details>` rather than state of our own: the open/shut
+ * behaviour, the keyboard and the marker are all the browser's, and the
+ * component is markup.
+ */
+.syntax {
+  container-type: inline-size;
+  margin: 0 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+  background: var(--bg-sunken);
+}
+
+.syntax > summary {
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  user-select: none;
+}
+
+.syntax > summary:hover {
+  color: var(--text);
+}
+
+.syntax > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--r-1);
+}
+
+.syntax[open] > summary {
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.syntax-body {
+  padding: var(--sp-3);
+}
+
+.syntax-blurb {
+  margin: 0 0 var(--sp-3);
+  max-width: 62ch;
+  color: var(--text-dim);
+}
+
+.syntax-group + .syntax-group {
+  margin-top: var(--sp-4);
+}
+
+.syntax-group > h4 {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+/*
+ * Two columns, the syntax as wide as its longest row needs and the meaning
+ * taking the rest. `minmax(0, max-content)` rather than `max-content`, so a
+ * long example shrinks and wraps instead of pushing the meaning off the
+ * panel; the app's left column is not wide.
+ */
+.syntax-rows {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(22ch, 1fr);
+  gap: var(--sp-1) var(--sp-4);
+  margin: 0;
+}
+
+/*
+ * The panel is one column of two and can be narrow. At that width the longest
+ * example — `(1x {starter} or 1x {extender}) and 1x monster` — leaves the
+ * meaning a word per line, so the pair stacks instead. A CONTAINER query, not
+ * a window one: what matters is the width of this box, and the workspace
+ * itself drops to one column at 1000px, which would make a window query say
+ * the opposite of the truth just below it. Found by the CDP run at 1040px.
+ */
+@container (max-width: 34rem) {
+  .syntax-rows {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .syntax-row {
+    display: block;
+    padding-bottom: var(--sp-2);
+  }
+
+  .syntax-row > dd {
+    padding-left: var(--sp-3);
+  }
+}
+
+.syntax-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.syntax-row > dt {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.syntax-row > dd {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+/* An example that is shown BECAUSE it fails, and the app's own words for it.
+   The colour goes on the `dt`, not on the `code` inside it: `code` carries no
+   colour of its own, and a descendant selector here would sit at a lower
+   specificity than one earlier in this file. */
+.syntax-row.bad > dt {
+  color: var(--bad);
+}
+
+/* The rows of a fact reference name a button, not a piece of syntax. */
+.syntax-rows.facts > .syntax-row > dt {
+  font-weight: 600;
+}
+
+.syntax-fails {
+  display: block;
+  color: var(--bad);
+}
+
+.syntax-note {
+  margin: var(--sp-2) 0 0;
+  max-width: 62ch;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.syntax-body > .syntax-note {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--line);
+}
+
+.syntax-body > .syntax-note + .syntax-note {
+  margin-top: var(--sp-2);
+  padding-top: 0;
+  border-top: none;
+}

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { FILE_REFERENCE } from '../../../shared/syntax';
 import { importStatus, openStatus, saveStatus } from '../model/files';
 import { selectCardsReady, useApp } from '../store';
+import { FactReference } from './syntax-reference';
 
 // Open, Save, and the install's decks (M2g). The renderer holds no path and
 // reads no file: every button here is one `window.api` call, and every
@@ -132,6 +134,7 @@ export function FileActions() {
           Import a deck…
         </button>
       </div>
+      <FactReference section={FILE_REFERENCE} />
       {importing && <DeckList onClose={() => setImporting(false)} />}
       {status !== null && (
         <ul
