@@ -3,7 +3,7 @@ import { KINDS, type Kind } from '../cards/vocabulary';
 import type { Expr, FlatCriterion } from '../criteria/ast';
 import { expand, expandAll } from '../criteria/expand';
 import { parseCriterion } from '../criteria/parser';
-import { printCriterion } from '../criteria/print';
+import { countPrefix, printCriterion } from '../criteria/print';
 import { findSubsumed } from '../criteria/subsumes';
 import type { Description } from '../desc/ast';
 import type { CardLookup, DescContext, SetnameLookup } from '../desc/context';
@@ -23,8 +23,10 @@ import { type Count, countToNumber, toCount } from '../util/count';
 import {
   type CompileInput,
   compileProblem,
+  type DroppedReason,
   groupLookupOf,
   groupMembersOf,
+  indexFlat,
   REMAINDER_ID,
 } from './compile';
 import { MAX_DECK_SIZE } from './problem';
@@ -62,6 +64,7 @@ export type IssueCode =
   | 'empty-group'
   // a requirement or a limit
   | 'unfilled'
+  | 'requirement-ignores'
   | 'limit-ignores'
   | 'limit-counts-nothing'
   // a criterion
@@ -138,6 +141,8 @@ export interface Appearance {
   criterion: string;
   alternative: number;
   n: number;
+  /** A requirement's ceiling, when it was written `a-b×`; never set for a limit. */
+  max?: number;
 }
 
 export interface NearMissAnalysis {
@@ -162,6 +167,16 @@ export interface RequirementAnalysis {
   filledBy: string[];
   /** Lines that are compatible with it and do not imply it. */
   nearMisses: NearMissAnalysis[];
+  /**
+   * Some appearance of it has a CEILING, so lines that merely could match it
+   * change the answer — the same blind spot a limit has, and reported the same
+   * way in `ignored`. `false` leaves `ignored` empty and `ignoredRange` null.
+   */
+  bounded: boolean;
+  /** When `bounded`: lines that might hold matching cards the ceiling cannot see (PRD §6.3). */
+  ignored: IgnoredLine[];
+  /** How many cards those lines can hold together, the deck size considered; `null` with none. */
+  ignoredRange: IntRange | null;
   issues: Issue[];
 }
 
@@ -254,7 +269,19 @@ export interface ClassesAnalysis {
     criterion: number;
     text: string;
     n: number;
-    reason: 'counts-nothing' | 'never-binds';
+    reason: DroppedReason;
+  }[];
+  /**
+   * Requirement CEILINGS the engine leaves out for the same two reasons: no
+   * line can reach them, or no hand holds that many cards. The requirement
+   * stays and asks for its lower bound; only the range stops binding.
+   */
+  droppedCeilings: {
+    criterion: number;
+    text: string;
+    n: number;
+    max: number;
+    reason: DroppedReason;
   }[];
 }
 
@@ -389,7 +416,7 @@ function flatText(flat: FlatCriterion, ctx: DescContext): string {
     return `${prefix} ${desc.anyOf.length > 1 ? `(${text})` : text}`;
   };
   const parts = [
-    ...flat.reqs.map(({ n, desc }) => counted(`${n}x`, desc)),
+    ...flat.reqs.map(({ n, max, desc }) => counted(countPrefix(n, max), desc)),
     ...flat.limits.map(({ n, desc }) => counted(n === 0 ? 'no' : `at most ${n}x`, desc)),
   ];
   return parts.length === 0 ? '(nothing: every hand meets it)' : parts.join(', ');
@@ -712,8 +739,12 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     out.dropped = expanded.dropped;
     out.alternatives = expanded.flat.map((flat) => flatText(flat, descCtx));
     expanded.flat.forEach(({ reqs, limits }, alternative) => {
-      for (const { n, desc } of reqs)
-        column(desc).required.push({ criterion: criterion.id, alternative, n });
+      for (const { n, max, desc } of reqs)
+        column(desc).required.push(
+          max === undefined
+            ? { criterion: criterion.id, alternative, n }
+            : { criterion: criterion.id, alternative, n, max },
+        );
       for (const { n, desc } of limits)
         column(desc).limited.push({ criterion: criterion.id, alternative, n });
     });
@@ -725,6 +756,32 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
 
   // --- requirements and limits -----------------------------------------------------------
   const fillers = (col: Column) => rows.filter((_, i) => col.fills[i]).map((row) => row.id);
+
+  /**
+   * The lines a COUNT over `col` cannot see: they might hold matching cards and
+   * the engine will not count them, because their description does not imply
+   * the column's (PRD §6.3). A limit has this blind spot, and so does a
+   * requirement's ceiling — both turn on how many matching cards a hand holds.
+   */
+  const blindSpot = (col: Column) => {
+    const ignoredRows = rows.filter(
+      (row, i) => !col.fills[i] && intersects(row.desc, col.desc, impliesCtx),
+    );
+    const ignored = ignoredRows.map(
+      (row): IgnoredLine => ({
+        line: row.id,
+        isRemainder: row.isRemainder,
+        ...(row.isRemainder && remainderRange !== null ? remainderRange : ranges[row.at]!),
+      }),
+    );
+    const ignoredAt = new Set(ignoredRows.map((row) => row.at));
+    return {
+      rows: ignoredRows,
+      ignored,
+      ignoredRange: ignored.length === 0 ? null : rangeOver((at) => ignoredAt.has(at)),
+      names: ignoredRows.map((row) => (row.isRemainder ? 'the remainder' : JSON.stringify(row.id))),
+    };
+  };
   const requirements = columns
     .filter((col) => col.required.length > 0)
     .map((col): RequirementAnalysis => {
@@ -743,16 +800,31 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
           },
         ];
       });
+      // A ceiling counts the cards a hand holds, so what it cannot see matters
+      // to it exactly as it matters to a limit; an uncapped requirement only
+      // ever asks for MORE cards, and no line it cannot see can take that away.
+      const bounded = col.required.some(({ max }) => max !== undefined);
+      const blind = bounded ? blindSpot(col) : null;
+      const found: Issue[] = [];
+      if (filledBy.length === 0)
+        found.push(warning('unfilled', `no line fills the requirement \`${col.text}\``));
+      if (blind !== null && blind.ignoredRange !== null && blind.ignoredRange.max > 0)
+        found.push(
+          notice(
+            'requirement-ignores',
+            `the ceiling on \`${col.text}\` ignores ${span(blind.ignoredRange)} cards of lines that do not say whether they match: ${blind.names.join(', ')} — if some do, a hand could hold more than the range allows and be counted as though it did not`,
+          ),
+        );
       return {
         text: col.text,
         echo: col.echo,
         appearsIn: col.required,
         filledBy,
         nearMisses,
-        issues:
-          filledBy.length === 0
-            ? [warning('unfilled', `no line fills the requirement \`${col.text}\``)]
-            : [],
+        bounded,
+        ignored: blind?.ignored ?? [],
+        ignoredRange: blind?.ignoredRange ?? null,
+        issues: found,
       };
     });
 
@@ -760,18 +832,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     .filter((col) => col.limited.length > 0)
     .map((col): LimitAnalysis => {
       const counts = fillers(col);
-      const ignoredRows = rows.filter(
-        (row, i) => !col.fills[i] && intersects(row.desc, col.desc, impliesCtx),
-      );
-      const ignored = ignoredRows.map(
-        (row): IgnoredLine => ({
-          line: row.id,
-          isRemainder: row.isRemainder,
-          ...(row.isRemainder && remainderRange !== null ? remainderRange : ranges[row.at]!),
-        }),
-      );
-      const ignoredAt = new Set(ignoredRows.map((row) => row.at));
-      const ignoredRange = ignored.length === 0 ? null : rangeOver((at) => ignoredAt.has(at));
+      const { ignored, ignoredRange, names } = blindSpot(col);
       const found: Issue[] = [];
       if (counts.length === 0)
         found.push(
@@ -781,9 +842,6 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
           ),
         );
       if (ignoredRange !== null && ignoredRange.max > 0) {
-        const names = ignoredRows.map((row) =>
-          row.isRemainder ? 'the remainder' : JSON.stringify(row.id),
-        );
         found.push(
           notice(
             'limit-ignores',
@@ -968,10 +1026,8 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
           max: row.isRemainder ? remainder.max : ranges[row.at]!.max,
         })),
         matrix: rows.map((_, i) => columns.map((col) => col.fills[i]!)),
-        flat: all.flat.map(({ reqs, limits }) => ({
-          reqs: reqs.map(({ n, desc }) => ({ n, desc: columnAt(desc) })),
-          limits: limits.map(({ n, desc }) => ({ n, desc: columnAt(desc) })),
-        })),
+        // `compile`'s own, not a copy of it: the bounds cross this boundary once.
+        flat: indexFlat(all.flat, (desc) => columnAt(desc)),
       };
       const compiled = compileProblem(input);
       if (!compiled.ok) issues.push(...compiled.errors.map((message) => error('compile', message)));
@@ -988,6 +1044,13 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
             criterion,
             text: columns[desc]!.text,
             n,
+            reason,
+          })),
+          droppedCeilings: compiled.droppedCeilings.map(({ criterion, desc, n, max, reason }) => ({
+            criterion,
+            text: columns[desc]!.text,
+            n,
+            max,
             reason,
           })),
         };

@@ -339,11 +339,11 @@ describe('runEstimate', () => {
       expect(stdout).toMatch(/^ {6}1\. 1x #40044918, 1x #32807846, 1x level 4 or lower monster$/m);
       expect(stdout).toMatch(/judged as 2 distinct flat alternative/);
       expect(stdout).toMatch(
-        /^ {2}requirement +monster +\[Monster\] +filled by: A, monster, level4, fire-bw$/m,
+        /^ {2}requirement +1x monster +\[Monster\] +filled by: A, monster, level4, fire-bw$/m,
       );
       // The point of the whole exercise: `monster` is not specific enough.
       expect(stdout).toMatch(
-        /^ {2}requirement +level 4 or lower monster +\[.*\] +filled by: A, level4$/m,
+        /^ {2}requirement +1x level 4 or lower monster +\[.*\] +filled by: A, level4$/m,
       );
       expect(stdout).toMatch(
         /match nothing, so they cannot affect the odds: spell, normal-spell, \(remainder\)$/m,
@@ -403,7 +403,7 @@ describe('runEstimate', () => {
       const { code, stdout } = await run([unfillable, '--workdir', WORKDIR, '--samples', '1000']);
       expect(code).toBe(EXIT_OK);
       expect(stdout).toMatch(/^Warnings\n {2}no line fills the requirement `trap`$/m);
-      expect(stdout).toMatch(/requirement +trap +\[Trap\] +filled by: \(no line\)$/m);
+      expect(stdout).toMatch(/requirement +1x trap +\[Trap\] +filled by: \(no line\)$/m);
     });
   });
 

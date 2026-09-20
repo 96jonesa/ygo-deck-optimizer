@@ -46,6 +46,18 @@ describe('printCriterion', () => {
     );
   });
 
+  it('prints a range requirement as `a-bx`, always with its x', () => {
+    expect(printCriterion({ op: 'req', n: 1, max: 2, desc: d('monsters') }, ctx)).toBe(
+      '1-2x monster',
+    );
+    expect(printCriterion({ op: 'req', n: 0, max: 1, desc: d('trap') }, ctx)).toBe('0-1x trap');
+    // `[2, 2]` is not `2x`: one has a ceiling and the other has none.
+    expect(printCriterion({ op: 'req', n: 2, max: 2, desc: d('#1') }, ctx)).toBe('2-2x #1');
+    expect(printCriterion({ op: 'req', n: 1, max: 2, desc: d('#1 or #2') }, ctx)).toBe(
+      '1-2x (#1 or #2)',
+    );
+  });
+
   it('prints a limit as at most, and as no when nothing is allowed', () => {
     expect(printCriterion(atMost(2, 'trap'), ctx)).toBe('at most 2x trap');
     expect(printCriterion(atMost(1, '#2'), ctx)).toBe('at most 1x #2');
@@ -113,6 +125,24 @@ describe('parseCriterion/printCriterion round trip (E3)', () => {
     maxArgs: 3,
     limitChance: 0.3,
   };
+
+  it('round-trips 3,000 generated criteria that include RANGE requirements', () => {
+    const rng = seededRng(0xe3e3a2e5);
+    let ranges = 0;
+    const counts = (expr: Expr): number =>
+      expr.op === 'and' || expr.op === 'or'
+        ? expr.args.reduce((sum, arg) => sum + counts(arg), 0)
+        : expr.op === 'req' && expr.max !== undefined
+          ? 1
+          : 0;
+    for (let i = 0; i < 3000; i++) {
+      const expr = genExpr(rng, { ...options, rangeChance: 0.5 });
+      ranges += counts(expr);
+      const text = printCriterion(expr, ctx);
+      expect(parseCriterion(text, ctx), `case ${i}: ${text}`).toEqual({ ok: true, expr });
+    }
+    expect(ranges).toBeGreaterThan(2000);
+  });
 
   it('parses the canonical text of 3,000 generated criteria back to the same AST', () => {
     const rng = seededRng(0xe3e30001);

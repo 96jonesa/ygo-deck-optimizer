@@ -73,6 +73,18 @@ describe('canonicalizeExpr', () => {
     );
   });
 
+  it("keeps a requirement's ceiling, and leaves the key out when it has none", () => {
+    const ranged: Expr = { op: 'req', n: 1, max: 2, desc: card(1) };
+    expect(canonicalizeExpr(ranged)).toEqual(ranged);
+    expect(canonicalizeExpr(and(ranged, A))).toEqual(and(ranged, A));
+    // A plain requirement keeps the JSON it has always had: `max` is absent,
+    // not `undefined`, so canonical JSON is still the identity `expand` merges by.
+    expect(JSON.stringify(canonicalizeExpr({ op: 'req', n: 1, desc: card(1) }))).toBe(
+      JSON.stringify({ op: 'req', n: 1, desc: card(1) }),
+    );
+    expect(JSON.stringify(canonicalizeExpr(ranged))).toContain('"max":2');
+  });
+
   it('does not touch its argument', () => {
     const expr = and(A, and(B, or(C)));
     const before = JSON.stringify(expr);

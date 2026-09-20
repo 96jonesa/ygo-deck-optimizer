@@ -15,6 +15,7 @@ import { normalize } from '../util/normalize';
 import {
   type ClassInfo,
   type CompiledCriterion,
+  type CompiledRequirement,
   type HandSize,
   MAX_CLASSES,
   type Problem,
@@ -66,8 +67,13 @@ export interface ResolvedCounted {
   desc: number;
 }
 
+/** A requirement: `n` cards at least, and `max` at most when it was written `a-b×`. */
+export interface ResolvedRange extends ResolvedCounted {
+  max?: number;
+}
+
 export interface ResolvedFlat {
-  reqs: ResolvedCounted[];
+  reqs: ResolvedRange[];
   limits: ResolvedCounted[];
 }
 
@@ -108,6 +114,26 @@ export type ResolveResult =
   | { ok: false; errors: string[] };
 
 export const REMAINDER_ID = 'remainder';
+
+/** Which column of the match matrix a description is, and in what role it was met. */
+export type ColumnOf = (desc: Description, role: 'inRequirement' | 'inLimit') => number;
+
+/**
+ * Flat criteria with their descriptions replaced by match-matrix columns —
+ * the one place a requirement's BOUNDS are carried across that boundary.
+ * `resolveTemplate` and `analyze` both need it and index their columns
+ * differently, so the indexing is the caller's and the carrying is not: a
+ * second copy of this is how a ceiling goes missing between the two.
+ */
+export function indexFlat(flat: readonly FlatCriterion[], columnOf: ColumnOf): ResolvedFlat[] {
+  return flat.map(({ reqs, limits }) => ({
+    reqs: reqs.map(({ n, max, desc }) => {
+      const at = columnOf(desc, 'inRequirement');
+      return max === undefined ? { n, desc: at } : { n, max, desc: at };
+    }),
+    limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc, 'inLimit') })),
+  }));
+}
 
 export function groupLookupOf(groups: readonly TemplateGroup[]): GroupLookup {
   return {
@@ -242,11 +268,7 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
     descriptions[at]![role] = true;
     return at;
   };
-  const indexed = (flat: readonly FlatCriterion[]): ResolvedFlat[] =>
-    flat.map(({ reqs, limits }) => ({
-      reqs: reqs.map(({ n, desc }) => ({ n, desc: column(desc, 'inRequirement') })),
-      limits: limits.map(({ n, desc }) => ({ n, desc: column(desc, 'inLimit') })),
-    }));
+  const indexed = (flat: readonly FlatCriterion[]) => indexFlat(flat, column);
 
   const criteria: ResolvedCriterion[] = [];
   for (const criterion of parsedCriteria) {
@@ -319,7 +341,13 @@ export interface CompileInput {
   lines: readonly { id: string; isRemainder: boolean; min: number; max: number | null }[];
   /** `matrix[line][description]`, one row per entry of `lines`. */
   matrix: readonly (readonly boolean[])[];
-  flat: readonly { reqs: readonly ResolvedCounted[]; limits: readonly ResolvedCounted[] }[];
+  flat: readonly FlatAlternative[];
+}
+
+/** What `compileCriterion` reads of one flat alternative; `ResolvedFlat` satisfies it. */
+export interface FlatAlternative {
+  reqs: readonly ResolvedRange[];
+  limits: readonly ResolvedCounted[];
 }
 
 /** A member line of a class: its index in `CompileInput.lines`, and its range with `max: null` clamped. */
@@ -351,7 +379,76 @@ export interface DroppedLimit {
   criterion: number;
   desc: number;
   n: number;
-  reason: 'counts-nothing' | 'never-binds';
+  reason: DroppedReason;
+}
+
+export type DroppedReason = 'counts-nothing' | 'never-binds';
+
+/**
+ * A requirement's CEILING left out for the same two reasons: no class can
+ * reach it, or it is at least the largest hand and so can never be exceeded.
+ * The requirement itself stays — only its ceiling goes, which makes it the
+ * plain `n×` it would have been.
+ */
+export interface DroppedCeiling {
+  criterion: number;
+  desc: number;
+  /** The requirement's lower bound, which is kept: enough to print `1-6x` as written. */
+  n: number;
+  max: number;
+  reason: DroppedReason;
+}
+
+/** What one flat alternative compiled to, and the ceilings and limits that fell away doing it. */
+interface CompiledAlternative {
+  criterion: CompiledCriterion;
+  droppedLimits: Omit<DroppedLimit, 'criterion'>[];
+  droppedCeilings: Omit<DroppedCeiling, 'criterion'>[];
+}
+
+/**
+ * One flat alternative as the engine judges it (TDD §8 steps 2 and 3), shared
+ * by `compileProblem` and the optimizer's per-criterion `breakdown` so that
+ * the two can never read a range differently.
+ *
+ * - a requirement becomes its LOWER bound in slots, each holding the mask of
+ *   the classes that fill it;
+ * - a requirement written `a-b×` also becomes a ceiling, unless the ceiling
+ *   can never bind — no class reaches it, or `b` is at least `largestHand`,
+ *   since a hand never holds more cards than that. A requirement with no
+ *   ceiling, and one whose ceiling was dropped, puts its classes in `free`:
+ *   surplus there can always be assigned, so no ceiling traps it;
+ * - a limit becomes a mask, dropped on the same two grounds.
+ */
+export function compileCriterion(
+  { reqs, limits }: FlatAlternative,
+  maskOf: (desc: number) => number,
+  largestHand: number,
+): CompiledAlternative {
+  const droppedLimits: Omit<DroppedLimit, 'criterion'>[] = [];
+  const droppedCeilings: Omit<DroppedCeiling, 'criterion'>[] = [];
+  const compiled = reqs.map(({ n, max, desc }): CompiledRequirement => {
+    const mask = maskOf(desc);
+    if (max === undefined) return { mask, min: n, max: null };
+    const reason = mask === 0 ? 'counts-nothing' : max >= largestHand ? 'never-binds' : undefined;
+    if (reason === undefined) return { mask, min: n, max };
+    droppedCeilings.push({ desc, n, max, reason });
+    return { mask, min: n, max: null };
+  });
+  const criterion: CompiledCriterion = {
+    slots: compiled.flatMap(({ mask, min }) => new Array<number>(min).fill(mask)),
+    limits: limits.flatMap(({ n, desc }) => {
+      const mask = maskOf(desc);
+      const reason = mask === 0 ? 'counts-nothing' : n >= largestHand ? 'never-binds' : undefined;
+      if (reason === undefined) return [{ mask, n }];
+      droppedLimits.push({ desc, n, reason });
+      return [];
+    }),
+  };
+  // Left out when nothing is left to say: `slots` alone is the criterion the
+  // language had before ranges, and the matcher's old path judges it.
+  if (compiled.some(({ max }) => max !== null)) criterion.reqs = compiled;
+  return { criterion, droppedLimits, droppedCeilings };
 }
 
 export type CompileResult =
@@ -363,6 +460,8 @@ export type CompileResult =
       /** The class of each entry of `CompileInput.lines`, the remainder last. */
       classOfLine: number[];
       droppedLimits: DroppedLimit[];
+      /** Requirement ceilings the engine leaves out; the requirements themselves stay. */
+      droppedCeilings: DroppedCeiling[];
     }
   | { ok: false; errors: string[] };
 
@@ -385,12 +484,14 @@ export interface CompileOptions {
  *    ORDER: blank first; the other classes by their first member line, in
  *    template order (the remainder being the last line). Members of a class
  *    are in template order too.
- * 2. A requirement `n×` becomes `n` slots holding the mask of the classes that
- *    fill it. A slot no class fills keeps its mask of 0: that criterion can
- *    never be met, and says so by scoring 0.
+ * 2. Every flat alternative goes through `compileCriterion`: a requirement
+ *    `n×` becomes `n` slots holding the mask of the classes that fill it, and
+ *    a requirement `a-b×` also becomes a ceiling. A slot no class fills keeps
+ *    its mask of 0: that criterion can never be met, and says so by scoring 0.
  * 3. A limit becomes the mask of the classes it counts. A limit that holds of
  *    every hand is DROPPED and listed in `droppedLimits`: one that counts
- *    nothing, and one whose `n` is at least the largest hand size.
+ *    nothing, and one whose `n` is at least the largest hand size. A ceiling
+ *    goes the same way, into `droppedCeilings`.
  *
  * More than `MAX_CLASSES` classes, the blank class included, is an error.
  * The problem that comes back has passed `validateProblem`.
@@ -450,16 +551,13 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
     return mask >>> 0;
   };
   const droppedLimits: DroppedLimit[] = [];
-  const criteria: CompiledCriterion[] = flat.map(({ reqs, limits }, criterion) => ({
-    slots: reqs.flatMap(({ n, desc }) => new Array<number>(n).fill(maskOf(desc))),
-    limits: limits.flatMap(({ n, desc }) => {
-      const mask = maskOf(desc);
-      const reason = mask === 0 ? 'counts-nothing' : n >= largestHand ? 'never-binds' : undefined;
-      if (reason === undefined) return [{ mask, n }];
-      droppedLimits.push({ criterion, desc, n, reason });
-      return [];
-    }),
-  }));
+  const droppedCeilings: DroppedCeiling[] = [];
+  const criteria = flat.map((alternative, criterion) => {
+    const compiled = compileCriterion(alternative, maskOf, largestHand);
+    for (const dropped of compiled.droppedLimits) droppedLimits.push({ criterion, ...dropped });
+    for (const dropped of compiled.droppedCeilings) droppedCeilings.push({ criterion, ...dropped });
+    return compiled.criterion;
+  });
 
   const problem: Problem = {
     deckSize,
@@ -479,7 +577,7 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
     if (!(failure instanceof RangeError)) throw failure;
     return { ok: false, errors: [failure.message] };
   }
-  return { ok: true, problem, classes, classOfLine, droppedLimits };
+  return { ok: true, problem, classes, classOfLine, droppedLimits, droppedCeilings };
 }
 
 /** One class of a class-total vector, as the raw line counts it stands for (TDD §11.2). */

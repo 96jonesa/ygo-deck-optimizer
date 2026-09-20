@@ -36,6 +36,11 @@ function req(n: number, desc: Description): Expr {
   return { op: 'req', n, desc };
 }
 
+/** `a-b×`: a requirement with a ceiling. */
+function range(n: number, max: number, desc: Description): Expr {
+  return { op: 'req', n, max, desc };
+}
+
 function atMost(n: number, desc: Description): Expr {
   return { op: 'atMost', n, desc };
 }
@@ -238,6 +243,72 @@ describe('parseCriterion', () => {
     });
   });
 
+  describe('range requirements', () => {
+    it('reads `a-bx` as a requirement with a ceiling', () => {
+      expectExpr('1-2x monster', range(1, 2, d('monster')));
+      expectExpr('0-1x trap', range(0, 1, d('trap')));
+      expectExpr('2-2x [C]', range(2, 2, C));
+      expectExpr('0-0x [C]', range(0, 0, C));
+    });
+
+    it('reads the criterion Andy asked for', () => {
+      expectExpr('1x [C], 1-2x monster', and(req(1, C), range(1, 2, d('monster'))));
+    });
+
+    it('takes a range wherever a plain count goes', () => {
+      expectExpr('1-2x ([C] or [D])', range(1, 2, card(1, 2)));
+      expectExpr('1x [C] or 1-2x monster', or(req(1, C), range(1, 2, d('monster'))));
+      expectExpr(
+        '1x [C] and (1-2x monster or 1x trap)',
+        and(req(1, C), or(range(1, 2, d('monster')), req(1, d('trap')))),
+      );
+    });
+  });
+
+  describe('a count without its x', () => {
+    it('reads a plain integer where a term must start', () => {
+      expectExpr('2 monsters', req(2, d('monster')));
+      expectExpr('1x [C], 2 monster', and(req(1, C), req(2, d('monster'))));
+      expectExpr('at most 2 trap', atMost(2, d('trap')));
+      expectExpr(
+        '1x [C] and (2 monster and 1x trap)',
+        and(req(1, C), req(2, d('monster')), req(1, d('trap'))),
+      );
+    });
+
+    it('reads a range without its x the same way', () => {
+      expectExpr('1-2 monster', range(1, 2, d('monster')));
+      expectExpr('1x [C], 1-2 monster', and(req(1, C), range(1, 2, d('monster'))));
+      expectExpr('1 - 2 monster', range(1, 2, d('monster')));
+    });
+
+    it("keeps a description's own leading number: `2000 ATK monster` is not a count", () => {
+      // After `or`, a description may continue, so only an `x` makes a count.
+      expectExpr('1x ([C] or 2000 ATK monster)', req(1, d('[C] or 2000 ATK monster')));
+      expectExpr('1x [C] or 2000 ATK monster', req(1, d('[C] or 2000 ATK monster')));
+      // A count there keeps its `x`, and then it IS a term.
+      expectExpr('1x [C] or 2x monster', or(req(1, C), req(2, d('monster'))));
+    });
+
+    it('says so when a description after `or` was meant to be a count', () => {
+      // `2 [D]` is not a description, and the likeliest thing meant is `2x [D]`.
+      expect(errorOf('1x [C] or 2 [D]').message).toContain('a count after `or` keeps its `x`');
+    });
+
+    it('still asks for a count when the number is too large to be one', () => {
+      expect(errorOf('2000 ATK monster')).toMatchObject({
+        message: expect.stringContaining('expected a count before the description'),
+        at: '2000',
+      });
+    });
+
+    it('does not eat a level range: `1 level 2-4 monster` counts one, levels two to four', () => {
+      expectExpr('1 level 2-4 monster', req(1, d('level 2-4 monster')));
+      expectExpr('1-2 level 2-4 monster', range(1, 2, d('level 2-4 monster')));
+      expectExpr('1x level 2-4 monster', req(1, d('level 2-4 monster')));
+    });
+  });
+
   describe('errors', () => {
     it('asks for a term when there is nothing', () => {
       for (const text of ['', '   '])
@@ -258,7 +329,31 @@ describe('parseCriterion', () => {
         message: expect.stringContaining('count'),
         at: '[C]',
       });
-      expect(errorOf('2 monsters').message).toContain('2x');
+      // `2 monsters` used to be this error; the `x` is optional now — see
+      // `a count without its x`, which owns that case.
+    });
+
+    it('refuses a range that runs high to low, naming the one meant', () => {
+      expect(errorOf('4-2x monster')).toMatchObject({
+        message: expect.stringContaining('write `2-4x`'),
+        at: '4-2x',
+      });
+      expect(errorOf('1x [C], 3-1 monster')).toMatchObject({ at: '3-1' });
+    });
+
+    it('refuses a range on a limit, which has one ceiling', () => {
+      expect(errorOf('at most 1-2x trap')).toMatchObject({
+        message: expect.stringMatching(/one ceiling.*at most 2x/s),
+        at: '1-2x',
+      });
+    });
+
+    it('refuses a range whose either end is above 60', () => {
+      expect(errorOf('1-61x monster')).toMatchObject({
+        message: expect.stringContaining('60'),
+        at: '1-61x',
+      });
+      expect(errorOf('61-62x monster')).toMatchObject({ message: expect.stringContaining('60') });
     });
 
     it('refuses a requirement of no cards, pointing at no', () => {
@@ -284,7 +379,7 @@ describe('parseCriterion', () => {
         at: 'monster',
       });
       expect(errorOf('at most')).toMatchObject({ at: '', start: 7 });
-      expect(errorOf('at most 2 monster')).toMatchObject({ at: '2' });
+      // `at most 2 monster` used to be this error; the `x` is optional now.
     });
 
     it('reports a dangling and, comma or or', () => {

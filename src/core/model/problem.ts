@@ -5,6 +5,8 @@
  * `src/core/prob` consumes it.
  */
 
+import { MAX_RANGES } from '../criteria/ast';
+
 /** Classes, the blank class included: a class mask is a non-negative 32-bit integer. */
 export const MAX_CLASSES = 30;
 
@@ -32,10 +34,34 @@ export interface CompiledLimit {
   n: number;
 }
 
+/** One requirement: between `min` and `max` of the hand's cards of `mask` are assigned to it. */
+export interface CompiledRequirement {
+  /** The classes that fill it. */
+  mask: number;
+  min: number;
+  /** `null` is no ceiling, which is what a plain `n×` means. */
+  max: number | null;
+}
+
 export interface CompiledCriterion {
-  /** One class bitmask per requirement slot — `n×` is `n` slots: the classes that can fill it. */
+  /**
+   * One class bitmask per requirement slot: the classes that can fill it.
+   * A requirement contributes its LOWER bound in slots — `n×` is `n` slots,
+   * and `0-2×` is none. This is all a criterion without ceilings needs.
+   */
   slots: number[];
   limits: CompiledLimit[];
+  /**
+   * Every requirement of the criterion, whole — present only when one of them
+   * has a ceiling that can bind, so that a criterion in the language as it was
+   * is byte for byte what it always was. `slots` is exactly these expanded by
+   * their lower bounds, and `validateProblem` holds the two to that.
+   *
+   * A ceiling cannot be read off `slots`, and neither can it be kept apart
+   * from its own lower bound: `1-2×` takes two cards in total, not one for its
+   * slot and two more under its ceiling.
+   */
+  reqs?: CompiledRequirement[];
 }
 
 export interface HandSize {
@@ -117,7 +143,7 @@ export function validateProblem(problem: Problem): void {
       );
   });
 
-  criteria.forEach(({ slots, limits }, criterion) => {
+  criteria.forEach(({ slots, limits, reqs }, criterion) => {
     slots.forEach((mask, slot) => {
       checkMask(mask, classes.length, `criterion ${criterion}, slot ${slot}`, 'fill a requirement');
     });
@@ -127,5 +153,49 @@ export function validateProblem(problem: Problem): void {
       if (!isCount(n))
         throw new RangeError(`${where}: a limit's count is a whole number, not ${n}`);
     });
+    if (reqs === undefined) return;
+    checkRequirements(reqs, slots, classes.length, criterion);
   });
+}
+
+/** The multiset of slot masks, as a string that two equal multisets share. */
+const slotKey = (masks: readonly number[]) => [...masks].sort((a, b) => a - b).join(',');
+
+/**
+ * `reqs` is only there for the ceilings, and it may not quietly say something
+ * else than `slots` does: the two are one requirement list, read two ways.
+ */
+function checkRequirements(
+  reqs: readonly CompiledRequirement[],
+  slots: readonly number[],
+  classCount: number,
+  criterion: number,
+): void {
+  const ceilings = reqs.filter(({ max }) => max !== null).length;
+  if (ceilings === 0)
+    throw new RangeError(
+      `criterion ${criterion}: with no ceiling to keep, \`reqs\` is left out and \`slots\` says it all`,
+    );
+  if (ceilings > MAX_RANGES)
+    throw new RangeError(
+      `criterion ${criterion}: the engine judges at most ${MAX_RANGES} range requirements, not ${ceilings}`,
+    );
+  reqs.forEach(({ mask, min, max }, at) => {
+    const where = `criterion ${criterion}, requirement ${at}`;
+    checkMask(mask, classCount, where, 'fill a requirement');
+    if (!isCount(min))
+      throw new RangeError(`${where}: a lower bound is a whole number, not ${min}`);
+    if (max === null) return;
+    if (!isCount(max) || max < min)
+      throw new RangeError(
+        `${where}: a range is 0 <= min <= max in whole cards, not ${min} to ${max}`,
+      );
+    if (mask === 0)
+      throw new RangeError(`${where}: a ceiling no class can reach binds nothing and is dropped`);
+  });
+  const expanded = reqs.flatMap(({ mask, min }) => new Array<number>(min).fill(mask));
+  if (slotKey(expanded) !== slotKey(slots))
+    throw new RangeError(
+      `criterion ${criterion}: \`slots\` must be the requirements' lower bounds expanded — ${expanded.length} slot(s) expected, ${slots.length} given`,
+    );
 }

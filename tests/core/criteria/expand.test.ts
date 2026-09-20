@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Expr, FlatCriterion } from '../../../src/core/criteria/ast';
+import { type Expr, type FlatCriterion, MAX_RANGES } from '../../../src/core/criteria/ast';
 import { expand, expandAll, MAX_FLAT_CRITERIA } from '../../../src/core/criteria/expand';
 import type { Description } from '../../../src/core/desc/ast';
 import { same } from '../../helpers/assert';
@@ -21,6 +21,11 @@ const [A, B, C, D] = [card(1), card(2), card(3), card(4)] as [
 
 function req(n: number, desc: Description): Expr {
   return { op: 'req', n, desc };
+}
+
+/** `a-b×`: a requirement with a ceiling. */
+function range(n: number, max: number, desc: Description): Expr {
+  return { op: 'req', n, max, desc };
 }
 
 function atMost(n: number, desc: Description): Expr {
@@ -134,6 +139,45 @@ describe('expand', () => {
       ]);
     });
 
+    it('adds the ceilings of two ranges on the same description', () => {
+      expect(flatOf(and(range(1, 2, A), range(1, 2, A)))).toEqual([
+        { reqs: [{ n: 2, max: 4, desc: A }], limits: [] },
+      ]);
+      expect(flatOf(and(range(0, 1, A), range(2, 3, A)))[0]!.reqs).toEqual([
+        { n: 2, max: 4, desc: A },
+      ]);
+    });
+
+    it('lets an unbounded requirement void the ceiling: it absorbs the surplus', () => {
+      expect(flatOf(and(req(1, A), range(1, 2, A)))).toEqual([
+        { reqs: [{ n: 2, desc: A }], limits: [] },
+      ]);
+      // Whichever way round they are written.
+      expect(flatOf(and(range(1, 2, A), req(1, A)))[0]!.reqs).toEqual([{ n: 2, desc: A }]);
+    });
+
+    it('keeps two ranges on DIFFERENT descriptions apart', () => {
+      expect(flatOf(and(range(1, 2, A), range(1, 2, B)))[0]!.reqs).toEqual([
+        { n: 1, max: 2, desc: A },
+        { n: 1, max: 2, desc: B },
+      ]);
+    });
+
+    it('keeps `0-b` rather than dropping it as a requirement of no cards', () => {
+      expect(flatOf(range(0, 2, A))).toEqual([{ reqs: [{ n: 0, max: 2, desc: A }], limits: [] }]);
+      // A plain `0x` still asks for nothing and goes.
+      expect(flatOf(req(0, A))).toEqual([{ reqs: [], limits: [] }]);
+    });
+
+    it('tells two alternatives apart by their ceilings, not only their counts', () => {
+      const result = expand(or(range(1, 2, A), range(1, 3, A), req(1, A)), HAND);
+      expect(result.ok && result.flat).toEqual([
+        { reqs: [{ n: 1, max: 2, desc: A }], limits: [] },
+        { reqs: [{ n: 1, max: 3, desc: A }], limits: [] },
+        { reqs: [{ n: 1, desc: A }], limits: [] },
+      ]);
+    });
+
     it('keeps the tighter of two limits with the same description', () => {
       expect(flatOf(and(atMost(2, A), atMost(1, A), atMost(3, A)))).toEqual([
         { reqs: [], limits: [{ n: 1, desc: A }] },
@@ -238,6 +282,43 @@ describe('expand', () => {
         flat: [{ reqs: [] }],
         dropped: 0,
       });
+    });
+
+    it('counts only the LOWER bounds of ranges: `0-2x` asks for no card', () => {
+      const wide = and(range(0, 2, A), range(0, 2, B), range(0, 2, C), range(0, 2, D));
+      expect(expand(wide, { maxHandSize: 2 })).toMatchObject({ dropped: 0 });
+      // Lower bounds still add up and still drop.
+      expect(expand(and(range(3, 4, A), range(3, 4, B)), { maxHandSize: 5 })).toMatchObject({
+        flat: [],
+        dropped: 1,
+      });
+    });
+  });
+
+  describe('the cap on range requirements', () => {
+    /** `n` ranges on distinct descriptions, each a ceiling that can bind at a hand of 6. */
+    const ranges = (n: number) => and(...Array.from({ length: n }, (_, i) => range(0, 1, card(i))));
+
+    it(`accepts exactly ${MAX_RANGES} ranges that can bind`, () => {
+      expect(expand(ranges(MAX_RANGES), HAND).ok).toBe(true);
+    });
+
+    it('refuses one more, with a message that names the cap', () => {
+      expect(expand(ranges(MAX_RANGES + 1), HAND)).toEqual({
+        ok: false,
+        message: expect.stringContaining(String(MAX_RANGES)),
+      });
+    });
+
+    it('does not count a ceiling that can never bind: the hand is not that large', () => {
+      // `0-6x` at a hand of 6 can never be exceeded, so it costs the engine nothing.
+      const wide = and(...Array.from({ length: MAX_RANGES + 5 }, (_, i) => range(0, 6, card(i))));
+      expect(expand(wide, HAND).ok).toBe(true);
+    });
+
+    it('is an error and not a drop: the alternative is judged or it is not', () => {
+      const result = expand(or(req(1, A), ranges(MAX_RANGES + 1)), HAND);
+      expect(result.ok).toBe(false);
     });
   });
 
@@ -387,7 +468,7 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
   }
 
   /** A random table of which card type fills which description, and a hand drawn from the types. */
-  function genCase(rng: Rng): Case {
+  function genCase(rng: Rng, rangeChance = 0): Case {
     const density = rng.pick([0.25, 0.4, 0.6]);
     const table = Array.from({ length: CARD_TYPES }, () =>
       DESCRIPTIONS.map(() => rng.chance(density)),
@@ -397,6 +478,7 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
       maxDepth: rng.pick([1, 2, 3, 3, 4]),
       maxArgs: 3,
       limitChance: 0.2,
+      rangeChance,
     });
     const hand = Array.from({ length: rng.int(0, 6) }, () => rng.int(0, CARD_TYPES - 1));
     return {
@@ -489,6 +571,33 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
     expect(merged).toBeGreaterThan(2000);
   });
 
+  it('agrees on 6,000 generated criteria and hands WITH range requirements', () => {
+    const rng = seededRng(0xe1e1a2e5);
+    let compared = 0;
+    let satisfied = 0;
+    let ranged = 0;
+    let merged = 0;
+    for (let i = 0; i < 6000; i++) {
+      const { expr, hand, fills } = genCase(rng, 0.5);
+      const direct = satisfiesTree(expr, hand, fills);
+      const exact = expand(expr, { maxHandSize: Math.max(hand.length, 1) });
+      if (!exact.ok) continue;
+      compared++;
+      if (direct) satisfied++;
+      if (exact.flat.some((f) => f.reqs.some((r) => r.max !== undefined))) ranged++;
+      if (mergesCeilings(expr, exact.flat)) merged++;
+      // The tree evaluator never merges two requirements on one description;
+      // `expand` always does. That they still agree is what checks the merge
+      // rule — ceilings adding, and an unbounded requirement voiding them.
+      same(satisfiesAnyFlat(exact.flat, hand, fills), direct, () => ({ expr, hand }));
+    }
+    expect(compared).toBeGreaterThan(5500);
+    expect(satisfied / compared).toBeGreaterThan(0.2);
+    expect(satisfied / compared).toBeLessThan(0.8);
+    expect(ranged).toBeGreaterThan(3000);
+    expect(merged).toBeGreaterThan(200);
+  });
+
   it('covers nested or-in-and-in-or, limits at every depth and repeated descriptions', () => {
     const rng = seededRng(0xe1e10001);
     const seen = new Set<string>();
@@ -511,6 +620,32 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
       expect(seen, path).toContain(path);
   });
 });
+
+/**
+ * Whether some flat requirement's ceiling is wider than any single leaf's, or
+ * was voided altogether: two leaves on one description were merged.
+ */
+function mergesCeilings(expr: Expr, flat: readonly FlatCriterion[]): boolean {
+  const widest = new Map<string, number | undefined>();
+  const seen = new Set<string>();
+  const walk = (node: Expr) => {
+    if (node.op === 'and' || node.op === 'or') node.args.forEach(walk);
+    else if (node.op === 'req') {
+      const key = JSON.stringify(node.desc);
+      const earlier = widest.get(key);
+      if (!seen.has(key) || (earlier !== undefined && (node.max ?? Infinity) > earlier))
+        widest.set(key, node.max);
+      seen.add(key);
+    }
+  };
+  walk(expr);
+  return flat.some((criterion) =>
+    criterion.reqs.some(({ max, desc }) => {
+      const leaf = widest.get(JSON.stringify(desc));
+      return max === undefined ? leaf !== undefined : leaf !== undefined && max > leaf;
+    }),
+  );
+}
 
 /** Whether some flat requirement asks for more than any single leaf did: two leaves were summed. */
 function sumsCounts(expr: Expr, flat: readonly FlatCriterion[]): boolean {

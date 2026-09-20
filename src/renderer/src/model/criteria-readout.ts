@@ -2,6 +2,8 @@ import type {
   Analysis,
   Appearance,
   CriterionAnalysis,
+  IgnoredLine,
+  IntRange,
   Issue,
   IssueCode,
   NearMissAnalysis,
@@ -68,10 +70,22 @@ export function expansionPreview(
   };
 }
 
-/** The counts a requirement or a limit appears under, written the way a criterion writes them. */
-function countsOf(appearsIn: readonly Appearance[], say: (n: number) => string): string {
-  const counts = [...new Set(appearsIn.map((appearance) => appearance.n))].sort((a, b) => a - b);
-  return counts.map(say).join(' / ');
+/**
+ * The counts a requirement or a limit appears under, written the way a
+ * criterion writes them. Two appearances are the same count only when BOTH
+ * ends agree: `1x` and `1-2x` are different things and read as `1x / 1-2x`.
+ */
+function countsOf(
+  appearsIn: readonly Appearance[],
+  say: (n: number, max: number | undefined) => string,
+): string {
+  const seen = new Map<string, Appearance>();
+  for (const appearance of appearsIn)
+    seen.set(`${appearance.n}-${appearance.max ?? ''}`, appearance);
+  return [...seen.values()]
+    .sort((a, b) => a.n - b.n || (a.max ?? Infinity) - (b.max ?? Infinity))
+    .map(({ n, max }) => say(n, max))
+    .join(' / ');
 }
 
 /** The criteria a requirement or limit belongs to, each named once, in the order they appear. */
@@ -105,6 +119,12 @@ export interface RequirementRow {
   nearMisses: NearMissRow[];
   /** The criteria that ask for it. */
   neededBy: string[];
+  /** Some appearance of it has a ceiling, so what the ceiling cannot see is worth showing. */
+  bounded: boolean;
+  /** When bounded: the under-specified lines the ceiling does not count, each with its own range. */
+  ignored: IgnoredRow[];
+  /** What those lines hold together — `13–33`; `null` when there are none. */
+  ignoredRange: string | null;
   issues: Issue[];
 }
 
@@ -146,21 +166,39 @@ export function requirementRows(analysis: Analysis | null): RequirementRow[] {
       : requirement.nearMisses;
     return {
       text: requirement.text,
-      heading: `${countsOf(requirement.appearsIn, (n) => `${n}x`)} ${requirement.text}`,
+      heading: `${countsOf(requirement.appearsIn, countLabel)} ${requirement.text}`,
       echo: requirement.echo,
       filledBy: requirement.filledBy.map((id) => lineLabel(analysis, id)),
       nearMisses: misses.map((miss) => nearMissRow(analysis, miss)),
       neededBy: criteriaOf(analysis, requirement.appearsIn),
+      bounded: requirement.bounded,
+      ignored: ignoredRows(analysis, requirement.ignored),
+      ignoredRange: rangeOrNull(requirement.ignoredRange),
       issues: requirement.issues,
     };
   });
 }
 
+/** `1x`, or `1-2x` for a range: what `analyze` and the criterion text both call it. */
+function countLabel(n: number, max: number | undefined): string {
+  return max === undefined ? `${n}x` : `${n}-${max}x`;
+}
+
 export interface IgnoredRow {
   label: string;
-  /** `13–33`: how many cards that line could be holding, unseen by the limit. */
+  /** `13–33`: how many cards that line could be holding, unseen by the limit or the ceiling. */
   range: string;
 }
+
+function ignoredRows(analysis: Analysis, ignored: readonly IgnoredLine[]): IgnoredRow[] {
+  return ignored.map((line) => ({
+    label: lineLabel(analysis, line.line),
+    range: rangeLabel(line.min, line.max),
+  }));
+}
+
+const rangeOrNull = (range: IntRange | null) =>
+  range === null ? null : rangeLabel(range.min, range.max);
 
 export interface LimitRow {
   text: string;
@@ -191,14 +229,8 @@ export function limitRows(analysis: Analysis | null): LimitRow[] {
     heading: `${countsOf(limit.appearsIn, (n) => (n === 0 ? 'no' : `at most ${n}x`))} ${limit.text}`,
     echo: limit.echo,
     counts: limit.counts.map((id) => lineLabel(analysis, id)),
-    ignored: limit.ignored.map((line) => ({
-      label: lineLabel(analysis, line.line),
-      range: rangeLabel(line.min, line.max),
-    })),
-    ignoredRange:
-      limit.ignoredRange === null
-        ? null
-        : rangeLabel(limit.ignoredRange.min, limit.ignoredRange.max),
+    ignored: ignoredRows(analysis, limit.ignored),
+    ignoredRange: rangeOrNull(limit.ignoredRange),
     appliesTo: criteriaOf(analysis, limit.appearsIn),
     issues: limit.issues,
   }));

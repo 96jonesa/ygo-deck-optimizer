@@ -33,6 +33,7 @@ export type {
   WorkAnalysis,
 } from '../core/model/analyze';
 export type { ExpandedClass } from '../core/model/compile';
+export type { IntRange } from '../core/model/ranges';
 export type {
   Template,
   TemplateCard,

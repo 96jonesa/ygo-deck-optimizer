@@ -114,14 +114,43 @@ describe('matchingSection', () => {
   it('shows what fills each requirement, and the near misses with the line that would count', () => {
     const text = matchingSection(MOTIVATING);
     expect(text).toMatch(
-      /^ {2}requirement +monster +\[Monster\] +filled by: A, monster, level4, fire-bw$/m,
+      /^ {2}requirement +1x monster +\[Monster\] +filled by: A, monster, level4, fire-bw$/m,
     );
     expect(text).toMatch(
-      /^ {2}requirement +level 4 or lower monster +\[.*\] +filled by: A, level4\n {6}near miss: monster — Level unstated; a `level 4 or lower monster` line would count\n {6}near miss: \(remainder\) — kind unstated; a `level 4 or lower monster` line would count$/m,
+      /^ {2}requirement +1x level 4 or lower monster +\[.*\] +filled by: A, level4\n {6}near miss: monster — Level unstated; a `level 4 or lower monster` line would count\n {6}near miss: \(remainder\) — kind unstated; a `level 4 or lower monster` line would count$/m,
     );
     expect(text).toMatch(
       /^ {2}match nothing, so they cannot affect the odds: spell, normal-spell, \(remainder\)$/m,
     );
+  });
+
+  it('tells a range apart from the plain count it would otherwise read as', () => {
+    const lines = [line('m', 'monster'), line('s', 'spell')];
+    const plain = matchingSection(analyze(templateOf(lines, ['1x monster']), ctx));
+    const ranged = matchingSection(analyze(templateOf(lines, ['1-2x monster']), ctx));
+    expect(plain).toMatch(/^ {2}requirement +1x monster +\[Monster\] +filled by: m$/m);
+    expect(ranged).toMatch(/^ {2}requirement +1-2x monster +\[Monster\] +filled by: m$/m);
+    // The point of the row: the two criteria must not print the same thing.
+    expect(ranged).not.toEqual(plain);
+    expect(ranged).not.toMatch(/requirement +1x monster/);
+  });
+
+  it('writes each distinct count a requirement appears under, ranges included', () => {
+    const many = analyze(
+      templateOf([line('m', 'monster')], ['1-2x monster', '1x monster', '2x monster']),
+      ctx,
+    );
+    // Ordered by lower bound, then by ceiling — the tighter of two `1x`s first,
+    // which is the order the criteria editor's heading uses too.
+    expect(matchingSection(many)).toMatch(/^ {2}requirement +1-2x \/ 1x \/ 2x monster/m);
+  });
+
+  it('writes a limit’s own count, so `no` and `at most 2x` do not print alike', () => {
+    const lines = [line('m', 'monster'), line('t', 'trap')];
+    const none = matchingSection(analyze(templateOf(lines, ['1x monster, no trap']), ctx));
+    const some = matchingSection(analyze(templateOf(lines, ['1x monster, at most 2x trap']), ctx));
+    expect(none).toMatch(/^ {2}limit +no trap +\[Trap\] +counts: t$/m);
+    expect(some).toMatch(/^ {2}limit +at most 2x trap +\[Trap\] +counts: t$/m);
   });
 
   it('does not tell a generic line that it is not a card some line already is', () => {
@@ -135,14 +164,14 @@ describe('matchingSection', () => {
       ctx,
     );
     expect(matchingSection(absent)).toMatch(
-      /^ {2}requirement +#40044918 +\[Elemental HERO Stratos\] +filled by: \(no line\)\n {6}near miss: m, l4, \(remainder\) — a generic line never counts as a named card; a `#40044918` line would count$/m,
+      /^ {2}requirement +1x #40044918 +\[Elemental HERO Stratos\] +filled by: \(no line\)\n {6}near miss: m, l4, \(remainder\) — a generic line never counts as a named card; a `#40044918` line would count$/m,
     );
   });
 
   it('shows what a limit counts, and what it ignores, line by line and in all', () => {
     const text = matchingSection(BROKEN);
     expect(text).toMatch(
-      /^ {2}limit +trap +\[Trap\] +counts: t\n {6}ignores: any \(1–4\), \(remainder\) \(\d+–\d+\) — \d+–\d+ cards in all$/m,
+      /^ {2}limit +at most 1x trap +\[Trap\] +counts: t\n {6}ignores: any \(1–4\), \(remainder\) \(\d+–\d+\) — \d+–\d+ cards in all$/m,
     );
   });
 

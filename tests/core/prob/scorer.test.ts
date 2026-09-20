@@ -19,7 +19,9 @@ import {
   fillsOf,
   type Generated,
   genProblem,
+  hasRange,
   smallProblems,
+  smallRangedProblems,
 } from '../../helpers/gen-problem';
 import { referenceNumerator } from '../../helpers/matcher-oracle';
 import { type Rng, seededRng } from '../../helpers/prng';
@@ -502,6 +504,79 @@ describe('exact scorer against exhaustive enumeration of small decks', () => {
     });
     // Pinned so the size of the check is on record; it moves only if the generator does.
     expect({ decks, hands }).toEqual({ decks: 720, hands: 288_933 });
+  });
+
+  it('counts the same hands as the UNEXPANDED criteria do', () => {
+    generated.slice(0, 80).forEach((g, i) => {
+      const converted = problemFromMatrix(g.problem, [g.handSize]);
+      const fills = fillsOf(g.problem);
+      const successes = combinations(deckOf(g.problem, g.counts), g.handSize).filter((hand) =>
+        g.exprs.some((expr) => satisfiesTree(expr, hand, fills)),
+      ).length;
+      const { num } = createScorer(converted.problem, g.handSize).score(converted.totals(g.counts));
+      same(num, successes, () => ({ index: i, problem: g.problem }));
+    });
+  });
+
+  it('counts the successful hands of each criterion alone', () => {
+    let criteria = 0;
+    generated.slice(0, 120).forEach((g, i) => {
+      const converted = problemFromMatrix(g.problem, [g.handSize]);
+      const hands = combinations(deckOf(g.problem, g.counts), g.handSize);
+      const fills = fillsOf(g.problem);
+      g.flat.forEach((flat, criterion) => {
+        const scorer = createScorer(converted.problem, g.handSize, { criterion });
+        const successes = hands.filter((hand) => satisfiesFlat(flat, hand, fills)).length;
+        same(scorer.score(converted.totals(g.counts)).num, successes, () => ({
+          index: i,
+          criterion,
+          problem: g.problem,
+        }));
+        criteria++;
+      });
+    });
+    expect(criteria).toBeGreaterThanOrEqual(200);
+  });
+});
+
+describe('exact scorer against exhaustive enumeration, with range requirements', () => {
+  const generated = smallRangedProblems();
+
+  it('generates problems worth testing', () => {
+    expect(generated.filter(hasRange).length).toBeGreaterThanOrEqual(150);
+    const reqs = generated.flatMap((g) => g.problem.flat.flatMap((f) => f.reqs));
+    // Ceilings that bind, ceilings at zero, and ranges wider than one card.
+    expect(reqs.filter((r) => r.max !== undefined).length).toBeGreaterThanOrEqual(200);
+    expect(reqs.filter((r) => r.max === 0).length).toBeGreaterThanOrEqual(10);
+    expect(reqs.filter((r) => r.max !== undefined && r.max > r.n).length).toBeGreaterThanOrEqual(
+      100,
+    );
+    // And a healthy mix of verdicts, or the agreement would be vacuous.
+    const p = generated.map((g) => {
+      const { hands, successes } = enumerate(g, g.counts, g.flat);
+      return successes / hands;
+    });
+    expect(p.filter((value) => value > 0.02 && value < 0.98).length).toBeGreaterThanOrEqual(100);
+  });
+
+  it('counts exactly the successful hands of every deck, every C(N, H) hand judged both ways', () => {
+    let decks = 0;
+    let hands = 0;
+    generated.forEach((g, i) => {
+      const converted = problemFromMatrix(g.problem, [g.handSize]);
+      const scorer = createScorer(converted.problem, g.handSize);
+      const rng = seededRng(43_000 + i);
+      for (const counts of [g.counts, otherCounts(rng, g)]) {
+        const exact = enumerate(g, counts, g.flat);
+        const context = () => ({ index: i, counts, problem: g.problem, handSize: g.handSize });
+        const { num, den } = scorer.score(converted.totals(counts));
+        same(num, exact.successes, context);
+        same(den, exact.hands, context);
+        decks++;
+        hands += exact.hands;
+      }
+    });
+    expect({ decks, hands }).toEqual({ decks: 480, hands: 183_044 });
   });
 
   it('counts the same hands as the UNEXPANDED criteria do', () => {

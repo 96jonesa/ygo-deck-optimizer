@@ -6,7 +6,7 @@ import { same } from '../../helpers/assert';
 import { compositions } from '../../helpers/combinatorics';
 import { satisfiesAnyFlat } from '../../helpers/criteria-oracle';
 import { genClassProblem } from '../../helpers/gen-class-problem';
-import { fillsOf, smallProblems } from '../../helpers/gen-problem';
+import { fillsOf, hasRange, smallProblems, smallRangedProblems } from '../../helpers/gen-problem';
 import { bruteForceMeets, bruteForceSucceeds } from '../../helpers/matcher-oracle';
 import { seededRng } from '../../helpers/prng';
 import { handOfComposition, problemFromMatrix } from '../../helpers/problem-from-matrix';
@@ -221,6 +221,106 @@ describe('handSucceeds', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Range requirements. The acceptance cases Andy asked for, at the level the
+// matcher works at: `1x [Ash], 1-2x monster`, where Ash is itself a monster.
+// Classes: 0 blank, 1 ASH, 2 MONSTER (any other), 3 SPELL.
+// ---------------------------------------------------------------------------
+
+const ASH = 0b0010;
+const MONSTER = 0b0100;
+const SPELL = 0b1000;
+
+/** `1x [Ash], 1-2x monster`, compiled. */
+const ASH_AND_TWO: CompiledCriterion = {
+  slots: [ASH, ASH | MONSTER],
+  limits: [],
+  reqs: [
+    { mask: ASH, min: 1, max: null },
+    { mask: ASH | MONSTER, min: 1, max: 2 },
+  ],
+};
+
+describe('a range requirement', () => {
+  /** `[blank, ash, monster, spell]`, judged as a hand of that many cards. */
+  const ashAndTwo = (h: number[]) =>
+    handSucceeds(
+      problemOf([ASH_AND_TWO]),
+      h,
+      h.reduce((sum, n) => sum + n, 0),
+    );
+
+  it('passes Ash, Veiler, Nibiru: Ash fills its own, the other two are the range', () => {
+    expect(ashAndTwo([0, 1, 2, 0])).toBe(true);
+  });
+
+  it('fails Ash, Veiler, Nibiru, Maxx: the fourth monster cannot be left unassigned', () => {
+    expect(ashAndTwo([0, 1, 3, 0])).toBe(false);
+  });
+
+  it('fails Ash, spell, spell: no monster is left for the range once Ash is taken', () => {
+    expect(ashAndTwo([0, 1, 0, 2])).toBe(false);
+  });
+
+  it('passes Ash, Ash, Veiler: the second Ash counts toward the range', () => {
+    expect(ashAndTwo([0, 2, 1, 0])).toBe(true);
+  });
+
+  it('fails Veiler, Nibiru: the named requirement is unfilled', () => {
+    expect(ashAndTwo([0, 0, 2, 0])).toBe(false);
+  });
+
+  it('passes two overlapping ranges, each card counting once', () => {
+    // `1-2x monster, 1-2x level 4 monster`; classes: 0 blank, 1 L4, 2 L5.
+    const [L4, L5] = [0b010, 0b100];
+    const overlapping: CompiledCriterion = {
+      slots: [L4 | L5, L4],
+      limits: [],
+      reqs: [
+        { mask: L4 | L5, min: 1, max: 2 },
+        { mask: L4, min: 1, max: 2 },
+      ],
+    };
+    // One L4 to the level-4 range, the other L4 and the L5 to the monster range.
+    expect(handSucceeds(problemOf([overlapping], 3), [0, 2, 1], 3)).toBe(true);
+    // Five cards is more than the two ranges can hold together.
+    expect(handSucceeds(problemOf([overlapping], 3), [0, 3, 2], 5)).toBe(false);
+  });
+
+  it('reads `0-b` as a ceiling and not as "no requirement at all"', () => {
+    const none: CompiledCriterion = {
+      slots: [],
+      limits: [],
+      reqs: [{ mask: ASH, min: 0, max: 0 }],
+    };
+    expect(handSucceeds(problemOf([none]), [3, 0, 0, 0], 3)).toBe(true);
+    expect(handSucceeds(problemOf([none]), [2, 1, 0, 0], 3)).toBe(false);
+  });
+
+  it('lets an unbounded requirement on the same classes void the ceiling', () => {
+    // `1-1x ash and 1x ash` as the engine would never merge them: the surplus
+    // has somewhere to go, so three Ash still pass.
+    const voided: CompiledCriterion = {
+      slots: [ASH, ASH],
+      limits: [],
+      reqs: [
+        { mask: ASH, min: 1, max: 1 },
+        { mask: ASH, min: 1, max: null },
+      ],
+    };
+    expect(handSucceeds(problemOf([voided]), [0, 3, 0, 0], 3)).toBe(true);
+  });
+
+  it('counts a limit over the whole hand, as it always did, alongside a range', () => {
+    const withLimit: CompiledCriterion = {
+      ...ASH_AND_TWO,
+      limits: [{ mask: SPELL, n: 0 }],
+    };
+    expect(handSucceeds(problemOf([withLimit]), [0, 1, 2, 0], 3)).toBe(true);
+    expect(handSucceeds(problemOf([withLimit]), [0, 1, 1, 1], 3)).toBe(false);
+  });
+});
+
 // S3 — Hall's condition against brute-force assignment. Nothing is sampled:
 // every composition of every problem is judged three or four ways.
 describe("Hall's condition against brute-force assignment, hand by hand", () => {
@@ -248,6 +348,33 @@ describe("Hall's condition against brute-force assignment, hand by hand", () => 
     });
     // Pinned so the size of the check is on record; it moves only if the generator does.
     expect({ compared, succeeded }).toEqual({ compared: 13_668, succeeded: 8206 });
+  });
+
+  it('agrees on every composition of every small problem WITH range requirements', () => {
+    const generated = smallRangedProblems();
+    // The family is worth running only if it really holds ranges.
+    expect(generated.filter(hasRange).length).toBeGreaterThanOrEqual(150);
+    let compared = 0;
+    let succeeded = 0;
+    generated.forEach((g, i) => {
+      const converted = problemFromMatrix(g.problem, [g.handSize]);
+      const matches = compileMatcher(converted.problem);
+      const judge = createJudge(g.problem);
+      const fills = fillsOf(g.problem);
+      for (const h of compositions(converted.problem.classes.length, g.handSize)) {
+        const hand = handOfComposition(converted, h);
+        if (hand === null) continue;
+        const verdict = matches(h, g.handSize);
+        const context = () => ({ index: i, h, hand, problem: g.problem });
+        same(verdict, satisfiesAnyFlat(g.flat, hand, fills), context);
+        same(verdict, judge(hand), context);
+        same(verdict, bruteForceSucceeds(converted.problem, h), context);
+        compared++;
+        if (verdict) succeeded++;
+      }
+    });
+    // Pinned so the size of the check is on record; it moves only if the generator does.
+    expect({ compared, succeeded }).toEqual({ compared: 12_793, succeeded: 8012 });
   });
 
   it('agrees with brute force over classes, criterion by criterion, up to seven slots and hands of six', () => {

@@ -14,6 +14,7 @@ import {
 } from '../../../src/core/model/compile';
 import { MAX_CLASSES, validateProblem } from '../../../src/core/model/problem';
 import type { Template, TemplateLine } from '../../../src/core/model/template';
+import { handSucceeds } from '../../../src/core/prob/matcher';
 import { createBlendScorer, createScorer } from '../../../src/core/prob/scorer';
 import { same } from '../../helpers/assert';
 import { CODE } from '../../helpers/fixture-cards';
@@ -773,6 +774,146 @@ describe('compileProblem', () => {
         { mask: 0b110, n: 5 },
         { mask: 0b110, n: 4 },
       ]);
+    });
+  });
+
+  // The construct as Andy asked for it, from the text he wrote, through the
+  // whole stack: parse, expand, compile, judge. Stratos stands in for Ash — a
+  // named card that is itself a monster — and the Beast-Warrior for the others.
+  describe('`1x [name], 1-2x monster` end to end', () => {
+    const template = templateOf(
+      [
+        { id: 'named', text: `#${STRATOS}`, min: 1, max: 3 },
+        { id: 'monsters', text: 'Beast-Warrior monster', min: 0, max: 6 },
+        { id: 'spells', text: 'spell', min: 0, max: 6 },
+      ],
+      ['1x [Elemental HERO Stratos], 1-2x monster'],
+    );
+
+    it('reads the criterion as written and keeps the ceiling', () => {
+      const r = resolved(template);
+      expect(r.criteria[0]!.canonical).toBe('1x #40044918 and 1-2x monster');
+      expect(r.criteria[0]!.alternatives[0]!.reqs).toEqual([
+        { n: 1, desc: 0 },
+        { n: 1, max: 2, desc: 1 },
+      ]);
+    });
+
+    /** Whether a hand of these lines succeeds, as class totals over the compiled problem. */
+    function judges(lines: string[]): boolean {
+      const r = resolved(template);
+      const c = compileProblem(r);
+      if (!c.ok) throw new Error(c.errors.join('\n'));
+      const h = new Array<number>(c.problem.classes.length).fill(0);
+      for (const id of lines) {
+        const at = r.lines.findIndex((l) => l.id === id);
+        h[c.classOfLine[at]!]!++;
+      }
+      return handSucceeds(c.problem, h, lines.length);
+    }
+
+    const NAMED = 'named';
+    const MON = 'monsters';
+    const SPELL = 'spells';
+
+    it('passes Stratos, monster, monster', () => {
+      expect(judges([NAMED, MON, MON])).toBe(true);
+    });
+
+    it('fails Stratos, monster, monster, monster: the fourth cannot be left unassigned', () => {
+      expect(judges([NAMED, MON, MON, MON])).toBe(false);
+    });
+
+    it('fails Stratos, spell, spell: nothing is left for the range', () => {
+      expect(judges([NAMED, SPELL, SPELL])).toBe(false);
+    });
+
+    it('passes Stratos, Stratos, monster: the second copy counts toward the range', () => {
+      expect(judges([NAMED, NAMED, MON])).toBe(true);
+    });
+
+    it('fails monster, monster: the named requirement is unfilled', () => {
+      expect(judges([MON, MON])).toBe(false);
+    });
+  });
+
+  describe('range requirements', () => {
+    const rows: Row[] = [
+      { id: 'a', row: '100' },
+      { id: 'b', row: '110' },
+      { id: 'idle', row: '000' },
+    ];
+
+    it('keeps the whole requirement list beside the slots when a ceiling can bind', () => {
+      const c = compiled(
+        inputOf(rows, [{ reqs: [{ n: 1, max: 2, desc: 0 }, req(1)], limits: [] }]),
+      );
+      expect(c.problem.criteria).toEqual([
+        {
+          slots: [0b110, 0b100],
+          limits: [],
+          reqs: [
+            { mask: 0b110, min: 1, max: 2 },
+            { mask: 0b100, min: 1, max: null },
+          ],
+        },
+      ]);
+      expect(c.droppedCeilings).toEqual([]);
+    });
+
+    it('leaves the requirement list out when no ceiling survives', () => {
+      const c = compiled(inputOf(rows, [{ reqs: [req(0), req(1)], limits: [] }]));
+      expect(c.problem.criteria).toEqual([{ slots: [0b110, 0b100], limits: [] }]);
+    });
+
+    it('DROPS a ceiling no hand can exceed (max >= the largest hand) and says so', () => {
+      const flat: Flat = [{ reqs: [{ n: 1, max: 5, desc: 0 }], limits: [] }];
+      const c = compiled(inputOf(rows, flat));
+      // The requirement stays; only its ceiling goes, making it a plain `1x`.
+      expect(c.problem.criteria).toEqual([{ slots: [0b110], limits: [] }]);
+      expect(c.droppedCeilings).toEqual([
+        { criterion: 0, desc: 0, n: 1, max: 5, reason: 'never-binds' },
+      ]);
+      // At a hand of six, five can be exceeded and the ceiling is kept.
+      const six = compiled(inputOf(rows, flat, {}, { handSize: 6 }));
+      expect(six.problem.criteria[0]!.reqs).toEqual([{ mask: 0b110, min: 1, max: 5 }]);
+      expect(six.droppedCeilings).toEqual([]);
+    });
+
+    it('DROPS a ceiling no line can reach and says so', () => {
+      const c = compiled(
+        inputOf(rows, [{ reqs: [{ n: 0, max: 1, desc: 2 }, req(0)], limits: [] }]),
+      );
+      expect(c.problem.criteria).toEqual([{ slots: [0b110], limits: [] }]);
+      expect(c.droppedCeilings).toEqual([
+        { criterion: 0, desc: 2, n: 0, max: 1, reason: 'counts-nothing' },
+      ]);
+    });
+
+    it('puts a dropped ceiling back among the unbounded: its surplus is free again', () => {
+      // `0-5x a` at a hand of five never binds, so a card of `a` may be left
+      // over — which the matcher only allows because the requirement is free.
+      const c = compiled(
+        inputOf(rows, [
+          {
+            reqs: [
+              { n: 0, max: 5, desc: 0 },
+              { n: 0, max: 1, desc: 1 },
+            ],
+            limits: [],
+          },
+        ]),
+      );
+      expect(c.problem.criteria[0]!.reqs).toEqual([
+        { mask: 0b110, min: 0, max: null },
+        { mask: 0b100, min: 0, max: 1 },
+      ]);
+    });
+
+    it('contributes no slot for a lower bound of zero', () => {
+      const c = compiled(inputOf(rows, [{ reqs: [{ n: 0, max: 1, desc: 0 }], limits: [] }]));
+      expect(c.problem.criteria[0]!.slots).toEqual([]);
+      expect(c.problem.criteria[0]!.reqs).toEqual([{ mask: 0b110, min: 0, max: 1 }]);
     });
   });
 

@@ -383,6 +383,53 @@ describe('requirementRows', () => {
         'Level 4 or lower · Monster',
       );
     });
+
+    it('writes a range as `a-bx`, and tells it apart from the plain count', () => {
+      const row = requirementRows(
+        analysisOf({
+          requirements: [
+            requirementOf('monster', {
+              bounded: true,
+              appearsIn: [
+                { criterion: 'c1', alternative: 0, n: 1, max: 2 },
+                // The same lower bound and no ceiling: a different thing, said separately.
+                { criterion: 'c2', alternative: 0, n: 1 },
+                { criterion: 'c3', alternative: 0, n: 1, max: 2 },
+              ],
+            }),
+          ],
+        }),
+      )[0]!;
+      expect(row.heading).toBe('1-2x / 1x monster');
+    });
+  });
+
+  describe('what a ceiling ignores', () => {
+    it('names the lines a range cannot see, and what they hold together', () => {
+      const row = requirementRows(
+        analysisOf({
+          lines: [lineOf('any', { text: 'spell/trap' })],
+          requirements: [
+            requirementOf('trap', {
+              bounded: true,
+              appearsIn: [{ criterion: 'c1', alternative: 0, n: 1, max: 2 }],
+              ignored: [{ line: 'any', isRemainder: false, min: 1, max: 4 }],
+              ignoredRange: { min: 1, max: 4 },
+            }),
+          ],
+        }),
+      )[0]!;
+      expect(row.bounded).toBe(true);
+      expect(row.ignored).toEqual([{ label: 'any', range: '1–4' }]);
+      expect(row.ignoredRange).toBe('1–4');
+    });
+
+    it('says nothing for a requirement with no ceiling', () => {
+      const row = rowFor(MOTIVATING, 'monster');
+      expect(row.bounded).toBe(false);
+      expect(row.ignored).toEqual([]);
+      expect(row.ignoredRange).toBeNull();
+    });
   });
 
   describe('needed by', () => {

@@ -179,6 +179,8 @@ describe('analyze', () => {
         alternatives: 2,
         irrelevant: ['spell', 'normal-spell', REMAINDER_ID],
         droppedLimits: [],
+        // The motivating example has no range requirement, so none was dropped.
+        droppedCeilings: [],
       });
     });
 
@@ -410,6 +412,56 @@ describe('analyze', () => {
       expect(requirementOf(a, 'trap').filledBy).toEqual(['t']);
       expect(limitOf(a, 'trap').counts).toEqual(['t']);
       expect(limitOf(a, 'trap').appearsIn).toEqual([{ criterion: 'c1', alternative: 1, n: 0 }]);
+    });
+
+    describe('range requirements', () => {
+      it('carries the ceiling into the appearance and the expansion preview', () => {
+        const a = analyze(templateOf(lines, ['1x monster, 1-2x trap']), ctx);
+        expect(requirementOf(a, 'trap').appearsIn).toEqual([
+          { criterion: 'c1', alternative: 0, n: 1, max: 2 },
+        ]);
+        expect(criterionOf(a, 'c1').alternatives).toEqual(['1x monster, 1-2x trap']);
+        // A requirement with no ceiling leaves the key out.
+        expect(requirementOf(a, 'monster').appearsIn).toEqual([
+          { criterion: 'c1', alternative: 0, n: 1 },
+        ]);
+      });
+
+      it('reports what a CEILING cannot see, as a limit does', () => {
+        const a = analyze(templateOf(lines, ['1x monster, 1-2x trap']), ctx);
+        const requirement = requirementOf(a, 'trap');
+        expect(requirement).toMatchObject({
+          bounded: true,
+          filledBy: ['t'],
+          ignored: [
+            { line: 'any', isRemainder: false, min: 1, max: 4 },
+            { line: REMAINDER_ID, isRemainder: true, min: 26, max: 34 },
+          ],
+          ignoredRange: { min: 30, max: 35 },
+        });
+        expect(codes(requirement.issues)).toEqual(['requirement-ignores']);
+        expect(requirement.issues[0]).toMatchObject({ severity: 'notice' });
+        expect(requirement.issues[0]!.message).toContain('the ceiling on `trap` ignores 30–35');
+      });
+
+      it('says nothing of the kind for a requirement with no ceiling', () => {
+        const a = analyze(templateOf(lines, ['1x monster, 1x trap']), ctx);
+        expect(requirementOf(a, 'trap')).toMatchObject({
+          bounded: false,
+          ignored: [],
+          ignoredRange: null,
+          issues: [],
+        });
+      });
+
+      it('lists a ceiling the engine leaves out because no hand can exceed it', () => {
+        const a = analyze(templateOf(lines, ['1-5x monster']), ctx);
+        expect(a.classes?.droppedCeilings).toEqual([
+          { criterion: 0, text: 'monster', n: 1, max: 5, reason: 'never-binds' },
+        ]);
+        // It is still a range as far as the reader is concerned.
+        expect(requirementOf(a, 'monster').bounded).toBe(true);
+      });
     });
   });
 

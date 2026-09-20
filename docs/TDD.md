@@ -288,7 +288,7 @@ criterion   := orExpr
 orExpr      := andExpr ( "or" andExpr )*
 andExpr     := term ( ( "and" | "," ) term )*
 term        := "(" orExpr ")" | requirement | limit
-requirement := COUNT description                 -- COUNT := INT "x"
+requirement := COUNT description                 -- COUNT := INT [ "-" INT ] ["x" | "×"]; 1x, 2×, 1-2x, 1-2
 limit       := "at most" COUNT description | "no" description
 ```
 
@@ -370,6 +370,10 @@ A hand is a composition $`h = (h_c)`$ over classes with $`\sum_c h_c = H`$. For 
 ```
 
   With $`|S| \le H \le 6`$ that is at most 64 subset checks of mask-and-popcount arithmetic — exact, branch-light, and trivially testable against brute-force assignment.
+
+- **A range requirement `a-bx D`** (PRD §5.3) carries a ceiling as well as a floor: between `a` and `b` cards, counted after the other requirements have taken theirs. A hand succeeds iff some assignment gives each card to at most one requirement whose description it matches, puts every requirement's count inside its `[a, b]`, and leaves **no unassigned card matching a requirement that has a finite ceiling** — that last clause is what makes a ceiling bind at all, and is the formal reading of "in addition to". The `x` is optional on both forms; the printer always writes it.
+
+  This is a transportation problem, but it needs no per-hand search: by Hoffman's circulation theorem every cut of the network is trivial but two, so the test is Hall's condition above plus, for each subset $`Y`$ of the *capped* requirements, $`\sum_{c \in M(Y)} h_c \le \sum_{i \in Y} b_i`$, where $`M(Y)`$ holds the classes only $`Y`$ can take — excluding whatever an unbounded requirement, or a ceiling outside $`Y`$, would accept, since that surplus is never trapped. Both families are precomputed per criterion; the bounds are integral, so a feasible circulation *is* an assignment of whole cards. A criterion with no ceiling keeps the Hall path untouched, chosen once when the matcher is compiled: measured at 53.3 ms before and after, against 76.9 ms with every requirement capped (partly the larger success set rather than the matching).
 - **Limits** are counts over the whole hand: $`\sum_{c \in \text{mask}} h_c \le n`$.
 
 The hand succeeds if any flat criterion has its requirements feasible and all its limits satisfied.

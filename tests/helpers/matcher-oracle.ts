@@ -15,7 +15,21 @@ function classesOf(mask: number, classCount: number): number[] {
   return out;
 }
 
-/** Whether `h` — cards held of each class, blank included — meets `criterion`, slot by slot. */
+/**
+ * Whether `h` — cards held of each class, blank included — meets `criterion`.
+ *
+ * Every limit is counted over the whole hand, then the cards are handed out
+ * one at a time by exhaustive search: a card of class `c` may go to any slot
+ * or ceiling whose mask holds `c` and that still has room, or to nothing at
+ * all — the last only when no CEILING would have had to count it, which is
+ * rule 3 of `FlatCriterion`. A slot is a unit of lower bound, so a slot is
+ * satisfied by having been filled, and a ceiling by not overflowing; a
+ * requirement that is both contributes its slots and its ceiling separately,
+ * and the search may put a card in either.
+ *
+ * It owes nothing to the matcher, which answers the same question by counting
+ * classes against precomputed subset conditions and never searches.
+ */
 export function bruteForceMeets(criterion: CompiledCriterion, h: ArrayLike<number>): boolean {
   const classCount = h.length;
   for (const { mask, n } of criterion.limits) {
@@ -23,20 +37,32 @@ export function bruteForceMeets(criterion: CompiledCriterion, h: ArrayLike<numbe
     for (const cls of classesOf(mask, classCount)) counted += h[cls]!;
     if (counted > n) return false;
   }
-  const left = Array.from({ length: classCount }, (_, cls) => h[cls]!);
-  const fillers = criterion.slots.map((mask) => classesOf(mask, classCount));
-  const assign = (slot: number): boolean => {
-    if (slot === fillers.length) return true;
-    for (const cls of fillers[slot]!) {
-      if (left[cls]! === 0) continue;
-      left[cls]!--;
-      const done = assign(slot + 1);
-      left[cls]!++;
+  // A criterion without ceilings says everything in `slots`: one requirement
+  // of exactly one card each, none of them capped.
+  const reqs = criterion.reqs ?? criterion.slots.map((mask) => ({ mask, min: 1, max: null }));
+  /** The cards the hand holds, one entry each, as the class they are of. */
+  const cards = classesOf(2 ** classCount - 1, classCount).flatMap((cls) =>
+    new Array<number>(h[cls]!).fill(cls),
+  );
+  const taken = reqs.map(() => 0);
+  /** A card of this class must go somewhere: some capped requirement would otherwise count it. */
+  const trapped = (cls: number) =>
+    reqs.some(({ mask, max }) => max !== null && (mask & (1 << cls)) !== 0);
+
+  const place = (at: number): boolean => {
+    if (at === cards.length) return reqs.every(({ min }, req) => taken[req]! >= min);
+    const cls = cards[at]!;
+    for (let req = 0; req < reqs.length; req++) {
+      const { mask, max } = reqs[req]!;
+      if ((mask & (1 << cls)) === 0 || (max !== null && taken[req]! >= max)) continue;
+      taken[req]!++;
+      const done = place(at + 1);
+      taken[req]!--;
       if (done) return true;
     }
-    return false;
+    return !trapped(cls) && place(at + 1);
   };
-  return assign(0);
+  return place(0);
 }
 
 export function bruteForceSucceeds(problem: Problem, h: ArrayLike<number>): boolean {

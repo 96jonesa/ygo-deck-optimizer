@@ -2,8 +2,11 @@ import { lexOne, type Span, skipSpace, type TokenBody } from '../desc/lexer';
 
 export type CriterionTokenBody =
   | TokenBody
-  /** `2x`, `2×`, `2 x`: the digits through the `x`. Not validated — `0x` and `999x` are counts. */
-  | { t: 'count'; n: number }
+  /**
+   * `2x`, `2×`, `2 x`, and the range `1-2x`: the digits through the `x`. Not
+   * validated — `0x`, `999x` and `4-2x` are all counts here.
+   */
+  | { t: 'count'; n: number; max?: number }
   | { t: 'atMost' }
   | { t: 'no' }
   /** `and` or `,`: the two are interchangeable (TDD §7.1). */
@@ -22,8 +25,13 @@ const NOT_IN_A_WORD = '(?![\\p{L}\\p{N}])';
  * so an `x` makes a count only where it ENDS a word: `0x2066` and `0xdark`
  * are left to the description lexer, which reads a hex code. A `×` is never
  * part of a word and needs no such care.
+ *
+ * The `x` is also what keeps a count range apart from a description's own:
+ * `1-2x` is a count and `level 2-4` is not, because only the first ends in an
+ * `x`. A count written WITHOUT its `x` — `1-2 monster` — is the parser's to
+ * assemble out of plain integers, and only where a term must start (TDD §7.1).
  */
-const COUNT = new RegExp(`([0-9]+)\\s*(?:×|x${NOT_IN_A_WORD})`, 'iuy');
+const COUNT = new RegExp(`([0-9]+)(?:\\s*-\\s*([0-9]+))?\\s*(?:×|x${NOT_IN_A_WORD})`, 'iuy');
 
 const KEYWORDS: readonly [RegExp, CriterionTokenBody][] = [
   [new RegExp(`at\\s+most${NOT_IN_A_WORD}`, 'iuy'), { t: 'atMost' }],
@@ -41,7 +49,14 @@ function matchAt(re: RegExp, text: string, pos: number): RegExpExecArray | null 
 function keywordAt(text: string, pos: number): [CriterionTokenBody, number] | undefined {
   const count = matchAt(COUNT, text, pos);
   // However many digits: beyond 2^53 the value is inexact, and still far above any count allowed.
-  if (count !== null) return [{ t: 'count', n: Number(count[1]) }, count[0].length];
+  if (count !== null) {
+    const n = Number(count[1]);
+    const upper = count[2];
+    return [
+      upper === undefined ? { t: 'count', n } : { t: 'count', n, max: Number(upper) },
+      count[0].length,
+    ];
+  }
   for (const [re, body] of KEYWORDS) {
     const match = matchAt(re, text, pos);
     if (match !== null) return [body, match[0].length];

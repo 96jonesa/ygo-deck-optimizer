@@ -14,10 +14,19 @@ function printCounted(prefix: string, { desc }: Counted, ctx: PrintContext): str
   return `${prefix} ${desc.anyOf.length > 1 ? `(${text})` : text}`;
 }
 
+/**
+ * A requirement's count, `x` always written: `1x` for no ceiling, `1-2x` for a
+ * range. `[2, 2]` reads `2-2x` and not `2x` — the two mean different things,
+ * and the canonical text has to keep them apart.
+ */
+export function countPrefix(n: number, max: number | undefined): string {
+  return max === undefined ? `${n}x` : `${n}-${max}x`;
+}
+
 function printExpr(expr: Expr, ctx: PrintContext): string {
   switch (expr.op) {
     case 'req':
-      return printCounted(`${expr.n}x`, expr, ctx);
+      return printCounted(countPrefix(expr.n, expr.max), expr, ctx);
     case 'atMost':
       return printCounted(expr.n === 0 ? 'no' : `at most ${expr.n}x`, expr, ctx);
     case 'or':

@@ -1,5 +1,6 @@
 import { canonicalize } from '../desc/ast';
-import type { Counted, Expr, FlatCriterion } from './ast';
+import type { Counted, CountedRange, Expr, FlatCriterion } from './ast';
+import { MAX_RANGES } from './ast';
 
 /** Expansion is exponential in the number of `or`s in principle; more alternatives than this is an error. */
 export const MAX_FLAT_CRITERIA = 256;
@@ -23,7 +24,7 @@ class TooMany {}
 
 /** A flat criterion being built: merged, and keyed by description so that merging is a lookup. */
 interface Draft {
-  reqs: Map<string, Counted>;
+  reqs: Map<string, CountedRange>;
   limits: Map<string, Counted>;
 }
 
@@ -31,41 +32,60 @@ interface Draft {
  * Descriptions are merged when they are structurally identical and never when
  * they merely mean the same (TDD §5.1): canonical JSON is the identity.
  */
-function leafOf(n: number, desc: Counted['desc']): Map<string, Counted> {
-  const canonical = canonicalize(desc);
-  return new Map([[JSON.stringify(canonical), { n, desc: canonical }]]);
+function leafOf<T extends Counted>(counted: T): Map<string, T> {
+  const desc = canonicalize(counted.desc);
+  return new Map([[JSON.stringify(desc), { ...counted, desc }]]);
 }
 
-function merged(
-  a: Map<string, Counted>,
-  b: Map<string, Counted>,
-  combine: (n: number, m: number) => number,
-): Map<string, Counted> {
+function merged<T extends Counted>(
+  a: Map<string, T>,
+  b: Map<string, T>,
+  combine: (earlier: T, later: T) => T,
+): Map<string, T> {
   const out = new Map(a);
-  for (const [key, { n, desc }] of b) {
+  for (const [key, later] of b) {
     const earlier = out.get(key);
-    out.set(key, earlier === undefined ? { n, desc } : { n: combine(earlier.n, n), desc });
+    out.set(key, earlier === undefined ? later : combine(earlier, later));
   }
   return out;
 }
 
 /**
- * Both hold at once. Requirements for the same description need DISTINCT
- * cards, so their counts add (`1x A and 1x A` is `2x A`); of two limits on
- * the same description the tighter one decides.
+ * Two requirements for the same description are one requirement. They take
+ * DISTINCT cards, so the cards they take together number anything in the
+ * SUMSET of their ranges, which over whole numbers is `[a1 + a2, b1 + b2]`:
+ * the lower bounds add, and so do the ceilings.
+ *
+ * An unbounded one voids the ceiling. It can absorb any number of cards, so
+ * nothing matching the description is ever left over against its will, and
+ * `1x A and 1-2x A` is `2x A` and not `2-3x A`.
+ */
+function bothReqs(a: CountedRange, b: CountedRange): CountedRange {
+  const n = a.n + b.n;
+  return a.max === undefined || b.max === undefined
+    ? { n, desc: a.desc }
+    : { n, max: a.max + b.max, desc: a.desc };
+}
+
+/**
+ * Both hold at once. Requirements for the same description merge by
+ * `bothReqs`; of two limits on the same description the tighter one decides.
  */
 function both(a: Draft, b: Draft): Draft {
   return {
-    reqs: merged(a.reqs, b.reqs, (n, m) => n + m),
-    limits: merged(a.limits, b.limits, Math.min),
+    reqs: merged(a.reqs, b.reqs, bothReqs),
+    limits: merged(a.limits, b.limits, (earlier, later) => ({
+      n: Math.min(earlier.n, later.n),
+      desc: earlier.desc,
+    })),
   };
 }
 
 /** Equal for two drafts exactly when they ask the same, in whatever order. */
 function identityOf(draft: Draft): string {
-  const entries = (side: Map<string, Counted>) =>
-    [...side].map(([key, { n }]) => `${n}x${key}`).sort();
-  return JSON.stringify([entries(draft.reqs), entries(draft.limits)]);
+  const reqs = [...draft.reqs].map(([key, { n, max }]) => `${n}-${max ?? ''}x${key}`).sort();
+  const limits = [...draft.limits].map(([key, { n }]) => `${n}x${key}`).sort();
+  return JSON.stringify([reqs, limits]);
 }
 
 /**
@@ -96,11 +116,18 @@ function* flatMapped(exprs: readonly Expr[]): Iterable<Draft> {
 /** `and` distributed over `or`: the alternatives of `expr`, each merged, none repeated. */
 function alternativesOf(expr: Expr): Draft[] {
   switch (expr.op) {
-    case 'req':
-      // A requirement of no cards asks for nothing.
-      return [{ reqs: expr.n > 0 ? leafOf(expr.n, expr.desc) : new Map(), limits: new Map() }];
+    case 'req': {
+      // A requirement of no cards and no ceiling asks for nothing; `0-b×` still
+      // rules out leftovers, so it stays.
+      const asks = expr.n > 0 || expr.max !== undefined;
+      const leaf: CountedRange =
+        expr.max === undefined
+          ? { n: expr.n, desc: expr.desc }
+          : { n: expr.n, max: expr.max, desc: expr.desc };
+      return [{ reqs: asks ? leafOf(leaf) : new Map(), limits: new Map() }];
+    }
     case 'atMost':
-      return [{ reqs: new Map(), limits: leafOf(expr.n, expr.desc) }];
+      return [{ reqs: new Map(), limits: leafOf({ n: expr.n, desc: expr.desc }) }];
     case 'or':
       return distinct(flatMapped(expr.args));
     case 'and':
@@ -119,16 +146,20 @@ function alternativesOf(expr: Expr): Draft[] {
  *
  * In this order:
  * 1. `and` is distributed over `or`. Within each alternative, requirements
- *    with structurally identical descriptions are merged by ADDING their
- *    counts, limits by keeping the smaller; nothing is merged semantically.
+ *    with structurally identical descriptions are merged by `bothReqs` —
+ *    lower bounds add, ceilings add, and an unbounded one voids the ceiling —
+ *    limits by keeping the smaller; nothing is merged semantically.
  * 2. Duplicate alternatives are removed, whatever the order of their parts.
  *    This happens throughout the distribution, and the cap is on what is left:
  *    more than `MAX_FLAT_CRITERIA` DISTINCT alternatives at any point is an
  *    error, found while distributing and not after. Dropping (3) never rescues
  *    an expansion from the cap.
- * 3. An alternative with more requirement slots than `maxHandSize` can never
- *    be satisfied and is dropped, and counted. `flat` may come back empty —
- *    the criteria can then never be met, which is the caller's warning to give.
+ * 3. An alternative whose requirement LOWER bounds need more than
+ *    `maxHandSize` cards can never be satisfied and is dropped, and counted.
+ *    `flat` may come back empty — the criteria can then never be met, which is
+ *    the caller's warning to give. An alternative that survives and holds more
+ *    than `MAX_RANGES` ceilings that can bind is an error, not a drop: it asks
+ *    something the engine will not judge, rather than something no hand meets.
  *
  * Alternatives and their parts keep the order they were written in.
  */
@@ -145,9 +176,20 @@ export function expandAll(exprs: readonly Expr[], opts: ExpandOptions): ExpandRe
   }
   const flat: FlatCriterion[] = [];
   for (const { reqs, limits } of drafts) {
+    // Only the LOWER bounds need cards: `0-2x A` asks for none.
     const slots = [...reqs.values()].reduce((sum, { n }) => sum + n, 0);
-    if (slots <= opts.maxHandSize)
-      flat.push({ reqs: [...reqs.values()], limits: [...limits.values()] });
+    if (slots > opts.maxHandSize) continue;
+    // A ceiling of `maxHandSize` or more can never bind — the hand holds no
+    // more cards than that — so it costs the matcher nothing and is not capped.
+    const ranges = [...reqs.values()].filter(
+      ({ max }) => max !== undefined && max < opts.maxHandSize,
+    ).length;
+    if (ranges > MAX_RANGES)
+      return {
+        ok: false,
+        message: `this alternative has ${ranges} range requirements that can bind; the engine judges at most ${MAX_RANGES} — widen a range past the hand size, or write plain \`nx\` requirements`,
+      };
+    flat.push({ reqs: [...reqs.values()], limits: [...limits.values()] });
   }
   return { ok: true, flat, dropped: drafts.length - flat.length };
 }

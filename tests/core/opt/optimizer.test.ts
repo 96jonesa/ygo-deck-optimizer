@@ -762,8 +762,13 @@ describe('breakdown', () => {
       const template = generated.exprs.map((expr, at) => {
         const expanded = expand(expr, { maxHandSize: H });
         if (!expanded.ok) throw new Error(expanded.message);
+        // A ceiling is carried through: dropping one here would judge the
+        // criterion alone by something other than what it says.
         const index = (side: (typeof expanded.flat)[0]['reqs']) =>
-          side.map(({ n, desc }) => ({ n, desc: columnOf(desc) }));
+          side.map(({ n, max, desc }) => {
+            const at = columnOf(desc);
+            return max === undefined ? { n, desc: at } : { n, max, desc: at };
+          });
         return {
           id: `c${at}`,
           alternatives: expanded.flat.map((f) => ({

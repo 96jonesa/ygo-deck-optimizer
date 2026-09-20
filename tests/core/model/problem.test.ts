@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_RANGES } from '../../../src/core/criteria/ast';
 import {
   MAX_CLASSES,
   MAX_DECK_SIZE,
@@ -164,5 +165,84 @@ describe('validateProblem', () => {
       problem.classes[1] = { lineIds: ['a'], min, max };
       expect(() => validateProblem(problem)).toThrow(/class 1/);
     }
+  });
+
+  describe('range requirements', () => {
+    /** `valid()` with its two slots read as requirements, the first capped at 2. */
+    function ranged(): Problem {
+      const problem = valid();
+      problem.criteria[0]!.reqs = [
+        { mask: 0b010, min: 1, max: 2 },
+        { mask: 0b100, min: 1, max: null },
+      ];
+      return problem;
+    }
+
+    it('accepts requirements that agree with the slots', () => {
+      expect(() => validateProblem(ranged())).not.toThrow();
+    });
+
+    it('refuses requirements whose lower bounds are not the slots', () => {
+      const missing = ranged();
+      missing.criteria[0]!.reqs![0]!.min = 2;
+      expect(() => validateProblem(missing)).toThrow(/slots.*lower bounds/s);
+      const wrongMask = ranged();
+      wrongMask.criteria[0]!.reqs![0]!.mask = 0b100;
+      expect(() => validateProblem(wrongMask)).toThrow(/slots/);
+    });
+
+    it('refuses a requirement list that keeps no ceiling', () => {
+      const none = ranged();
+      none.criteria[0]!.reqs![0]!.max = null;
+      expect(() => validateProblem(none)).toThrow(/no ceiling/);
+    });
+
+    it('refuses a range that runs high to low, or is not whole', () => {
+      for (const [min, max] of [
+        [2, 1],
+        [1, 0.5],
+        [1, -1],
+      ] as const) {
+        const problem = ranged();
+        problem.criteria[0]!.reqs = [
+          { mask: 0b010, min, max },
+          { mask: 0b100, min: 1, max: null },
+        ];
+        problem.criteria[0]!.slots = [...new Array<number>(min).fill(0b010), 0b100];
+        expect(() => validateProblem(problem), `${min}-${max}`).toThrow(/requirement 0/);
+      }
+    });
+
+    it('refuses a ceiling no class can reach: compile drops it instead', () => {
+      const unreachable = ranged();
+      unreachable.criteria[0]!.reqs = [
+        { mask: 0, min: 0, max: 1 },
+        { mask: 0b010, min: 1, max: null },
+        { mask: 0b100, min: 1, max: null },
+      ];
+      expect(() => validateProblem(unreachable)).toThrow(/no class can reach/);
+    });
+
+    it('refuses a ceiling mask that names a class the problem does not have', () => {
+      // A lower bound of 0 puts no slot in the way, so the requirement's own check is reached.
+      const problem = ranged();
+      problem.criteria[0]!.reqs = [
+        { mask: 0b1000, min: 0, max: 1 },
+        { mask: 0b010, min: 1, max: null },
+        { mask: 0b100, min: 1, max: null },
+      ];
+      expect(() => validateProblem(problem)).toThrow(/requirement 0: .*only 3 classes/);
+    });
+
+    it(`refuses more than ${MAX_RANGES} ranges`, () => {
+      const problem = valid();
+      problem.criteria[0]!.slots = [];
+      problem.criteria[0]!.reqs = Array.from({ length: MAX_RANGES + 1 }, () => ({
+        mask: 0b010,
+        min: 0,
+        max: 1,
+      }));
+      expect(() => validateProblem(problem)).toThrow(new RegExp(String(MAX_RANGES)));
+    });
   });
 });

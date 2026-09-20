@@ -16,7 +16,13 @@ import { same } from '../../helpers/assert';
 // Test code may use binomials; the Monte Carlo engine may not (TDD §10.4).
 import { choose, combinations } from '../../helpers/combinatorics';
 import { satisfiesAnyFlat, satisfiesTree } from '../../helpers/criteria-oracle';
-import { fillsOf, type Generated, genProblem } from '../../helpers/gen-problem';
+import {
+  fillsOf,
+  type Generated,
+  genProblem,
+  hasRange,
+  smallRangedProblems,
+} from '../../helpers/gen-problem';
 import { motivatingContext, ROTA, STRATOS } from '../../helpers/motivating';
 import { seededRng } from '../../helpers/prng';
 
@@ -453,6 +459,29 @@ describe('the core judge against the criteria oracles, hand by hand', () => {
     });
     // Pinned so the size of the check is on record; it moves only if the generator does.
     expect(compared).toBe(19_916);
+  });
+
+  it('agrees on every hand of every small deck WITH range requirements', () => {
+    const ranged = smallRangedProblems();
+    expect(ranged.filter(hasRange).length).toBeGreaterThanOrEqual(150);
+    let compared = 0;
+    let succeeded = 0;
+    ranged.forEach((g, i) => {
+      const judge = createJudge(g.problem);
+      const fills = fillsOf(g.problem);
+      for (const hand of combinations(buildDeck(g.problem, g.counts), g.handSize)) {
+        const verdict = judge(hand);
+        same(verdict, satisfiesAnyFlat(g.flat, hand, fills), () => ({ index: i, hand, ...g }));
+        same(
+          verdict,
+          g.exprs.some((expr) => satisfiesTree(expr, hand, fills)),
+          () => ({ index: i, hand, tree: true, ...g }),
+        );
+        compared++;
+        if (verdict) succeeded++;
+      }
+    });
+    expect({ compared, succeeded }).toEqual({ compared: 91_522, succeeded: 57_978 });
   });
 
   it('agrees on every hand of up to five cards over every MULTISET of lines', () => {
