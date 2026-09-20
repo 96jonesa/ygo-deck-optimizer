@@ -107,7 +107,13 @@ describe('validateTemplate', () => {
   // It is the check that was missing: the placeholder ASTs below sat in the
   // TDD for four milestones because nothing ever ran them.
   it('accepts the template file printed in docs/TDD.md §14, read from the document', () => {
-    const md = readFileSync(new URL('../../../docs/TDD.md', import.meta.url), 'utf8');
+    // Line endings are normalised because git hands this file over with CRLF
+    // on Windows, where `\n` in the fence pattern then matches nothing. The
+    // Windows CI leg caught exactly that, on its first run.
+    const md = readFileSync(new URL('../../../docs/TDD.md', import.meta.url), 'utf8').replace(
+      /\r\n/g,
+      '\n',
+    );
     const section = md.slice(md.indexOf('## 14. Template file'), md.indexOf('## 15. Testing'));
     const block = /```json\n([\s\S]*?)\n```/.exec(section)?.[1];
     expect(block, '§14 must still print a JSON template example').toBeDefined();
