@@ -149,6 +149,8 @@ One documented deviation: EDOPro loads repositories in the order of its `configs
 
 Line format, per the client's parser (`gframe/data_manager.cpp:229-266`): lines not starting with `!` are ignored; `!setname <hex> <rest of line>`, single-space delimited, name may contain spaces; malformed lines are skipped silently. A name may hold `|`-separated alternates (`!setname 0x46 Polymerization|Fusion`), each of which resolves to the code. A quoted archetype in a description resolves by normalized exact match over all alternates; no match, or a match to several codes, is a parse error listing the candidates with their codes. Ambiguity is real, not hypothetical — on the examined install `"Warrior"` maps to `0x66` and `0x2066`, and `"Magnet"` to `0x534` and `0x1066` — so the grammar lets a code disambiguate: `"Warrior":0x2066`. Template files always store the code (§19), so ambiguity can only arise while typing. If no `strings.conf` is found, archetype descriptions are unavailable and the status says so (PRD §11).
 
+`SetnameTable.search(query, limit)` backs inline completion (§5.4) and reuses `CardIndex.search`'s ranking verbatim — prefix matches first, a query ending on a word boundary ahead of one that cuts a word, then shorter names, then alphabetical, then substring matches. One row per matching **alternate**, not per entry, since either spelling of `Polymerization|Fusion` is a name the parser resolves and either may be the one being typed. Each row carries `ambiguous`, which is what lets the caller write the name back correctly. Measured on the examined install: 805 entries, 810 searchable spellings, 27 normalized names ambiguous. The shared ranking has a consequence worth knowing: `"War` offers **War Rock** (`0x161`) above **Warrior**, because "war" ends a word in the first and cuts one in the second. An exact query can never lose, though — a name containing the query is at least as long as it, so equal length means equal name.
+
 ### 4.6 `CardRecord` and `CardIndex`
 
 ```ts
@@ -232,6 +234,32 @@ export interface Clause {
 ### 5.3 Evaluating a description against a concrete card
 
 `evaluate(desc, card: CardRecord, groups): boolean` is the obvious field test and is used for exactly three things: named-card lines (§6.3), the match count and samples shown in the parse echo, and the test oracles. Archetype membership uses the engine's own set-card comparison (§4). It is never used to decide what a *generic* line matches.
+
+### 5.4 Inline name completion
+
+The three delimited forms — `[card name]`, `{group name}`, `"archetype"` — are the only places a name is typed, and the only places completion offers anything. `completionSiteAt(text, caret)` in `src/core/desc/completion.ts` answers where the caret is; `desc:complete` (§12) answers what could go there. Both editors use it, through one `CompletingInput`.
+
+**The scan is the lexer's.** `completionSiteAt` walks `lexOne` **forward** from the start of the text rather than scanning backwards from the caret, so "inside a name" means exactly what the lexer means by it. This is not fastidiousness: a backwards scan gets `"Harpie]s` (a `]` inside a quoted archetype), `[Ash [Blossom` (a second `[` inside a card name) and `[Say "Hi` (a quote inside a card name) all wrong, and each is text someone types on the way to something valid. One deliberate departure from the lexer: a character it cannot read at all is **stepped over** rather than ending the scan, because text is unparseable while it is being typed and that is precisely when completion is wanted.
+
+Two corrections to the obvious design, both found while building it:
+
+- **The trigger is not "an unclosed delimiter".** Select the name inside `[Ash Blossom]`, delete it, and the caret sits in `[]` — closed, and a narrower rule would offer nothing there. Sites are read for closed delimiters too; `end` then points *past* the closing delimiter, so a pick replaces it instead of doubling it.
+- **There are no escapes to worry about.** The description lexer scans from the opening character to the first closing one, full stop. A test asserting escape handling would assert a fiction.
+
+**The governing rule: every option inserts text that resolves back to the row picked.** This decides the cases the naive rule gets wrong. A card name shared by two records cannot be written as `[Name]` — the parser answers "names 2 different cards; write the passcode instead" — so such a row inserts `#passcode`. On the examined install exactly one name of 12,132 is shared (`Black Luster Soldier`, `5405694` and `10000100`). The same rule makes archetypes the feature's biggest win: `"Warrior"` is a parse error naming two setcodes, and completion turns that dead end into two rows inserting `"Warrior":0x66` and `"Warrior":0x2066`. An **unambiguous** archetype inserts the bare `"Sky Striker"`, since the code adds nothing a reader wants and the file stores the setcode regardless (§19).
+
+**All three kinds go over one IPC call**, including groups, which the renderer already holds. Two reasons: the trigger comes from the lexer, so a keystroke inside a name is making that round trip anyway, and a renderer-local path would only add a second code path with different staleness behaviour; and *which* group matches, and whether `{name}` can be written back at all (a group name containing `}` cannot), is a semantic decision, which TDD §3 keeps out of the renderer. Empty prefixes differ by kind: `{` lists every group, because a template's groups are a handful of names the user invented and worth recalling, while `[` and `"` list nothing — 12,132 cards and 805 archetypes are not a list.
+
+`src/renderer/src/model/listbox.ts` is the keyboard model the card picker (§16) and the completion share; the picker's public API is unchanged. The popup's own state is a pure reducer in `model/completion.ts`, so the component holds only the markup, the keys, the one `window.api` call, and the two measurements — caret position and text width — that only the DOM can answer.
+
+Four behaviours that are not obvious from the above, each one a decision:
+
+- **Escape dismisses until the TEXT changes, not until the name does.** Keying dismissal on the typed name looks right and is wrong: the prefix is what has been typed *up to the caret*, so one ArrowLeft inside a name changes the prefix and the popup springs back. `close` records the field text instead, and the popup reopens on the next keystroke and on nothing else. Found by the CDP run, not by a unit test.
+- **A stale site refuses the pick rather than misapplying it** (`completionFits`). Between a keystroke and main's reply the site is one keystroke old and its offsets would cut the new text in the wrong place. The reply lands in well under a millisecond, so the cost is a keypress nobody notices, and `desc:complete` is sequenced like `desc:parse` so an overtaken answer is dropped rather than drawn.
+- **The popup anchors at the start of the name, not at the caret** — anchored at the caret it creeps right with every character — and is clamped against the window rather than the field, so it may be wider than the field, as the card picker's is.
+- **No trailing space is inserted after a pick**, which keeps `applyCompletion` a pure span replacement and keeps stored template text free of trailing whitespace. The cost is that ` spell` after `[Some Card]` is typed by hand.
+
+Completion marks two groups sharing a display name `ambiguous`, which is currently **the only place in the app that says so**: `validateTemplate` checks group *ids* for duplicates (`duplicates('groups', …)`) but not names, so two groups both called `starter` validate with no issue at all and `{starter}` silently resolves to whichever comes first. That is a template-model gap, not a completion one, and is tracked separately.
 
 ## 6. Implication
 
@@ -445,13 +473,14 @@ Defined once in `src/shared/ipc.ts` as a channel-name constant plus a `RendererA
 | `cards:search` | invoke | `{ query, limit } → CardHit[]` (`passcode, name, typeline`) |
 | `cards:get` | invoke | `passcode[] → CardInfo[]` (display fields for chips and snapshots) |
 | `desc:parse` | invoke | `text → { ok: true, desc, echo, count, samples } \| { ok: false, message, span }` |
+| `desc:complete` | invoke | `{ text, caret, groups } → { ok: true, site, options } \| NotReady \| InvalidRequest` (§5.4) |
 | `template:analyze` | invoke | `Template → Analysis` (§9) |
+| `template:open` / `template:save` | invoke | dialogs and file I/O in main; `→ Template \| null` / `Template → path \| null` |
+| `results:export` | invoke | `{ runId, format: 'csv' \| 'json' } → path \| null` |
 | `run:start` / `run:cancel` / `run:confirm` | invoke | `{ template, options } → { ok, runId }` and control results; `cancel` resolves when the run has actually ended |
 | `run:event` | main→renderer push | `started` → `progress`* → optional `needs-confirmation` → exactly one of `result` / `cancelled` / `error`, all carrying `runId` |
 
 Push-only channels live in a separate `IpcEvents` constant, so "every `IpcChannels` entry has a registered handler" can stay an asserted invariant. A renderer must subscribe *before* calling `run:start`: `started` can arrive before the invoke resolves.
-| `template:open` / `template:save` | invoke | dialogs and file I/O in main; `→ Template \| null` / `Template → path \| null` |
-| `results:export` | invoke | `{ runId, format: 'csv' \| 'json' } → path \| null` |
 
 `template:analyze` is called on every edit (debounced ~150 ms in the renderer). Sequencing is the IPC layer's job, not the services': requests and responses travel as `Sequenced<T> = { seq, payload }`, the services stay pure functions of their input, and the renderer keeps one `LatestOnly` per request kind and drops stale responses.
 

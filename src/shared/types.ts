@@ -1,4 +1,5 @@
 import type { Description } from '../core/desc/ast';
+import type { CompletionSite, NameKind } from '../core/desc/completion';
 import type { Span } from '../core/desc/lexer';
 import type { Analysis } from '../core/model/analyze';
 import type { Template, TemplateGroup } from '../core/model/template';
@@ -56,7 +57,7 @@ export type {
 export type { BlendPart, BlendScore, Fraction } from '../core/prob/scorer';
 export type { Count } from '../core/util/count';
 export type { LineRatio, RunExtras, RunLine } from '../worker/protocol';
-export type { Description, Span };
+export type { CompletionSite, Description, NameKind, Span };
 
 export interface AppInfo {
   version: string;
@@ -178,6 +179,44 @@ export interface DescParseRequest {
   /** The template's groups, which `{group}` resolves through. */
   groups: TemplateGroup[];
 }
+
+/**
+ * What `desc:complete` is asked: the field's whole text and where the caret
+ * is in it. The caret is what decides everything — which of the three
+ * delimited names is being typed, and what span a pick replaces — so it
+ * travels with the text rather than being guessed from it.
+ */
+export interface CompleteNameRequest {
+  text: string;
+  /** The caret's offset into `text`. */
+  caret: number;
+  /** The template's groups, which `{group}` completes against. */
+  groups: TemplateGroup[];
+}
+
+/** One row of the inline completion popup. */
+export interface CompletionOption {
+  /** The name, as the row reads it. */
+  label: string;
+  /** What tells one row from another: a typeline, a setcode, a card count. */
+  detail: string;
+  /** The text that replaces the site's `[start, end)` — always something that resolves back to this row. */
+  insert: string;
+  /** Unique within one list: the row's key. */
+  key: string;
+  /** Another row reads the same, so the detail is what tells them apart. */
+  ambiguous: boolean;
+}
+
+/**
+ * `site` is `null` when the caret is not inside a name, which is the usual
+ * answer and the one that closes the popup. A site with no options is not the
+ * same thing: the name is being typed and nothing matches it yet.
+ */
+export type CompleteNameResult =
+  | { ok: true; site: CompletionSite | null; options: CompletionOption[] }
+  | NotReady
+  | InvalidRequest;
 
 export type DescParseResult =
   | {

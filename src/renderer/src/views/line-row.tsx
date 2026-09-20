@@ -18,6 +18,7 @@ import { type CopyRange, NAMED_CARD_MAX } from '../model/copy-range';
 import { splitAtSpan } from '../model/span';
 import { isCardLine } from '../model/template-edit';
 import { CardPicker } from './card-picker';
+import { CompletingInput } from './completing-input';
 import { CopyRangeField, useField } from './fields';
 
 // One line of the template: what it says, what the tool understood of it, and
@@ -135,18 +136,14 @@ export function LineRow({
             }}
           />
         ) : (
-          <input
-            type="text"
-            className="desc"
+          <CompletingInput
+            id={`text-${line.id}`}
             value={text}
-            aria-label={`Description on line ${line.id}`}
-            data-testid={`text-${line.id}`}
+            label={`Description on line ${line.id}`}
             placeholder="level 4 or lower monster"
-            spellCheck={false}
-            autoComplete="off"
-            onChange={(event) => {
-              setText(event.target.value);
-              onText(event.target.value);
+            onChange={(next) => {
+              setText(next);
+              onText(next);
             }}
           />
         )}

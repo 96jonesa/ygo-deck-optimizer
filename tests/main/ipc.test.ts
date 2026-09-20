@@ -323,6 +323,51 @@ describe('registerIpc', () => {
     });
   });
 
+  describe('desc:complete', () => {
+    it('echoes the request’s sequence number beside the completion', async () => {
+      const { ipcMain, cards, deps } = harness();
+      await cards.reload('/edopro', { includePrerelease: true });
+      const payload = { text: '1x [Synthetic Vanilla', caret: 21, groups: [] };
+      const response = await ipcMain.invoke(IpcChannels.descComplete, { seq: 12, payload });
+      expect(response).toEqual({
+        seq: 12,
+        payload: deps.templates.completeName(payload.text, payload.caret, payload.groups),
+      });
+      expect(response).toMatchObject({
+        payload: { ok: true, options: [{ insert: '[Synthetic Vanilla Dragon]' }] },
+      });
+    });
+
+    it('echoes it on every kind of answer: no site, not-ready, invalid', async () => {
+      const { ipcMain, cards } = harness();
+      const request = (seq: number, payload: unknown) =>
+        ipcMain.invoke(IpcChannels.descComplete, { seq, payload });
+      expect(await request(1, { text: '1x [Ash', caret: 7, groups: [] })).toMatchObject({
+        seq: 1,
+        payload: { reason: 'not-ready' },
+      });
+      await cards.reload('/edopro', { includePrerelease: true });
+      expect(await request(2, { text: 'monster', caret: 3, groups: [] })).toMatchObject({
+        seq: 2,
+        payload: { ok: true, site: null, options: [] },
+      });
+      expect(await request(3, null)).toMatchObject({ seq: 3, payload: { reason: 'invalid' } });
+      expect(await request(4, { text: '1x [Ash', caret: '7', groups: [] })).toMatchObject({
+        seq: 4,
+        payload: { reason: 'invalid' },
+      });
+    });
+
+    it('answers a request with no sequence number under -1, which no request carries', async () => {
+      const { ipcMain, cards } = harness();
+      await cards.reload('/edopro', { includePrerelease: true });
+      expect(await ipcMain.invoke(IpcChannels.descComplete, '1x [Ash')).toMatchObject({
+        seq: -1,
+        payload: { reason: 'invalid' },
+      });
+    });
+  });
+
   describe('template:analyze', () => {
     it('echoes the request’s sequence number beside the Analysis', async () => {
       const { ipcMain, cards, deps } = harness();

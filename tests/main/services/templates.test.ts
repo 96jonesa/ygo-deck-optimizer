@@ -11,6 +11,7 @@ import {
 import { compileProblem, resolveTemplate } from '../../../src/core/model/compile';
 import { CardService } from '../../../src/main/services/cards';
 import {
+  COMPLETION_LIMIT,
   lineLabels,
   MEMO_LIMIT,
   REMAINDER_LABEL,
@@ -182,6 +183,217 @@ describe('TemplateService', () => {
         const parsed = templates.parseDescription(text, groups);
         expect(parsed).toMatchObject({ ok: false, reason: 'invalid' });
       }
+    });
+  });
+
+  describe('completeName', () => {
+    /** The rows the caret at the END of `text` would offer, as `label → insert`. */
+    async function offered(text: string, groups: TemplateGroup[] = []) {
+      const { templates } = await readyServices();
+      const answer = templates.completeName(text, text.length, groups);
+      if (!answer.ok) throw new Error(`expected options, got ${answer.reason}`);
+      return answer.options;
+    }
+
+    it('answers with no site when the caret is not inside a name', async () => {
+      const { templates } = await readyServices();
+      expect(templates.completeName('level 4 monster', 9, [])).toEqual({
+        ok: true,
+        site: null,
+        options: [],
+      });
+    });
+
+    it('answers with the site the caret is in, whether or not anything matches', async () => {
+      const { templates } = await readyServices();
+      expect(templates.completeName('1x [Nothing Matches This', 24, [])).toEqual({
+        ok: true,
+        site: { kind: 'card', prefix: 'Nothing Matches This', start: 3, end: 24, closed: false },
+        options: [],
+      });
+    });
+
+    describe('card names', () => {
+      it('offers the name in brackets, with the typeline as the row detail', async () => {
+        const { cards, templates } = await readyServices();
+        const answer = templates.completeName('1x [Synthetic Vanilla', 21, []);
+        if (!answer.ok) throw new Error('expected options');
+        expect(answer.options).toEqual([
+          {
+            label: 'Synthetic Vanilla Dragon',
+            detail: cards.get([CODE.vanillaDragon])[0]!.typeline,
+            insert: '[Synthetic Vanilla Dragon]',
+            key: `#${CODE.vanillaDragon}`,
+            ambiguous: false,
+          },
+        ]);
+      });
+
+      // Two records share this name (TDD §4.3), so `[Name]` would be a parse
+      // error: the passcode is what makes the row a pick rather than a trap.
+      it('offers the passcode for a name two cards share, and says the rows are alike', async () => {
+        const options = await offered('1x [Synthetic Ritual');
+        expect(options.map((option) => [option.label, option.insert, option.ambiguous])).toEqual([
+          ['Synthetic Ritual Soldier', `#${CODE.ritualSoldier}`, true],
+          ['Synthetic Ritual Soldier', `#${CODE.sameNameDifferentCard}`, true],
+        ]);
+      });
+
+      it('offers nothing for an empty name: 12,000 cards are not a list', async () => {
+        expect(await offered('1x [')).toEqual([]);
+      });
+
+      it('ignores whitespace around what was typed', async () => {
+        expect((await offered('1x [  Synthetic Vanilla ')).map((o) => o.label)).toEqual([
+          'Synthetic Vanilla Dragon',
+        ]);
+      });
+
+      it('stops at the completion limit', async () => {
+        expect((await offered('1x [Synthetic')).length).toBe(COMPLETION_LIMIT);
+      });
+    });
+
+    describe('archetype names', () => {
+      // Andy's headline case: `"Warrior"` is a parse error on the real install
+      // because it names two setcodes. Completion turns it into two rows.
+      it('offers both setcodes of an ambiguous name, each written so it resolves', async () => {
+        const options = await offered('1x "War');
+        expect(options.slice(0, 2)).toEqual([
+          {
+            label: 'Warrior',
+            detail: '0x66',
+            insert: '"Warrior":0x66',
+            key: '0x66:Warrior',
+            ambiguous: true,
+          },
+          {
+            label: 'Warrior',
+            detail: '0x2066',
+            insert: '"Warrior":0x2066',
+            key: '0x2066:Warrior',
+            ambiguous: true,
+          },
+        ]);
+        // …and the substring match under them, which needs no code.
+        expect(options.slice(2).map((option) => option.insert)).toEqual(['"Magnet Warrior"']);
+      });
+
+      it('offers the bare name where it resolves to one setcode', async () => {
+        expect((await offered('1x "Sky Strik')).map((option) => option.insert)).toEqual([
+          '"Sky Striker"',
+          '"Sky Striker Ace"',
+        ]);
+      });
+
+      it('offers `"?":0xCODE` for a name holding a quote, which the grammar cannot carry', async () => {
+        expect(await offered('1x "V')).toEqual([
+          {
+            label: '"V "/" V"',
+            detail: '0x155a',
+            insert: '"?":0x155a',
+            key: '0x155a:"V "/" V"',
+            ambiguous: false,
+          },
+        ]);
+      });
+
+      it('offers nothing when the install has no strings.conf', async () => {
+        const { templates } = await readyServices(null);
+        const answer = templates.completeName('1x "War', 7, []);
+        expect(answer).toEqual({
+          ok: true,
+          site: { kind: 'archetype', prefix: 'War', start: 3, end: 7, closed: false },
+          options: [],
+        });
+      });
+    });
+
+    describe('group names', () => {
+      const GROUPS: TemplateGroup[] = [
+        { id: 'g1', name: 'starter', cards: [{ passcode: 1, name: 'One' }] },
+        { id: 'g2', name: 'brick', cards: [] },
+        { id: 'g3', name: 'super starter', cards: [] },
+      ];
+
+      it('offers the template’s own groups, with how many cards each holds', async () => {
+        expect(await offered('1x {start', GROUPS)).toEqual([
+          {
+            label: 'starter',
+            detail: '1 card',
+            insert: '{starter}',
+            key: 'g1',
+            ambiguous: false,
+          },
+          {
+            label: 'super starter',
+            detail: '0 cards',
+            insert: '{super starter}',
+            key: 'g3',
+            ambiguous: false,
+          },
+        ]);
+      });
+
+      // Unlike cards and archetypes: a template's groups are a handful of
+      // names the user invented, so `{` on its own is how they are recalled.
+      it('lists every group for an empty name', async () => {
+        expect((await offered('1x {', GROUPS)).map((option) => option.label)).toEqual([
+          'starter',
+          'brick',
+          'super starter',
+        ]);
+      });
+
+      it('leaves out a name holding the closing brace, which nothing could insert', async () => {
+        const odd: TemplateGroup[] = [{ id: 'g1', name: 'odd } name', cards: [] }];
+        expect(await offered('1x {odd', odd)).toEqual([]);
+      });
+
+      it('says when two groups share a name, since `{name}` cannot tell them apart', async () => {
+        const twins: TemplateGroup[] = [
+          { id: 'g1', name: 'starter', cards: [] },
+          { id: 'g2', name: 'Starter', cards: [] },
+        ];
+        expect((await offered('1x {star', twins)).map((option) => option.ambiguous)).toEqual([
+          true,
+          true,
+        ]);
+      });
+
+      it('offers nothing when the template has no groups', async () => {
+        expect(await offered('1x {start')).toEqual([]);
+      });
+    });
+
+    it('answers `not-ready` while there is no index', () => {
+      const cards = new CardService(
+        immediateLoader(() => loadedCards(SQL)),
+        () => {},
+      );
+      expect(new TemplateService(cards).completeName('1x [Ash', 7, [])).toMatchObject({
+        ok: false,
+        reason: 'not-ready',
+        state: 'idle',
+      });
+    });
+
+    it('answers a malformed request with `invalid`, never an exception', async () => {
+      const { templates } = await readyServices();
+      const bad: [unknown, unknown, unknown][] = [
+        [7, 0, []],
+        [undefined, 0, []],
+        ['1x [Ash', '7', []],
+        ['1x [Ash', 1.5, []],
+        ['1x [Ash', Number.NaN, []],
+        ['1x [Ash', 7, 'groups'],
+        ['1x [Ash', 7, [{ id: 'g1', name: 'No cards' }]],
+      ];
+      for (const [text, caret, groups] of bad)
+        expect(templates.completeName(text, caret, groups)).toMatchObject({
+          ok: false,
+          reason: 'invalid',
+        });
     });
   });
 

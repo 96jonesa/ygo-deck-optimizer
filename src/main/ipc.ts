@@ -5,6 +5,7 @@ import type {
   CardHit,
   CardInfo,
   CardStatus,
+  CompleteNameResult,
   DescParseResult,
   RunControlResult,
   RunStartResult,
@@ -37,6 +38,7 @@ export interface IpcDeps {
   };
   templates: {
     parseDescription(text: unknown, groups: unknown): DescParseResult;
+    completeName(text: unknown, caret: unknown, groups: unknown): CompleteNameResult;
     analyzeTemplate(template: unknown): AnalyzeTemplateResult;
   };
   runs: {
@@ -119,6 +121,15 @@ export function registerIpc(ipcMain: IpcMainLike, deps: IpcDeps): void {
     sequenced(request, (payload) => {
       const { text, groups } = isObject(payload) ? payload : {};
       return templates.parseDescription(text, groups);
+    }),
+  );
+
+  // Fired on every keystroke and every caret move, so it is sequenced like
+  // `desc:parse`: an answer a newer caret has overtaken is dropped, not drawn.
+  ipcMain.handle(IpcChannels.descComplete, (_event, request) =>
+    sequenced(request, (payload) => {
+      const { text, caret, groups } = isObject(payload) ? payload : {};
+      return templates.completeName(text, caret, groups);
     }),
   );
 

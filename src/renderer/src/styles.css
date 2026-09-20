@@ -585,6 +585,32 @@ code,
   color: var(--text);
 }
 
+/*
+ * The inline completion's anchor. It takes the field's own slot in the
+ * grid — the input fills it — so nothing in the row moves when the popup
+ * opens, and `position: relative` is what the popup is positioned against.
+ */
+.completing {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.completing input {
+  width: 100%;
+}
+
+/*
+ * Anchored under the START of the name being completed (`left` is set in the
+ * component), so the rows do not creep right as it is typed. Narrower than
+ * the card picker's popup: it sits inside a dense editor row rather than
+ * standing in for a field.
+ */
+.completions {
+  min-width: 14rem;
+  max-width: min(32rem, 70vw);
+}
+
 .picker-note {
   margin: var(--sp-1) 0 0;
   min-height: 1.45em;

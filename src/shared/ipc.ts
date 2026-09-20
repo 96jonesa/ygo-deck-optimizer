@@ -4,6 +4,8 @@ import type {
   CardHit,
   CardInfo,
   CardStatus,
+  CompleteNameRequest,
+  CompleteNameResult,
   DescParseRequest,
   DescParseResult,
   RunControlResult,
@@ -37,6 +39,7 @@ export const IpcChannels = {
   cardsSearch: 'cards:search',
   cardsGet: 'cards:get',
   descParse: 'desc:parse',
+  descComplete: 'desc:complete',
   templateAnalyze: 'template:analyze',
   runStart: 'run:start',
   runCancel: 'run:cancel',
@@ -68,6 +71,12 @@ export interface RendererApi {
   /** The cards that exist, in the order asked for; an unknown passcode is left out. */
   getCards(passcodes: number[]): Promise<CardInfo[]>;
   parseDescription(request: Sequenced<DescParseRequest>): Promise<Sequenced<DescParseResult>>;
+  /**
+   * The names that could go where the caret is (PRD §5.2). Which names those
+   * are, and how each is written back, are decisions of the card index and the
+   * setname table, so they are made here and not in the renderer (TDD §3).
+   */
+  completeName(request: Sequenced<CompleteNameRequest>): Promise<Sequenced<CompleteNameResult>>;
   /** The template is validated again in main: a structurally broken one comes back as `invalid`. */
   analyzeTemplate(request: Sequenced<Template>): Promise<Sequenced<AnalyzeTemplateResult>>;
   /**

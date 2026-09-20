@@ -22,6 +22,7 @@ const api: RendererApi = {
   searchCards: (query, limit) => ipcRenderer.invoke(IpcChannels.cardsSearch, { query, limit }),
   getCards: (passcodes) => ipcRenderer.invoke(IpcChannels.cardsGet, passcodes),
   parseDescription: (request) => ipcRenderer.invoke(IpcChannels.descParse, request),
+  completeName: (request) => ipcRenderer.invoke(IpcChannels.descComplete, request),
   analyzeTemplate: (request) => ipcRenderer.invoke(IpcChannels.templateAnalyze, request),
   startRun: (request) => ipcRenderer.invoke(IpcChannels.runStart, request),
   cancelRun: (runId, opts) =>

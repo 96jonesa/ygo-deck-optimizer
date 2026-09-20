@@ -215,6 +215,77 @@ describe('SetnameTable', () => {
     });
   });
 
+  describe('search', () => {
+    const table = SetnameTable.fromLayers([BASE, DELTA]);
+
+    it('ranks prefix matches above substring matches', () => {
+      expect(table.search('War')).toEqual([
+        { code: 0x66, name: 'Warrior', ambiguous: true },
+        { code: 0x2066, name: 'Warrior', ambiguous: true },
+        { code: 0x3066, name: 'Magnet Warrior', ambiguous: false },
+        { code: 0xb066, name: 'Magnet Warrior Sigma', ambiguous: false },
+      ]);
+    });
+
+    // The two classes are ranked separately on purpose: within the prefix
+    // matches a shorter name wins, but no substring match may ever climb over
+    // a prefix match, however short it is or however the query falls in it.
+    it('keeps a long prefix match above a short substring match', () => {
+      const table = SetnameTable.fromLayers(['!setname 0x1 Ab Cd', '!setname 0x2 Cdefghijkl']);
+      expect(table.search('cd').map((hit) => hit.code)).toEqual([0x2, 0x1]);
+    });
+
+    it('puts shorter names first within the prefix matches', () => {
+      expect(table.search('Magnet').map((hit) => hit.name)).toEqual([
+        'Magnet',
+        'Magnet',
+        'Magnet Warrior',
+        'Magnet Warrior Sigma',
+      ]);
+    });
+
+    it('marks a name that resolves to several setcodes: it needs its code to be written', () => {
+      expect(table.search('Magnet').map((hit) => [hit.code, hit.ambiguous])).toEqual([
+        [0x534, true],
+        [0x1066, true],
+        [0x3066, false],
+        [0xb066, false],
+      ]);
+    });
+
+    it('searches every |-separated alternate, and answers with the one that matched', () => {
+      expect(table.search('fus')).toEqual([{ code: 0x46, name: 'Fusion', ambiguous: false }]);
+    });
+
+    it('offers one row per matching alternate, so either spelling can be picked', () => {
+      const both = SetnameTable.fromLayers(['!setname 0x1 Abc|Abcd']);
+      expect(both.search('Ab')).toEqual([
+        { code: 0x1, name: 'Abc', ambiguous: false },
+        { code: 0x1, name: 'Abcd', ambiguous: false },
+      ]);
+    });
+
+    it('is case- and diacritic-insensitive, and ignores outer whitespace', () => {
+      expect(table.search('  wARRior ')).toEqual(table.search('Warrior'));
+      expect(table.search('Warrior').map((hit) => hit.code)).toEqual([
+        0x66, 0x2066, 0x3066, 0xb066,
+      ]);
+      const accented = SetnameTable.fromLayers(['!setname 0x1 Évil Twin']);
+      expect(accented.search('evil')).toEqual([{ code: 0x1, name: 'Évil Twin', ambiguous: false }]);
+    });
+
+    it('stops at the limit', () => {
+      expect(table.search('Magnet', 2).map((hit) => hit.code)).toEqual([0x534, 0x1066]);
+      expect(table.search('Magnet', 0)).toEqual([]);
+    });
+
+    it('answers nothing for a blank query or a name no entry holds', () => {
+      expect(table.search('')).toEqual([]);
+      expect(table.search('   ')).toEqual([]);
+      expect(table.search('Fiendsmith')).toEqual([]);
+    });
+  });
+
   describe('size', () => {
     it('counts distinct codes', () => {
       expect(SetnameTable.fromLayers([BASE, DELTA]).size).toBe(7);
