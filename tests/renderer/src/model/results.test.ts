@@ -12,13 +12,7 @@ import {
   pointsText,
   shortLabel,
 } from '../../../../src/renderer/src/model/results';
-import type {
-  Analysis,
-  RunDroppedLimit,
-  RunLimit,
-  RunResult,
-  SweepCell,
-} from '../../../../src/shared/types';
+import type { RunDroppedLimit, RunLimit, RunResult, SweepCell } from '../../../../src/shared/types';
 import { motivatingResult } from '../../../helpers/motivating-run';
 
 const SQL = await initSqlJs();
@@ -48,17 +42,6 @@ function limitOf(over: Partial<RunLimit> = {}): RunLimit {
 /** The motivating result with the run-pinned limit facts replaced. */
 function withLimits(criterionLimits: RunLimit[], droppedLimits: RunDroppedLimit[] = []): RunResult {
   return { ...RESULT, criterionLimits, droppedLimits };
-}
-
-/** An analysis with just the parts the results panel reads off it. */
-function analysisOf(over: Partial<Analysis> = {}): Analysis {
-  return {
-    remainder: { id: 'remainder' },
-    criteria: [],
-    limits: [],
-    classes: { classes: [], alternatives: 1, irrelevant: [], droppedLimits: [] },
-    ...over,
-  } as unknown as Analysis;
 }
 
 describe('pointsText', () => {

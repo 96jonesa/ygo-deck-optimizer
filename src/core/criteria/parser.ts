@@ -32,8 +32,10 @@ function isPunct(token: CriterionToken | undefined, ch: '(' | ')' | '-'): boolea
 /** The words that can only begin a requirement or a limit. */
 function isTermWord(
   token: CriterionToken | undefined,
-): token is TokenOf<'count' | 'atMost' | 'no'> {
-  return token?.t === 'count' || token?.t === 'atMost' || token?.t === 'no';
+): token is TokenOf<'count' | 'atMost' | 'no' | 'exactly'> {
+  return (
+    token?.t === 'count' || token?.t === 'atMost' || token?.t === 'no' || token?.t === 'exactly'
+  );
 }
 
 /**
@@ -186,25 +188,42 @@ class Parser {
     return inner;
   }
 
-  private leaf(word: TokenOf<'count' | 'atMost' | 'no'>): Expr {
+  private leaf(word: TokenOf<'count' | 'atMost' | 'no' | 'exactly'>): Expr {
     this.next();
     if (word.t === 'no') return { op: 'atMost', n: 0, desc: this.description() };
     if (word.t === 'count') return this.requirement(word);
-
-    const count = this.peek();
-    // `at most` names one ceiling, so a count there is a single number.
-    if (count?.t === 'count' || isBareCount(count)) {
-      const counted = count?.t === 'count' ? (this.next() as TokenOf<'count'>) : this.bareCount();
+    if (word.t === 'exactly') {
+      // `exactly` names one number and means it twice, so a range after it says two things at once.
+      const counted = this.countAfter('exactly', 'exactly 1x monster');
       if (counted.max !== undefined)
         throw new Failure(
-          `a limit has one ceiling: write \`at most ${counted.max}x …\`, or make it the requirement \`${counted.n}-${counted.max}x …\``,
+          `\`exactly\` names one count: write \`exactly ${counted.n}x …\`, or make it the range \`${counted.n}-${counted.max}x …\``,
           counted.span,
         );
-      return { op: 'atMost', n: this.checked(counted.n, counted.span), desc: this.description() };
+      return this.requirement({ ...counted, max: counted.n });
     }
+
+    // `at most` names one ceiling, so a count there is a single number.
+    const counted = this.countAfter('at most', 'at most 1x trap');
+    if (counted.max !== undefined)
+      throw new Failure(
+        `a limit has one ceiling: write \`at most ${counted.max}x …\`, or make it the requirement \`${counted.n}-${counted.max}x …\``,
+        counted.span,
+      );
+    return { op: 'atMost', n: this.checked(counted.n, counted.span), desc: this.description() };
+  }
+
+  /**
+   * The count a keyword must be followed by. Nothing else can stand there, so
+   * the `x` is optional exactly as it is at the start of a term.
+   */
+  private countAfter(keyword: string, example: string): TokenOf<'count'> {
+    const count = this.peek();
+    if (count?.t === 'count') return this.next() as TokenOf<'count'>;
+    if (isBareCount(count)) return this.bareCount();
     if (count?.t === 'hex') throw this.missingCount(count);
     throw new Failure(
-      'expected a count after `at most`, as in `at most 1x trap`',
+      `expected a count after \`${keyword}\`, as in \`${example}\``,
       this.spanAt(this.pos),
     );
   }
@@ -229,7 +248,7 @@ class Parser {
     };
   }
 
-  /** `n×` or `a-b×`, and the description that follows it. */
+  /** `n×`, `a-b×` or `exactly n×` already made `[n, n]`, and the description that follows it. */
   private requirement(word: TokenOf<'count'>): Expr {
     const n = this.checked(word.n, word.span);
     if (word.max === undefined) {
@@ -327,9 +346,15 @@ class Parser {
  * A count is `1x`, the range `1-2x`, or either with the `x` left out — but
  * only where the grammar allows nothing but a term, which is the start of the
  * text, after `and` or `,`, after a `(` that opens a group of terms, and after
- * `at most`. A description may itself begin with an integer (`2000 ATK
- * monster`), and the one place a description and a term can both stand is
- * after an `or`; there the `x` is what tells them apart, and a count keeps it.
+ * `at most` or `exactly`. A description may itself begin with an integer
+ * (`2000 ATK monster`), and the one place a description and a term can both
+ * stand is after an `or`; there the `x` is what tells them apart, and a count
+ * keeps it.
+ *
+ * `exactly n` is sugar for the range `[n, n]` and nothing more: it parses to
+ * the very node `n-nx` parses to, so no later pass can tell the two apart. It
+ * belongs to requirements alone — a limit has one ceiling already, and there
+ * is no census that means "exactly".
  */
 export function parseCriterion(text: string, ctx: DescContext): CriterionParseResult {
   const lexed = lexCriterion(text);

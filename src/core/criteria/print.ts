@@ -16,11 +16,14 @@ function printCounted(prefix: string, { desc }: Counted, ctx: PrintContext): str
 
 /**
  * A requirement's count, `x` always written: `1x` for no ceiling, `1-2x` for a
- * range. `[2, 2]` reads `2-2x` and not `2x` — the two mean different things,
- * and the canonical text has to keep them apart.
+ * range, and `exactly 2x` for a range whose ends agree. `[2, 2]` is never
+ * `2x` — one has a ceiling and the other has none — and `exactly 2x` says
+ * which it is in words, which is the point of the shorthand: this text is what
+ * every readout, every CLI report and every saved template shows.
  */
 export function countPrefix(n: number, max: number | undefined): string {
-  return max === undefined ? `${n}x` : `${n}-${max}x`;
+  if (max === undefined) return `${n}x`;
+  return max === n ? `exactly ${n}x` : `${n}-${max}x`;
 }
 
 function printExpr(expr: Expr, ctx: PrintContext): string {

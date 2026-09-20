@@ -392,6 +392,63 @@ describe('runOptimize', () => {
     });
   });
 
+  describe('the exactly shorthand', () => {
+    /** The motivating example with one criterion of its own. */
+    function templateSaying(name: string, text: string): string {
+      return write(
+        `${name}.json`,
+        JSON.stringify({
+          ...MOTIVATING,
+          criteria: [{ id: 'c1', name: 'Stratos and a monster', text }],
+        }),
+      );
+    }
+
+    async function optimized(name: string, text: string, ...flags: string[]) {
+      const { code, stdout } = await run([
+        templateSaying(name, text),
+        '--workdir',
+        WORKDIR,
+        ...flags,
+      ]);
+      expect(code, text).toBe(EXIT_OK);
+      return stdout;
+    }
+
+    /** Everything a run reports but the clock readings, which differ run to run. */
+    function scored(stdout: string) {
+      const { result, ...rest } = JSON.parse(stdout);
+      const { elapsedMs: _elapsed, estimatedMs: _estimated, cost: _cost, ...numbers } = result;
+      return { ...rest, result: numbers };
+    }
+
+    it('scores exactly as the range it stands for, and not as the plain count', async () => {
+      const exactly = await optimized(
+        'exactly',
+        '1x [Elemental HERO Stratos], exactly 1x monster',
+        '--json',
+      );
+      const spelt = await optimized('spelt', '1x [Elemental HERO Stratos], 1-1x monster', '--json');
+      const plain = await optimized('plain', '1x [Elemental HERO Stratos], 1x monster', '--json');
+      // One AST, so one number — every number the run reports.
+      expect(scored(exactly)).toEqual(scored(spelt));
+      expect(scored(exactly).result.best.blend).toEqual(JSON.parse(spelt).result.best.blend);
+      // And the ceiling really binds: without it the odds are a different thing.
+      expect(scored(exactly)).not.toEqual(scored(plain));
+    });
+
+    it('is what the report calls both spellings', async () => {
+      for (const [name, text] of [
+        ['exactly-report', '1x [Elemental HERO Stratos], exactly 1x monster'],
+        ['spelt-report', '1x [Elemental HERO Stratos], 1-1x monster'],
+      ] as const) {
+        const stdout = await optimized(name, text);
+        expect(stdout, text).toMatch(/^ {6}1\. 1x #\d+, exactly 1x monster$/m);
+        expect(stdout, text).toMatch(/^ {2}requirement +exactly 1x monster +\[Monster\]/m);
+      }
+    });
+  });
+
   describe('the wall', () => {
     it('scores nothing and exits 3 when the estimate is over the threshold, naming --force', async () => {
       const { code, stdout, stderr } = await run([

@@ -135,6 +135,14 @@ describe('matchingSection', () => {
     expect(ranged).not.toMatch(/requirement +1x monster/);
   });
 
+  it('writes a range whose ends agree the way the criterion text does', () => {
+    const lines = [line('m', 'monster'), line('s', 'spell')];
+    const exact = matchingSection(analyze(templateOf(lines, ['exactly 2x monster']), ctx));
+    expect(exact).toMatch(/^ {2}requirement +exactly 2x monster +\[Monster\] +filled by: m$/m);
+    // The same criterion spelt as the range prints the same row: one AST, one text.
+    expect(matchingSection(analyze(templateOf(lines, ['2-2x monster']), ctx))).toEqual(exact);
+  });
+
   it('writes each distinct count a requirement appears under, ranges included', () => {
     const many = analyze(
       templateOf([line('m', 'monster')], ['1-2x monster', '1x monster', '2x monster']),

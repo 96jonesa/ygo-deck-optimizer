@@ -288,21 +288,26 @@ criterion   := orExpr
 orExpr      := andExpr ( "or" andExpr )*
 andExpr     := term ( ( "and" | "," ) term )*
 term        := "(" orExpr ")" | requirement | limit
-requirement := COUNT description                 -- COUNT := INT [ "-" INT ] ["x" | "×"]; 1x, 2×, 1-2x, 1-2
-limit       := "at most" COUNT description | "no" description
+requirement := COUNT description | "exactly" ONE description
+limit       := "at most" ONE description | "no" description
+
+COUNT       := INT [ "-" INT ] [ "x" | "×" ]     -- 1x, 2×, 1-2x, 1-2
+ONE         := INT [ "x" | "×" ]                 -- a range here is an error carrying the rewrite
 ```
 
-The two `or`s (PRD §5.3) are separated with one token of lookahead: after `or`, a `COUNT`, `at most`, `no`, or `(`-followed-by-one-of-those starts a new *term* (criterion-level); anything else continues the *description*. So `1x [C] or 2x [D]` is a criterion-level choice, `1x [C] or [E]` is one slot either card can fill, and `1x ([C] or [E])` says the latter explicitly. Two consequences worth stating: a description-level `or` binds tighter than `and` (`1x [C] or [E] and 1x [D]` is two terms), and the printer always parenthesizes a description-level `or` (`1x (#1 or #2)`) — for the reader, since the lookahead re-parses the bare form identically. `COUNT` is digits then `x` only where the `x` *ends a word*, or `×` anywhere, so `"Warrior":0x2066` keeps its hex code; a hex token where a count belongs gets a message saying so. In the app the criterion structure is built from rows and groups, not typed; the text form is the canonical serialization used by the CLI harness, tests, and copy/paste.
+The two `or`s (PRD §5.3) are separated with one token of lookahead: after `or`, a `COUNT`, `at most`, `no`, `exactly`, or `(`-followed-by-one-of-those starts a new *term* (criterion-level); anything else continues the *description*. So `1x [C] or 2x [D]` is a criterion-level choice, `1x [C] or [E]` is one slot either card can fill, and `1x ([C] or [E])` says the latter explicitly. Two consequences worth stating: a description-level `or` binds tighter than `and` (`1x [C] or [E] and 1x [D]` is two terms), and the printer always parenthesizes a description-level `or` (`1x (#1 or #2)`) — for the reader, since the lookahead re-parses the bare form identically. `COUNT` is digits then `x` only where the `x` *ends a word*, or `×` anywhere, so `"Warrior":0x2066` keeps its hex code; a hex token where a count belongs gets a message saying so. In the app the criterion structure is built from rows and groups, not typed; the text form is the canonical serialization used by the CLI harness, tests, and copy/paste.
+
+`exactly n` is **sugar for the range `n-n` and nothing else**: it goes through the same construction, so it yields the very node `n-nx` yields and no later pass can tell which was typed. That is the whole of its implementation — no rule in expansion, the matcher, or the scorer knows the word exists. It is requirement-only: a limit already names one ceiling, and there is no census that means "exactly". Going the other way, `countPrefix` writes `exactly nx` whenever a range's ends agree, so `1-1x monster` reads back as `exactly 1x monster` — while `[2, 2]` is still never printed `2x`, which would silently drop the ceiling. The renderer may not import core (§3), so `criteria-readout.ts` carries its own copy of that rule; the two are kept in step by tests on either side pinning the same strings, not by sharing code.
 
 ```ts
 // src/core/criteria/ast.ts
 export type Expr =
   | { op: 'and'; args: Expr[] }
   | { op: 'or'; args: Expr[] }        // two members, not 'and' | 'or': the merged form defeats narrowing
-  | { op: 'req'; n: number; desc: Description }
+  | { op: 'req'; n: number; max?: number; desc: Description }   // `max` only from a range; `1-1x` and `exactly 1x` are one node
   | { op: 'atMost'; n: number; desc: Description };   // "no X" = atMost 0
 
-export interface FlatCriterion { reqs: { n: number; desc: Description }[]; limits: { n: number; desc: Description }[] }
+export interface FlatCriterion { reqs: { n: number; max?: number; desc: Description }[]; limits: { n: number; desc: Description }[] }
 ```
 
 ### 7.2 Expansion

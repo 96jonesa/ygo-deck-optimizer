@@ -51,11 +51,36 @@ describe('printCriterion', () => {
       '1-2x monster',
     );
     expect(printCriterion({ op: 'req', n: 0, max: 1, desc: d('trap') }, ctx)).toBe('0-1x trap');
-    // `[2, 2]` is not `2x`: one has a ceiling and the other has none.
-    expect(printCriterion({ op: 'req', n: 2, max: 2, desc: d('#1') }, ctx)).toBe('2-2x #1');
     expect(printCriterion({ op: 'req', n: 1, max: 2, desc: d('#1 or #2') }, ctx)).toBe(
       '1-2x (#1 or #2)',
     );
+  });
+
+  it('prints a range whose ends agree as `exactly nx`, ceiling and all', () => {
+    // `[2, 2]` is not `2x`: one has a ceiling and the other has none, and the
+    // shorthand is what keeps them apart while reading as what it means.
+    expect(printCriterion({ op: 'req', n: 2, max: 2, desc: d('#1') }, ctx)).toBe('exactly 2x #1');
+    expect(printCriterion({ op: 'req', n: 1, max: 1, desc: d('monsters') }, ctx)).toBe(
+      'exactly 1x monster',
+    );
+    expect(printCriterion({ op: 'req', n: 0, max: 0, desc: d('trap') }, ctx)).toBe(
+      'exactly 0x trap',
+    );
+    expect(printCriterion({ op: 'req', n: 1, max: 1, desc: d('#1 or #2') }, ctx)).toBe(
+      'exactly 1x (#1 or #2)',
+    );
+    expect(
+      printCriterion(and(req(1, '#1'), { op: 'req', n: 2, max: 2, desc: d('monsters') }), ctx),
+    ).toBe('1x #1 and exactly 2x monster');
+  });
+
+  it('parses its own `exactly` back to the range it printed', () => {
+    for (const n of [0, 1, 2, 60]) {
+      const expr: Expr = { op: 'req', n, max: n, desc: d('monsters') };
+      const text = printCriterion(expr, ctx);
+      expect(text).toBe(`exactly ${n}x monster`);
+      expect(parseCriterion(text, ctx), text).toEqual({ ok: true, expr });
+    }
   });
 
   it('prints a limit as at most, and as no when nothing is allowed', () => {
@@ -129,12 +154,14 @@ describe('parseCriterion/printCriterion round trip (E3)', () => {
   it('round-trips 3,000 generated criteria that include RANGE requirements', () => {
     const rng = seededRng(0xe3e3a2e5);
     let ranges = 0;
-    const counts = (expr: Expr): number =>
-      expr.op === 'and' || expr.op === 'or'
-        ? expr.args.reduce((sum, arg) => sum + counts(arg), 0)
-        : expr.op === 'req' && expr.max !== undefined
-          ? 1
-          : 0;
+    let equal = 0;
+    const counts = (expr: Expr): number => {
+      if (expr.op === 'and' || expr.op === 'or')
+        return expr.args.reduce((sum, arg) => sum + counts(arg), 0);
+      if (expr.op !== 'req' || expr.max === undefined) return 0;
+      if (expr.max === expr.n) equal++;
+      return 1;
+    };
     for (let i = 0; i < 3000; i++) {
       const expr = genExpr(rng, { ...options, rangeChance: 0.5 });
       ranges += counts(expr);
@@ -142,6 +169,8 @@ describe('parseCriterion/printCriterion round trip (E3)', () => {
       expect(parseCriterion(text, ctx), `case ${i}: ${text}`).toEqual({ ok: true, expr });
     }
     expect(ranges).toBeGreaterThan(2000);
+    // Equal bounds print as `exactly nx`, so the round trip above covers both spellings.
+    expect(equal).toBeGreaterThan(500);
   });
 
   it('parses the canonical text of 3,000 generated criteria back to the same AST', () => {
