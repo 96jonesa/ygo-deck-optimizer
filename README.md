@@ -126,10 +126,13 @@ A hand succeeds if it meets any one criterion (`src/core/criteria`: `parseCriter
 | Term | Means |
 | --- | --- |
 | `2x level 4 monster` (or `2×`) | A **requirement**: two *distinct* drawn cards, each filling it. `1x [A], 1x [B], 1x monster` needs three cards |
+| `1-2x monster`, `exactly 1x monster` | A requirement with a **ceiling**, counted after the other requirements have taken theirs: one or two monsters *besides* whatever else was asked for. A card matching a capped description counts unless another requirement consumed it, so the ceiling really binds. `exactly n` is sugar for `n-n`, parses to the same thing, and is what the printer writes back |
 | `at most 1x [Brick]`, `no trap` | A **limit**: a count over the whole hand, not an assignment |
 
-`and` and `,` are the same and bind tighter than `or`; parentheses group. There are two "or"s:
-`1x [C] or 2x [D]` chooses between terms, because a count (or `at most`, `no`) follows, while
+The `x` may be left out wherever only a term can start (`1-2 monster`, `at most 2 trap`); the
+printer always writes it. `and` and `,` are the same and bind tighter than `or`; parentheses
+group. There are two "or"s: `1x [C] or 2x [D]` chooses between terms, because a count (or
+`at most`, `no`, `exactly`) follows, while
 `1x [C] or [E]` is **one** slot either card fills — the same as `1x ([C] or [E])`, the form the
 printer always uses. Nesting is surface syntax: `1x [A] and 1x [B] and (1x [C] or 2x [D])` expands
 to the flat alternatives `(A, B, C)` and `(A, B, 2× D)`, all the engine sees (at most 256 of them).

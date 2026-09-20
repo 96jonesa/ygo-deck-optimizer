@@ -212,7 +212,8 @@ export function CriteriaView() {
         because its Level is unstated. Where one nearly does, the split that would count is one
         click away. A requirement written as a range — <code>1-2x monster</code> — also sets a
         ceiling: a hand holding more matching cards than that fails, unless another requirement
-        takes them.
+        takes them. When both ends are the same number, <code>exactly 1x monster</code> says it more
+        plainly, and means the same as <code>1-1x monster</code>.
       </p>
       {requirements.length === 0 ? (
         <p className="seam" data-testid="no-requirements">

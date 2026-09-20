@@ -402,6 +402,23 @@ describe('requirementRows', () => {
       )[0]!;
       expect(row.heading).toBe('1-2x / 1x monster');
     });
+
+    it('writes a range whose ends agree as `exactly nx`, as the criterion text does', () => {
+      const row = requirementRows(
+        analysisOf({
+          requirements: [
+            requirementOf('monster', {
+              bounded: true,
+              appearsIn: [
+                { criterion: 'c1', alternative: 0, n: 2, max: 2 },
+                { criterion: 'c2', alternative: 0, n: 0, max: 0 },
+              ],
+            }),
+          ],
+        }),
+      )[0]!;
+      expect(row.heading).toBe('exactly 0x / exactly 2x monster');
+    });
   });
 
   describe('what a ceiling ignores', () => {

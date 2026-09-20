@@ -179,9 +179,15 @@ export function requirementRows(analysis: Analysis | null): RequirementRow[] {
   });
 }
 
-/** `1x`, or `1-2x` for a range: what `analyze` and the criterion text both call it. */
+/**
+ * `1x`, `1-2x` for a range, `exactly 2x` when its ends agree: what `analyze`
+ * and the criterion text both call it. Core says the same thing in
+ * `countPrefix`, which the renderer may not import; the two are kept in step
+ * by tests on either side, not by sharing.
+ */
 function countLabel(n: number, max: number | undefined): string {
-  return max === undefined ? `${n}x` : `${n}-${max}x`;
+  if (max === undefined) return `${n}x`;
+  return max === n ? `exactly ${n}x` : `${n}-${max}x`;
 }
 
 export interface IgnoredRow {

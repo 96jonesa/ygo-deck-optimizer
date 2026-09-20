@@ -147,6 +147,20 @@ describe('lexCriterion', () => {
       expect(spansOf('1x monster,no spell')).toEqual(['1x', 'monster', ',', 'no', 'spell']);
     });
 
+    it('reads exactly, in any case, as its own word', () => {
+      expect(bodies('exactly EXACTLY ExAcTlY')).toEqual([
+        { t: 'exactly' },
+        { t: 'exactly' },
+        { t: 'exactly' },
+      ]);
+      expect(bodies('exactly 1x monster')).toEqual([
+        { t: 'exactly' },
+        { t: 'count', n: 1 },
+        { t: 'kind', kind: 'monster' },
+      ]);
+      expect(spansOf('exactly 1x monster')).toEqual(['exactly', '1x', 'monster']);
+    });
+
     it('only reads whole words', () => {
       expect(bodies('non-tuner normal nothing android atmost at mostly')).toEqual([
         { t: 'non' },
@@ -157,6 +171,11 @@ describe('lexCriterion', () => {
         { t: 'word', text: 'atmost' },
         { t: 'word', text: 'at' },
         { t: 'word', text: 'mostly' },
+      ]);
+      expect(bodies('exact exactlyx exactly2')).toEqual([
+        { t: 'word', text: 'exact' },
+        { t: 'word', text: 'exactlyx' },
+        { t: 'word', text: 'exactly2' },
       ]);
     });
 

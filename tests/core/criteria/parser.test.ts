@@ -265,6 +265,110 @@ describe('parseCriterion', () => {
     });
   });
 
+  describe('the exactly shorthand', () => {
+    it('reads `exactly n` as the range `n-n`, x or no x', () => {
+      expectExpr('exactly 1x monster', range(1, 1, d('monster')));
+      expectExpr('exactly 1 monster', range(1, 1, d('monster')));
+      expectExpr('exactly 2x [C]', range(2, 2, C));
+      expectExpr('exactly 60x card', range(60, 60, d('card')));
+    });
+
+    it('is the same AST as the range spelt out, to the last key', () => {
+      for (const [n, description] of [
+        [0, '[C]'],
+        [1, 'monster'],
+        [2, '([C] or [D])'],
+        [3, 'level 4 or lower FIRE monster'],
+      ] as const) {
+        const spelt = parseCriterion(`${n}-${n}x ${description}`, ctx);
+        for (const text of [`exactly ${n}x ${description}`, `exactly ${n} ${description}`]) {
+          expect(parseCriterion(text, ctx), text).toEqual(spelt);
+          // Deep equality ignores key order; the canonical JSON is what is stored.
+          expect(JSON.stringify(parseCriterion(text, ctx)), text).toBe(JSON.stringify(spelt));
+        }
+      }
+    });
+
+    it('accepts zero, which a plain count may not', () => {
+      expectExpr('exactly 0x [C]', range(0, 0, C));
+      expectExpr('exactly 0 monster', range(0, 0, d('monster')));
+      // `0x monster` is still the error it was: a ceiling is what makes 0 mean something.
+      expect(errorOf('0x monster').message).toMatch(/at least 1/);
+    });
+
+    it('accepts ×, a capital X and whatever spacing', () => {
+      for (const count of ['2x', '2X', '2×', '2 x', '02x'])
+        expectExpr(`EXACTLY ${count} spell`, range(2, 2, d('spell')));
+      expectExpr('exactly 2×[C]', range(2, 2, C));
+      expectExpr('exactly\t2x [C]', range(2, 2, C));
+    });
+
+    it('goes wherever a plain count goes', () => {
+      expectExpr('1x [C], exactly 2x monster', and(req(1, C), range(2, 2, d('monster'))));
+      expectExpr('1x [C] or exactly 2x [D]', or(req(1, C), range(2, 2, D)));
+      expectExpr('(exactly 1x [C] or 1x [D])', or(range(1, 1, C), req(1, D)));
+      expectExpr(
+        '1x [C] and (exactly 1x monster or no trap)',
+        and(req(1, C), or(range(1, 1, d('monster')), atMost(0, d('trap')))),
+      );
+      expectExpr('exactly 1x ([C] or [E])', range(1, 1, card(1, 3)));
+      // The description runs on after `or`, exactly as it does after a plain count.
+      expectExpr('exactly 1x [C] or [E]', range(1, 1, card(1, 3)));
+    });
+
+    it('refuses a range after it, naming both ways to write what was meant', () => {
+      expect(errorOf('exactly 1-2x monster')).toMatchObject({
+        message: expect.stringMatching(/one count.*exactly 1x.*1-2x/s),
+        at: '1-2x',
+      });
+      expect(errorOf('1x [C], exactly 3-1 monster')).toMatchObject({ at: '3-1' });
+    });
+
+    it('is a requirement word, so no limit takes it', () => {
+      expect(errorOf('at most exactly 1x trap')).toMatchObject({
+        message: expect.stringContaining('expected a count after `at most`'),
+        at: 'exactly',
+      });
+      expect(errorOf('exactly at most 1x trap')).toMatchObject({
+        message: expect.stringContaining('expected a count after `exactly`'),
+        at: 'at most',
+      });
+      expect(errorOf('exactly no trap')).toMatchObject({ at: 'no' });
+    });
+
+    it('asks for the count it lacks', () => {
+      expect(errorOf('exactly monster')).toMatchObject({
+        message: expect.stringContaining('exactly 1x monster'),
+        at: 'monster',
+      });
+      expect(errorOf('exactly')).toMatchObject({ at: '', start: 7 });
+      expect(errorOf('1x [C] and exactly')).toMatchObject({ at: '', start: 18 });
+      expect(errorOf('exactly 0xdark monster')).toMatchObject({
+        message: expect.stringContaining('space'),
+        at: '0xda',
+      });
+    });
+
+    it('refuses a count above 60, and a description that will not parse', () => {
+      expect(errorOf('exactly 61x monster')).toMatchObject({
+        message: expect.stringContaining('60'),
+        at: '61x',
+      });
+      expect(errorOf('exactly 2x levle 4 monster')).toMatchObject({ at: 'levle' });
+    });
+
+    it('starts a term, so it may not stand inside a description', () => {
+      expect(errorOf('1x ([C] or exactly 1x [D])')).toMatchObject({
+        message: expect.stringContaining('inside'),
+        at: 'exactly',
+      });
+      expect(errorOf('1x monster exactly 1x spell')).toMatchObject({
+        message: expect.stringMatching(/`and`.*`or`/),
+        at: 'exactly',
+      });
+    });
+  });
+
   describe('a count without its x', () => {
     it('reads a plain integer where a term must start', () => {
       expectExpr('2 monsters', req(2, d('monster')));
@@ -520,7 +624,8 @@ describe('parseCriterion', () => {
     it('never throws, and keeps every span inside the text', () => {
       const rng = seededRng(0xc417e410);
       const pieces = [
-        ...['1x', '2×', '0x', '61x', 'at most', 'no', 'and', ',', 'or', '(', ')', '[C]', '[D]'],
+        ...['1x', '2×', '0x', '61x', 'at most', 'no', 'exactly', 'and', ',', 'or', '(', ')'],
+        ...['[C]', '[D]'],
         ...['[Nobody]', 'monster', 'spell', 'level 4', 'or lower', 'FIRE', 'non-', '0x66', '7'],
         ...['"Warrior":0x2066', '#1', '#9', '{Starters}', 'ATK ?', '/', '-', ':', 'x', '×', 'at'],
         ...['most', 'levle', '&', '['],
