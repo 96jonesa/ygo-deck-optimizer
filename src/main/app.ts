@@ -3,6 +3,8 @@ import type { AppInfo, CardStatus, RunEvent } from '../shared/types';
 import { autodetectWorkdir, probeWorkdir } from './edopro/probe';
 import { type IpcMainLike, registerIpc } from './ipc';
 import { type CardLoader, CardService } from './services/cards';
+import { DeckService } from './services/decks';
+import { type FileDialogs, FileService } from './services/files';
 import { RunService, type WorkerLike } from './services/runs';
 import { TemplateService } from './services/templates';
 import { SettingsStore } from './store/settings';
@@ -28,6 +30,8 @@ export interface MainAppDeps {
   broadcast(channel: string, payload: unknown): void;
   /** The system's folder dialog; `null` when it is cancelled. */
   pickDirectory(): Promise<string | null>;
+  /** The system's file dialogs, for templates, decks and exports (M2g). */
+  dialogs: FileDialogs;
   /** One line per change of the card status and per run event; absent unless debugging. */
   log?: ((line: string) => void) | undefined;
 }
@@ -68,6 +72,8 @@ export class MainApp {
   readonly cards: CardService;
   readonly templates: TemplateService;
   readonly runs: RunService;
+  readonly files: FileService;
+  readonly decks: DeckService;
 
   constructor(private readonly deps: MainAppDeps) {
     this.settings = new SettingsStore(deps.userDataDir);
@@ -88,6 +94,25 @@ export class MainApp {
       },
       plateauDelta: () => this.settings.get().plateauDelta,
     });
+    // The export reads the run service's own copy of the result, not one that
+    // has been to the renderer and back (TDD §3).
+    this.files = new FileService({
+      cards: this.cards,
+      dialogs: deps.dialogs,
+      runs: { result: (runId) => this.runs.result(runId) },
+    });
+    this.decks = new DeckService({
+      cards: this.cards,
+      workdir: () => this.settings.get().workdir,
+      pickFile: () =>
+        deps.dialogs.openFile({
+          title: 'Open a deck',
+          filters: [
+            { name: 'EDOPro deck', extensions: ['ydk'] },
+            { name: 'All files', extensions: ['*'] },
+          ],
+        }),
+    });
   }
 
   /**
@@ -99,12 +124,14 @@ export class MainApp {
    * wait for it, and learns of it by push.
    */
   start(): Promise<void> {
-    const { deps, settings, cards, templates, runs } = this;
+    const { deps, settings, cards, templates, files, decks, runs } = this;
     registerIpc(deps.ipcMain, {
       appInfo: deps.appInfo,
       settings,
       cards,
       templates,
+      files,
+      decks,
       runs,
       probe: probeWorkdir,
       pickDirectory: deps.pickDirectory,

@@ -226,6 +226,8 @@ export class CardIndex {
   private constructor(
     cards: CardRecord[],
     private readonly counts: Omit<CardIndexStatus, 'cards'>,
+    /** Collapsed alternate artwork: its own passcode → the code it was collapsed onto. */
+    private readonly collapsed: ReadonlyMap<number, number> = new Map(),
   ) {
     const entries = cards.map((card) => ({ card, normalized: normalize(card.name) }));
     for (const card of cards) this.byCode.set(card.code, card);
@@ -306,10 +308,14 @@ export class CardIndex {
     }
 
     const cards: CardRecord[] = [];
+    const collapsed = new Map<number, number>();
     for (const row of rows.values()) {
       // An alias whose target is missing keeps the row under its own code.
       const target = row.alias !== 0 && row.alias !== row.id ? rows.get(row.alias) : undefined;
-      if (target !== undefined && isAlternateArtwork(row, target)) continue;
+      if (target !== undefined && isAlternateArtwork(row, target)) {
+        collapsed.set(row.id, target.id);
+        continue;
+      }
       if (!isMainDeckEligible(row.type) || !isOfficialScope(row.ot, includePrerelease)) continue;
       cards.push({
         code: row.id,
@@ -330,12 +336,16 @@ export class CardIndex {
         setcodes: [...(target ?? row).setcodes],
       });
     }
-    return new CardIndex(cards, {
-      databases: loaded,
-      skippedDatabases: skipped,
-      replacedRows: replaced.size,
-      conflicts,
-    });
+    return new CardIndex(
+      cards,
+      {
+        databases: loaded,
+        skippedDatabases: skipped,
+        replacedRows: replaced.size,
+        conflicts,
+      },
+      collapsed,
+    );
   }
 
   get status(): CardIndexStatus {
@@ -344,6 +354,30 @@ export class CardIndex {
 
   get(code: number): CardRecord | undefined {
     return this.byCode.get(code);
+  }
+
+  /**
+   * The card a PASSCODE names, alternate artwork included (TDD §4.3, §19).
+   *
+   * Of the three things `alias` means, exactly one costs the index a code:
+   * alternate artwork is **collapsed** onto its target, so its own passcode has
+   * no record and `get` answers "no such card" — while decklists routinely
+   * carry it (`18144507` is Harpie's Feather Duster in two of the five decks on
+   * this machine). This maps such a passcode to the record it was collapsed
+   * onto. The other two meanings keep a record of their own: a "treated as"
+   * card and a same-name-different-card alias resolve to THEMSELVES, never to
+   * their alias target — a deck holding Harpie Lady 1 holds Harpie Lady 1, and
+   * `limitCode` is what makes the three of them share a copy limit. For a code
+   * that is not an alias at all this is exactly `get`.
+   *
+   * One hop, as the client and core resolve setcodes; a target the population
+   * filter dropped resolves to nothing, since there is no record to hand back.
+   */
+  resolve(code: number): CardRecord | undefined {
+    const own = this.byCode.get(code);
+    if (own !== undefined) return own;
+    const target = this.collapsed.get(code);
+    return target === undefined ? undefined : this.byCode.get(target);
   }
 
   /**

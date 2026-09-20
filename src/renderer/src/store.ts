@@ -15,6 +15,7 @@ import type {
 import { type AnalysisView, NO_ANALYSIS, reduceAnalysis } from './model/analysis-view';
 import { statusHeadline } from './model/card-status';
 import type { CopyRange } from './model/copy-range';
+import type { FileStatus } from './model/files';
 import { readyText } from './model/run-format';
 import { IDLE_RUN, markCancelling, type RunView, reduceRun } from './model/run-state';
 import { type SetupStage, setupStage } from './model/setup';
@@ -30,6 +31,7 @@ import {
   withGroup,
   withGroupCard,
   withHandSize,
+  withImportedDeck,
   withLineRange,
   withLineText,
   withMovedCriterion,
@@ -103,6 +105,8 @@ export interface AppState {
   known: KnownCards;
   /** There has been a usable index at some point in this window's life. */
   everReady: boolean;
+  /** What the last file action did: opening, saving, importing, exporting. `null` between them. */
+  file: FileStatus | null;
 
   setInfo(info: AppInfo): void;
   setCards(status: CardStatus): void;
@@ -124,6 +128,10 @@ export interface AppState {
   setHandSize(size: number): void;
   /** The one-click split of PRD §6.4: a near miss's suggestion, as a line of its own. */
   addSuggestedLine(text: string): void;
+  /** A `.ydk` decklist main turned into lines: they replace the template's, and nothing else moves. */
+  importDeck(imported: Template): void;
+  /** What a file action had to say; `null` clears the line. */
+  setFileStatus(status: FileStatus | null): void;
   addCriterion(): void;
   dropCriterion(id: string): void;
   setCriterionText(id: string, text: string): void;
@@ -149,13 +157,19 @@ export type AppStore = StoreApi<AppState>;
 /** One per window; a test makes its own, so no two tests share a store. */
 export function createAppStore(): AppStore {
   return createStore<AppState>()((set) => {
-    /** A template edit: applied to the state as it is NOW, so two in one tick cannot collide. */
+    /**
+     * A template edit: applied to the state as it is NOW, so two in one tick
+     * cannot collide. Any edit clears the last file action's line — "Saved to
+     * …" under a template that has moved on since would read as a promise the
+     * app did not make. `importDeck` is an edit too, so the component sets its
+     * status AFTER calling it.
+     */
     const edit =
       <A extends unknown[]>(change: (template: Template, ...args: A) => Template) =>
       (...args: A) =>
         set((state) => {
           const template = change(state.template, ...args);
-          return template === state.template ? {} : { template, runFailure: [] };
+          return template === state.template ? {} : { template, runFailure: [], file: null };
         });
 
     return {
@@ -170,6 +184,7 @@ export function createAppStore(): AppStore {
       probe: null,
       known: {},
       everReady: false,
+      file: null,
 
       setInfo: (info) => set({ info }),
       // A probe that said yes is superseded by the status of the load it caused;
@@ -183,7 +198,7 @@ export function createAppStore(): AppStore {
       setSettings: (settings) => set({ settings }),
       setProbe: (probe) => set({ probe }),
       show: (view) => set({ view }),
-      setTemplate: (template) => set({ template, runFailure: [] }),
+      setTemplate: (template) => set({ template, runFailure: [], file: null }),
       setAnalysis: (result) =>
         set((state) => {
           const analysis = reduceAnalysis(state.analysis, result);
@@ -198,6 +213,7 @@ export function createAppStore(): AppStore {
           template: withCardLine(state.template, card),
           known: learnCards(state.known, [card]),
           runFailure: [],
+          file: null,
         })),
       addDescriptionLine: edit(withDescriptionLine),
       dropLine: edit(withoutLine),
@@ -207,6 +223,8 @@ export function createAppStore(): AppStore {
       setDeckSize: edit(withDeckSize),
       setHandSize: edit(withHandSize),
       addSuggestedLine: edit(withSuggestedLine),
+      importDeck: edit(withImportedDeck),
+      setFileStatus: (file) => set({ file }),
       addCriterion: edit(withCriterion),
       dropCriterion: edit(withoutCriterion),
       setCriterionText: edit(withCriterionText),
@@ -220,6 +238,7 @@ export function createAppStore(): AppStore {
           template: withGroupCard(state.template, id, card),
           known: learnCards(state.known, [card]),
           runFailure: [],
+          file: null,
         })),
       dropGroupCard: edit(withoutGroupCard),
       learn: (cards) => set((state) => ({ known: learnCards(state.known, cards) })),

@@ -2,12 +2,15 @@ import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
 import { type IpcDeps, registerIpc } from '../../src/main/ipc';
 import { type CardLoader, CardService } from '../../src/main/services/cards';
+import { DeckService } from '../../src/main/services/decks';
+import { FileService } from '../../src/main/services/files';
 import { RunService } from '../../src/main/services/runs';
 import { TemplateService } from '../../src/main/services/templates';
 import { SettingsStore } from '../../src/main/store/settings';
 import { IpcChannels, IpcEvents } from '../../src/shared/ipc';
 import type { AppInfo, CardStatus, RunEvent, WorkdirHealth } from '../../src/shared/types';
 import { ControllableLoader, immediateLoader, loadedCards } from '../helpers/card-loader';
+import { FakeDialogs } from '../helpers/fake-dialogs';
 import { FakeIpcMain } from '../helpers/fake-ipc-main';
 import { FakeWorkers } from '../helpers/fake-worker';
 import { CODE, FIXTURE_ROWS } from '../helpers/fixture-cards';
@@ -47,11 +50,24 @@ function harness(load: CardLoader = immediateLoader(() => loadedCards(SQL))) {
     // Events leave main by `webContents.send`: a structured clone, like an invoke's result.
     emit: (event) => runEvents.push(structuredClone(event)),
   });
+  const dialogs = new FakeDialogs();
+  const files = new FileService({
+    cards,
+    dialogs,
+    runs: { result: (runId) => runs.result(runId) },
+  });
+  const decks = new DeckService({
+    cards,
+    workdir: () => settings.get().workdir,
+    pickFile: () => dialogs.openFile({ title: 'Open a deck', filters: [] }),
+  });
   const deps: IpcDeps = {
     appInfo: () => APP_INFO,
     settings,
     cards,
     templates,
+    files,
+    decks,
     runs,
     probe: (dir) => {
       probed.push(dir);
@@ -60,7 +76,21 @@ function harness(load: CardLoader = immediateLoader(() => loadedCards(SQL))) {
     pickDirectory: async () => picks.shift() ?? null,
   };
   registerIpc(ipcMain, deps);
-  return { ipcMain, userData, settings, cards, pushed, probed, picks, deps, workers, runEvents };
+  return {
+    ipcMain,
+    userData,
+    settings,
+    cards,
+    pushed,
+    probed,
+    picks,
+    deps,
+    dialogs,
+    files,
+    decks,
+    workers,
+    runEvents,
+  };
 }
 
 /** A harness whose cards are `ready` and include the motivating example's, so that it runs. */

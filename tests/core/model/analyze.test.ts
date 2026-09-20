@@ -352,6 +352,57 @@ describe('analyze', () => {
       expect(lineOf(a, 'b').issues[0]!.message).toMatch(/Broken.*#12345/);
       expect(lineOf(a, 's').issues).toEqual([]);
     });
+
+    // A stored AST is authoritative (TDD §14): the analysis has to be ABOUT the
+    // description the run will compile, and to say when that is not the text on
+    // screen. `analyze` and `resolveTemplate` share `lineMeaning` precisely so
+    // the two can never answer this differently.
+    it('analyzes a stale line as its STORED description, and flags it', () => {
+      const a = analyze(
+        templateOf(
+          [
+            {
+              id: 'stale',
+              text: 'monster',
+              desc: { anyOf: [{ t: 'clause', clause: { kinds: ['trap'] } }] },
+              min: 0,
+              max: 3,
+            },
+          ],
+          ['1x trap'],
+        ),
+        ctx,
+      );
+      expect(lineOf(a, 'stale').parsed).toMatchObject({ ok: true, canonical: 'trap' });
+      expect(codes(lineOf(a, 'stale').issues)).toEqual(['stale-text']);
+      expect(requirementOf(a, 'trap').filledBy).toEqual(['stale']);
+      // A warning, not an error: the file means something, and it still runs.
+      expect(a.ok).toBe(true);
+    });
+
+    it('analyzes a stale criterion as its STORED expression, and flags it', () => {
+      const a = analyze(
+        {
+          ...templateOf([line('m', 'monster', 5, 5)], []),
+          criteria: [
+            {
+              id: 'c1',
+              text: '1x trap',
+              expr: {
+                op: 'req',
+                n: 1,
+                desc: { anyOf: [{ t: 'clause', clause: { kinds: ['monster'] } }] },
+              },
+            },
+          ],
+        },
+        ctx,
+      );
+      expect(criterionOf(a, 'c1').parsed).toMatchObject({ ok: true, canonical: '1x monster' });
+      expect(codes(criterionOf(a, 'c1').issues)).toEqual(['stale-text']);
+      expect(a.requirements.map((r) => r.text)).toEqual(['monster']);
+      expect(a.ok).toBe(true);
+    });
   });
 
   describe('requirements and limits (oracle A4)', () => {

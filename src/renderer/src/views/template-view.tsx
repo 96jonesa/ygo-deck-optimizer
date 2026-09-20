@@ -19,6 +19,7 @@ import {
 } from '../store';
 import { CardPicker } from './card-picker';
 import { useField } from './fields';
+import { FileActions } from './file-actions';
 import { GroupsEditor } from './groups-editor';
 import { LineRow } from './line-row';
 
@@ -164,6 +165,12 @@ export function TemplateView() {
       </p>
 
       <DeckControls />
+
+      {/* The panel's toolbar, and deliberately at the TOP of it: opening a
+          file and importing a deck are how a template STARTS, and the first
+          placement — under Groups, beside Load example — put them a full
+          screen below the fold, where the CDP run found them invisible. */}
+      <FileActions />
 
       <h3>Lines</h3>
       <ul className="lines" data-testid="lines">

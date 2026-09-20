@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { RunResult } from '../../../shared/types';
+import { exportStatus } from '../model/files';
 import {
   type BreakdownRow,
   breakdownRows,
@@ -370,10 +371,60 @@ function Irrelevant({
   );
 }
 
+/**
+ * The two exports (TDD §12). The run's own id is what they name, not the
+ * template on screen: main holds the result the numbers came from and writes
+ * the file from that, so an export can never be of something else. Exact
+ * fractions either way — a percentage is a rounding, and the ranking is on the
+ * numerator (TDD §10.3).
+ */
+function Export({ runId }: { runId: number }) {
+  const setFileStatus = useApp((state) => state.setFileStatus);
+  const status = useApp((state) => state.file);
+
+  async function write(format: 'csv' | 'json'): Promise<void> {
+    setFileStatus(exportStatus(await window.api.exportResults({ runId, format })));
+  }
+
+  return (
+    <div className="export">
+      <div className="actions">
+        <span className="dim">Export</span>
+        <button type="button" data-testid="export-csv" onClick={() => void write('csv')}>
+          Ranked table (CSV)
+        </button>
+        <button type="button" data-testid="export-json" onClick={() => void write('json')}>
+          Everything (JSON)
+        </button>
+      </div>
+      {status !== null && (
+        <ul
+          className={status.tone === 'bad' ? 'readout bad' : 'readout'}
+          data-testid="export-status"
+          aria-live="polite"
+        >
+          {status.lines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** Everything a finished (or half-finished) run has to say. */
-function RunResultReadout({ result, onRun }: { result: RunResult; onRun: () => void }) {
+function RunResultReadout({
+  result,
+  runId,
+  onRun,
+}: {
+  result: RunResult;
+  runId: number;
+  onRun: () => void;
+}) {
   // No live state is read here: everything on screen is the run's own, so a
   // result keeps saying what it meant while the template is edited under it.
+  // The export is the one exception, and it takes the run's ID, not its data.
   const dropped = droppedLimitRows(result);
 
   return (
@@ -388,6 +439,7 @@ function RunResultReadout({ result, onRun }: { result: RunResult; onRun: () => v
 
       <BestRatio result={result} />
       <LimitsFootnote result={result} />
+      <Export runId={runId} />
 
       <Ranked result={result} />
 
@@ -538,7 +590,7 @@ export function ResultsView() {
         </p>
       )}
       {(view.phase === 'done' || view.phase === 'cancelled') && view.result !== null && (
-        <RunResultReadout result={view.result} onRun={() => void run()} />
+        <RunResultReadout result={view.result} runId={view.runId} onRun={() => void run()} />
       )}
     </section>
   );

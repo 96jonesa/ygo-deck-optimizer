@@ -5,6 +5,7 @@ import {
   dialog,
   ipcMain,
   type OpenDialogOptions,
+  type SaveDialogOptions,
   session,
   shell,
 } from 'electron';
@@ -13,6 +14,7 @@ import { MainApp } from './app';
 import { contentSecurityPolicy } from './csp';
 import { candidateWorkdirs } from './edopro/probe';
 import { installLoader } from './services/cards';
+import type { FileDialogs } from './services/files';
 import { spawnOptimizerWorker } from './worker-spawn';
 
 // The Electron adapter: everything else in src/main takes what it needs by
@@ -58,17 +60,35 @@ function broadcast(channel: string, payload: unknown): void {
       window.webContents.send(channel, payload);
 }
 
-async function pickDirectory(): Promise<string | null> {
-  const options: OpenDialogOptions = {
-    title: 'Choose your EDOPro folder',
-    properties: ['openDirectory'],
-  };
+async function showOpen(options: OpenDialogOptions): Promise<string | null> {
   const parent = BrowserWindow.getFocusedWindow();
   const result = await (parent === null
     ? dialog.showOpenDialog(options)
     : dialog.showOpenDialog(parent, options));
   return result.canceled ? null : (result.filePaths[0] ?? null);
 }
+
+function pickDirectory(): Promise<string | null> {
+  return showOpen({ title: 'Choose your EDOPro folder', properties: ['openDirectory'] });
+}
+
+/** The two file dialogs the template and export services take by injection (TDD §3). */
+const dialogs: FileDialogs = {
+  openFile: ({ title, filters, defaultPath }) =>
+    showOpen({ title, filters, properties: ['openFile'], ...(defaultPath ? { defaultPath } : {}) }),
+  saveFile: async ({ title, filters, defaultPath }) => {
+    const options: SaveDialogOptions = {
+      title,
+      filters,
+      ...(defaultPath ? { defaultPath } : {}),
+    };
+    const parent = BrowserWindow.getFocusedWindow();
+    const result = await (parent === null
+      ? dialog.showSaveDialog(options)
+      : dialog.showSaveDialog(parent, options));
+    return result.canceled ? null : (result.filePath ?? null);
+  },
+};
 
 const main = new MainApp({
   ipcMain,
@@ -87,6 +107,7 @@ const main = new MainApp({
   createWindow,
   broadcast,
   pickDirectory,
+  dialogs,
   // `YGO_DEBUG=1`: one stderr line per change of the card status and per run event.
   log: process.env.YGO_DEBUG ? (line) => process.stderr.write(`${line}\n`) : undefined,
 });

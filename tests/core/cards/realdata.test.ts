@@ -6,6 +6,7 @@ import { CardIndex } from '../../../src/core/cards/index';
 import { isMonster, matchSetcode } from '../../../src/core/cards/record';
 import { SetnameTable } from '../../../src/core/cards/setnames';
 import { ATTRIBUTE_VOCABULARY, RACE_VOCABULARY } from '../../../src/core/cards/vocabulary';
+import { normalize } from '../../../src/core/util/normalize';
 import { collectStringsConf } from '../../../src/main/edopro/loader';
 
 // Opt-in integration tests against real data (TDD §15.1). Skipped in CI; run
@@ -139,6 +140,48 @@ describe.skipIf(!BABELCDB_PATH)('BabelCDB@47fc046 cards.cdb', async () => {
     const aliased = [...index.all()].filter((card) => card.limitCode !== card.code);
     expect(aliased).toHaveLength(13);
     expect(aliased.filter((card) => index.get(card.limitCode) === undefined)).toEqual([]);
+  });
+
+  // The `.ydk` hazard of TDD §19, on the real pool: `18144507` is in two of the
+  // five decks on this machine, and `get` cannot answer for it.
+  it('resolves a collapsed alternate-art passcode to its canonical printing', () => {
+    expect(index.get(18144507)).toBeUndefined();
+    expect(index.resolve(18144507)).toMatchObject({
+      code: 18144506,
+      name: "Harpie's Feather Duster",
+    });
+    expect(index.resolve(36996508)).toMatchObject({ code: 46986414, name: 'Dark Magician' });
+    expect(index.resolve(27847700)).toMatchObject({ code: 24094653, name: 'Polymerization' });
+  });
+
+  it('resolves every kept card, alias or not, to itself', () => {
+    const wrong = [...index.all()].filter((card) => index.resolve(card.code) !== card);
+    expect(wrong).toEqual([]);
+  });
+
+  it('resolves every collapsed passcode to a card of the same name, bar one token', () => {
+    // Every id BabelCDB holds that the index does not, but resolves. 273 near
+    // reprints plus the 2 far ones, as the population count above accounts for
+    // — and one more, `9995767`: a TOKEN (`ot = 0`, `TYPE_TOKEN`) one below a
+    // Main Deck card, so EDOPro's ±10 window collapses it although the two are
+    // not the same card and not even the same NAME. It resolves because
+    // collapse is decided before the population filter, deliberately (see
+    // `fromDatabases`): deciding it after would make "this row is the same card
+    // as its target" depend on the pre-release setting. No decklist carries a
+    // token, so it costs nothing — but it is why the guarantee here is "the
+    // same card under another number" only for rows a deck can hold.
+    const db = new SQL.Database(readFileSync(BABELCDB_PATH!));
+    const rows = (db.exec('SELECT d.id, t.name FROM datas d JOIN texts t ON t.id = d.id')[0]
+      ?.values ?? []) as [number, string][];
+    db.close();
+    const collapsed = rows.filter(
+      ([id]) => index.get(id) === undefined && index.resolve(id) !== undefined,
+    );
+    expect(collapsed).toHaveLength(273 + 2 + 1);
+    const renamed = collapsed.filter(
+      ([id, name]) => normalize(index.resolve(id)!.name) !== normalize(name),
+    );
+    expect(renamed.map(([id, name]) => [id, name])).toEqual([[9995767, 'TBR - Imperial Custom']]);
   });
 });
 

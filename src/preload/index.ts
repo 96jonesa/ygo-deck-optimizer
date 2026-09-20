@@ -24,6 +24,11 @@ const api: RendererApi = {
   parseDescription: (request) => ipcRenderer.invoke(IpcChannels.descParse, request),
   completeName: (request) => ipcRenderer.invoke(IpcChannels.descComplete, request),
   analyzeTemplate: (request) => ipcRenderer.invoke(IpcChannels.templateAnalyze, request),
+  openTemplate: () => ipcRenderer.invoke(IpcChannels.templateOpen),
+  saveTemplate: (template) => ipcRenderer.invoke(IpcChannels.templateSave, template),
+  listDecks: () => ipcRenderer.invoke(IpcChannels.deckList),
+  importDeck: (request) => ipcRenderer.invoke(IpcChannels.deckImport, request ?? {}),
+  exportResults: (request) => ipcRenderer.invoke(IpcChannels.resultsExport, request),
   startRun: (request) => ipcRenderer.invoke(IpcChannels.runStart, request),
   cancelRun: (runId, opts) =>
     ipcRenderer.invoke(IpcChannels.runCancel, { runId, graceful: opts?.graceful === true }),

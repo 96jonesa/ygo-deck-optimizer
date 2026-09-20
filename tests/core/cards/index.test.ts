@@ -513,6 +513,58 @@ describe('CardIndex', () => {
     });
   });
 
+  // `resolve` exists for one of the three meanings of `alias` (TDD §4.3): the
+  // alternate artwork the index COLLAPSES, whose passcode a real decklist
+  // carries and `get` therefore cannot answer. The other two meanings keep
+  // their own record, and `resolve` must hand that record back rather than
+  // redirect to the alias target — a deck holding Harpie Lady 1 holds Harpie
+  // Lady 1, not Harpie Lady.
+  describe('resolve', () => {
+    it('maps a collapsed near alternate artwork onto the record it was collapsed onto', () => {
+      expect(fixture.get(CODE.nearAltArt)).toBeUndefined();
+      expect(fixture.resolve(CODE.nearAltArt)).toBe(fixture.get(CODE.vanillaDragon));
+    });
+
+    it('maps a collapsed FAR alternate artwork too — the ±10 window is not the whole rule', () => {
+      expect(fixture.get(CODE.farAltArt)).toBeUndefined();
+      expect(fixture.resolve(CODE.farAltArt)).toBe(fixture.get(CODE.tunerFairy));
+    });
+
+    it('is `get` for a code that is not an alias at all', () => {
+      expect(fixture.resolve(CODE.quickSpell)).toBe(fixture.get(CODE.quickSpell));
+    });
+
+    it('keeps a "treated as" card as itself, never as its alias target', () => {
+      const treated = fixture.resolve(CODE.treatedAsHarpy);
+      expect(treated?.code).toBe(CODE.treatedAsHarpy);
+      expect(treated?.name).toBe('Synthetic Cyber Harpy');
+      expect(treated?.limitCode).toBe(CODE.harpy);
+    });
+
+    it('keeps a same-name-different-card alias as itself', () => {
+      expect(fixture.resolve(CODE.sameNameDifferentCard)?.code).toBe(CODE.sameNameDifferentCard);
+    });
+
+    it('keeps an alias whose target no database holds under its own code', () => {
+      expect(fixture.resolve(CODE.orphanAlias)?.code).toBe(CODE.orphanAlias);
+    });
+
+    it('returns undefined for a code no database holds', () => {
+      expect(fixture.resolve(1)).toBeUndefined();
+      expect(fixture.resolve(CODE.missingTarget)).toBeUndefined();
+    });
+
+    it('returns undefined when the target exists but the population filter dropped it', () => {
+      // The reprint is collapsed onto a token, and a token is not a card you
+      // can put in a Main Deck: there is nothing to resolve to.
+      const index = indexOf([
+        ...FIXTURE_ROWS,
+        { id: CODE.token + 1, alias: CODE.token, name: 'Synthetic Token', type: 0x4011, level: 1 },
+      ]);
+      expect(index.resolve(CODE.token + 1)).toBeUndefined();
+    });
+  });
+
   describe('findByName', () => {
     it('returns the record whose whole name matches', () => {
       expect(fixture.findByName('Synthetic Harpy').map((card) => card.code)).toEqual([CODE.harpy]);

@@ -7,6 +7,7 @@ import { IpcChannels, IpcEvents } from '../../src/shared/ipc';
 import type { CardStatus, RunEvent } from '../../src/shared/types';
 import { ControllableLoader, loadedCards } from '../helpers/card-loader';
 import { SETNAMES, STRINGS_CONF } from '../helpers/desc-context';
+import { FakeDialogs } from '../helpers/fake-dialogs';
 import { FakeIpcMain } from '../helpers/fake-ipc-main';
 import { FAKE_COST, FakeWorkers } from '../helpers/fake-worker';
 import { buildCdb, FIXTURE_ROWS, POPULATION } from '../helpers/fixture-cards';
@@ -38,6 +39,7 @@ function harness(overrides: Partial<MainAppDeps> = {}) {
   const sent: { channel: string; payload: unknown }[] = [];
   const log: string[] = [];
   const workers = new FakeWorkers();
+  const dialogs = new FakeDialogs();
   let windows = 0;
   const app = new MainApp({
     ipcMain,
@@ -51,6 +53,7 @@ function harness(overrides: Partial<MainAppDeps> = {}) {
     },
     broadcast: (channel, payload) => sent.push({ channel, payload }),
     pickDirectory: async () => null,
+    dialogs,
     log: (line) => log.push(line),
     ...overrides,
   });
@@ -66,6 +69,7 @@ function harness(overrides: Partial<MainAppDeps> = {}) {
     statuses,
     runEvents,
     workers,
+    dialogs,
     log,
     windows: () => windows,
   };

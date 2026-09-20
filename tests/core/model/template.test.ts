@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { validateTemplate } from '../../../src/core/model/template';
 import { motivatingTemplate } from '../../helpers/motivating';
@@ -62,13 +63,65 @@ describe('validateTemplate', () => {
           min: 0,
           max: 3,
         },
-        { id: 'l2', text: 'level 4 monster', desc: { anyOf: [] }, min: 2, max: 3 },
+        {
+          id: 'l2',
+          text: 'level 4 monster',
+          desc: { anyOf: [{ t: 'clause', clause: { kinds: ['monster'], level: [4] } }] },
+          min: 2,
+          max: 3,
+        },
       ],
       remainder: { min: 0, max: null },
-      criteria: [{ id: 'c1', name: 'full combo', text: '1x [..]', expr: { op: 'and', args: [] } }],
-      cardSnapshot: { '14558127': { type: 4129, level: 3 } },
+      criteria: [
+        {
+          id: 'c1',
+          name: 'full combo',
+          text: '1x [Ash Blossom & Joyous Spring]',
+          expr: { op: 'req', n: 1, desc: { anyOf: [{ t: 'card', passcode: 14558127 }] } },
+        },
+      ],
+      cardSnapshot: {
+        '14558127': {
+          type: 4129,
+          attribute: 4,
+          race: 16,
+          level: 3,
+          atk: 0,
+          def: 1800,
+          setcodes: [],
+        },
+      },
     };
     expect(validateTemplate(json)).toEqual({ ok: true, template: json });
+  });
+
+  // The test above holds a COPY of §14's example, so it cannot notice the
+  // document drifting away from it. This reads the example out of §14 itself.
+  // It is the check that was missing: the placeholder ASTs below sat in the
+  // TDD for four milestones because nothing ever ran them.
+  it('accepts the template file printed in docs/TDD.md §14, read from the document', () => {
+    const md = readFileSync(new URL('../../../docs/TDD.md', import.meta.url), 'utf8');
+    const section = md.slice(md.indexOf('## 14. Template file'), md.indexOf('## 15. Testing'));
+    const block = /```json\n([\s\S]*?)\n```/.exec(section)?.[1];
+    expect(block, '§14 must still print a JSON template example').toBeDefined();
+    expect(validateTemplate(JSON.parse(block!))).toMatchObject({ ok: true });
+  });
+
+  // TDD §14's example writes `{ "anyOf": [] }` and `{ "op": "and", "args": [] }`
+  // as placeholders beside placeholder text (`"1x [..]"`). They were carried
+  // through unread while the text was what got parsed; now that a stored AST is
+  // what the engine judges, they are what they say — a description matching
+  // nothing and a criterion of no terms — and the file is refused rather than
+  // silently meaning something nobody wrote.
+  it('refuses the placeholder ASTs the TDD §14 example writes', () => {
+    expect(
+      errorsOf(withLine({ id: 'l1', text: 'monster', desc: { anyOf: [] }, min: 0, max: 1 })),
+    ).toEqual(['lines[0] ("l1"): `desc`: `anyOf` is empty; a description matches something']);
+    expect(
+      errorsOf(
+        withField('criteria', [{ id: 'c1', text: '1x monster', expr: { op: 'and', args: [] } }]),
+      ),
+    ).toEqual(['criteria[0] ("c1"): `expr`: `and` needs at least one argument']);
   });
 
   it('fills in no groups and an open remainder when they are left out', () => {
@@ -204,7 +257,7 @@ describe('validateTemplate', () => {
     ]);
     expect(
       errorsOf(withLine({ id: 'l1', text: 'monster', desc: 'monster', min: 0, max: 1 })),
-    ).toEqual(['lines[0] ("l1"): `desc` must be a description object, not "monster"']);
+    ).toEqual(['lines[0] ("l1"): `desc`: must be { anyOf: [...] }, not "monster"']);
   });
 
   it('accepts a line or criterion whose text is still empty', () => {
@@ -262,7 +315,7 @@ describe('validateTemplate', () => {
       errorsOf(withField('criteria', [{ id: 'c1', text: '1x monster', name: 3, expr: [] }])),
     ).toEqual([
       'criteria[0] ("c1"): `name` must be text, not 3',
-      'criteria[0] ("c1"): `expr` must be an expression object, not []',
+      'criteria[0] ("c1"): `expr`: must be an expression object, not []',
     ]);
   });
 

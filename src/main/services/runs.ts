@@ -195,8 +195,20 @@ export class RunService {
   private active: ActiveRun | null = null;
   private calibrated: CostModel | undefined;
   private lastRunId = 0;
+  /** The last run that scored something, for `results:export`; there is no run history (TDD §13). */
+  private finished: { runId: number; result: RunResult } | null = null;
 
   constructor(private readonly deps: RunServiceDeps) {}
+
+  /**
+   * The result of `runId`, for exporting — `null` for any run but the last one
+   * to have scored something. The renderer holds the result it is showing, so
+   * this exists to keep the EXPORT off the renderer: the file is written from
+   * the value main sent, not from one that has crossed IPC twice.
+   */
+  result(runId: number): RunResult | null {
+    return this.finished?.runId === runId ? this.finished.result : null;
+  }
 
   /**
    * What a score costs on this machine, once a worker has calibrated (TDD
@@ -374,6 +386,10 @@ export class RunService {
     if (this.active !== run) return;
     this.active = null;
     if (run.deadline !== undefined) clearTimeout(run.deadline);
+    // Kept for export, partial results included: what is on screen is exactly
+    // what a file would hold, and an abandoned run replaces nothing.
+    if ((event.type === 'result' || event.type === 'cancelled') && event.result !== null)
+      this.finished = { runId: run.runId, result: event.result };
     this.deps.emit(event);
     run.end();
   }
