@@ -160,7 +160,7 @@ export function TemplateView() {
       <p className="hint">
         Each line is one card or one description, with the copies it may hold. Lines are separate
         and additive: <code>monster</code> and <code>level 4 monster</code> are different cards, and
-        a line only ever fills what it says (PRD §6).
+        a line only ever fills what it says.
       </p>
 
       <DeckControls />

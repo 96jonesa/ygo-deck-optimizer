@@ -228,7 +228,7 @@ export function limitsNote(result: RunResult): LimitsNote | null {
   if (result.criterionLimits.length === 0) return null;
   return {
     reading:
-      'A card counts against a limit only where its line is specific enough to be known to match (PRD §6.3), so this figure is exact under that reading rather than a bound on any concrete deck.',
+      'A card counts against a limit only where its line is specific enough to be known to match, so this figure is exact under that reading rather than a bound on any concrete deck.',
     blind: result.criterionLimits
       .filter((limit) => limit.blindRange !== null)
       .map((limit) => ({

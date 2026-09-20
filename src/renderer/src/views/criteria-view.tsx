@@ -173,7 +173,7 @@ export function CriteriaView() {
         A hand succeeds if it meets <strong>any one</strong> criterion. Each is a list of
         requirements — <code>1x [Ash Blossom]</code> — and limits — <code>at most 1x [Brick]</code>{' '}
         — joined by <code>and</code>, with <code>or</code> in parentheses for alternatives that
-        differ (PRD §5.3).
+        differ.
       </p>
 
       <ul className="lines" data-testid="criteria">
@@ -207,13 +207,13 @@ export function CriteriaView() {
 
       <h3>Requirements</h3>
       <p className="hint flush">
-        A line fills a requirement only if what it says <em>implies</em> it (PRD §6.2): a{' '}
-        <code>monster</code> line does not count toward <code>level 4 or lower monster</code>,
-        because its Level is unstated. Where one nearly does, the split that would count is one
-        click away. A requirement written as a range — <code>1-2x monster</code> — also sets a
-        ceiling: a hand holding more matching cards than that fails, unless another requirement
-        takes them. When both ends are the same number, <code>exactly 1x monster</code> says it more
-        plainly, and means the same as <code>1-1x monster</code>.
+        A line fills a requirement only if what it says <em>implies</em> it: a <code>monster</code>{' '}
+        line does not count toward <code>level 4 or lower monster</code>, because its Level is
+        unstated. Where one nearly does, the split that would count is one click away. A requirement
+        written as a range — <code>1-2x monster</code> — also sets a ceiling: a hand holding more
+        matching cards than that fails, unless another requirement takes them. When both ends are
+        the same number, <code>exactly 1x monster</code> says it more plainly, and means the same as{' '}
+        <code>1-1x monster</code>.
       </p>
       {requirements.length === 0 ? (
         <p className="seam" data-testid="no-requirements">
@@ -232,9 +232,9 @@ export function CriteriaView() {
           <h3>Limits</h3>
           <p className="hint flush">
             A limit counts <strong>only</strong> cards a line is specific enough to be known to
-            match (PRD §6.3). Cards it cannot see are listed rather than assumed: if some of them
-            really do match, give them a line that says so. A range requirement&rsquo;s ceiling
-            counts cards the same way, and is blind to the same lines.
+            match. Cards it cannot see are listed rather than assumed: if some of them really do
+            match, give them a line that says so. A range requirement&rsquo;s ceiling counts cards
+            the same way, and is blind to the same lines.
           </p>
           <ul className="readouts" data-testid="limits">
             {limits.map((row) => (
