@@ -132,6 +132,12 @@ export interface DrawSet {
   terms: number;
   /** Rational groups over every part: the per-deck cost a term count does not show. */
   groups: number;
+  /**
+   * Compositions actually visited by the build. `drawWork` predicts it without
+   * building, and a test holds the two equal — two copies of one recursion is
+   * how they drift, and the prediction is what refuses a template.
+   */
+  visits: number;
 }
 
 /** The prefix lengths the draw classes can reach, ascending — `num` may be 0 at any of them. */
@@ -226,6 +232,7 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
 
   /** By prefix length, then by the ordering factor's value. */
   const drafts = new Map<number, Map<string, Draft>>();
+  let visits = 0;
   const add = (
     prefix: number,
     factor: Rational,
@@ -277,6 +284,7 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
           v[spec.cls] = held[i]!;
         });
         compose(rest, 0, fillers, v, capOf, () => {
+          visits++;
           // The hand is the prefix less the copies that resolved and left it.
           let size = prefix;
           for (let cls = 0; cls < classCount; cls++) hand[cls] = v[cls]!;
@@ -345,6 +353,7 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
           // decided once per `v` rather than once per opening.
           const drawn = weigh(hand, size);
           compose(rest, 0, fillersOpen, u, v, () => {
+            visits++;
             // ONE window, decided before anything is drawn — never the better of
             // the two. A `stop` criterion met by the opening stops the draws and
             // the opening is what is valued; otherwise every draw card resolves
@@ -381,7 +390,7 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
   // position and answering nonsense.
   for (const prefix of reachablePrefixes(H, draws))
     if (!drafts.has(prefix)) drafts.set(prefix, new Map());
-  return assemble({ drafts, deckSize, H, classCount, width, maxWeight });
+  return { ...assemble({ drafts, deckSize, H, classCount, width, maxWeight }), visits };
 }
 
 /**
@@ -425,7 +434,14 @@ interface Assembly {
  * worked out once — and the two exactness checks that let every per-deck sum be
  * a float64.
  */
-function assemble({ drafts, deckSize, H, classCount, width, maxWeight }: Assembly): DrawSet {
+function assemble({
+  drafts,
+  deckSize,
+  H,
+  classCount,
+  width,
+  maxWeight,
+}: Assembly): Omit<DrawSet, 'visits'> {
   const parts: DrawPart[] = [];
   let terms = 0;
   let groups = 0;

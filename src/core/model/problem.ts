@@ -45,6 +45,26 @@ export const MAX_PREFIX = 16;
  */
 export const MAX_HAND = 12;
 
+/**
+ * The compositions `drawSet` will visit before the engine refuses to build at
+ * all (`drawWork`), at roughly 200–400 ms a million: about five seconds.
+ *
+ * It is a SECOND bound and not a restatement of `MAX_PREFIX`, which is the
+ * mistake this constant exists to correct. The prefix bounds how DEEP the
+ * enumeration reads; the cost is that depth spread over the CLASSES, and with a
+ * stop criterion over the openings too. Three copies of Pot of Greed at fifteen
+ * classes reach a prefix of 11 — comfortably inside `MAX_PREFIX` — and with a
+ * stop criterion cost 22 million visits, where eighteen classes cost 88 million
+ * and three draw-3 lines cost 2.6 BILLION. A cap on the prefix alone lets every
+ * one of those through.
+ *
+ * A run pays this once and then scores millions of decks against it, so five
+ * seconds is affordable there. What is NOT affordable is paying it on a
+ * keystroke: `analyze` has its own, far lower bound (`ANALYZE_DRAW_WORK`) past
+ * which it declines to build rather than freeze the editor.
+ */
+export const MAX_DRAW_WORK = 25_000_000;
+
 /** Bit 0: the blank class, which fills no requirement and counts against no limit. */
 export const BLANK_BIT = 1;
 
@@ -140,6 +160,176 @@ export function largestHand(H: number, draws: readonly DrawClass[]): number {
   let out = H;
   for (const spec of draws) out += (spec.n - 1) * (spec.oncePerTurn === true ? 1 : spec.max);
   return out;
+}
+
+/**
+ * THE COMPOSITIONS `drawSet` WOULD VISIT, counted without visiting them — the
+ * cost of a BUILD, known before paying it.
+ *
+ * It exists because `MAX_PREFIX` does not bound the build. The prefix bounds
+ * how DEEP the enumeration reads; the cost is that depth spread over the
+ * CLASSES, and with a stop criterion over the openings as well. Three copies of
+ * Pot of Greed at fifteen classes reach a prefix of 11 — comfortably inside
+ * `MAX_PREFIX` — and with a stop criterion take 6.5 seconds to build. `analyze`
+ * runs on every edit, in the main process, synchronously: that is not a slow
+ * editor but a frozen application, so it is refused rather than attempted.
+ *
+ * Counted EXACTLY, by the recursion `drawSet` itself walks with the inner
+ * composition replaced by a count of it: a few thousand operations, whatever
+ * the answer, so asking is always cheap even when the answer is "far too much".
+ *
+ * It lives HERE rather than beside the recursion it mirrors, so that
+ * `problem.ts` and `draw-set.ts` do not import each other — and because two
+ * copies of one recursion is how they drift, a test counts the visits of the
+ * real enumeration and holds this equal to them.
+ */
+export function drawWork(problem: Problem, H: number): number {
+  const draws = drawClassesOf(problem.classes);
+  if (draws.length === 0) return 0;
+  const classCount = problem.classes.length;
+  const longest = longestPrefix(H, draws);
+  const rest: number[] = [];
+  for (let cls = 0; cls < classCount; cls++)
+    if (draws.every((spec) => spec.cls !== cls)) rest.push(cls);
+  const capOf = rest.map((cls) => Math.min(problem.classes[cls]!.max, longest));
+  const stopping = problem.criteria.some(({ stop }) => stop === true);
+
+  /** The ways to give `total` cards to the non-draw classes within their maxima. */
+  const spread = new Map<number, number>();
+  const spreadOf = (total: number): number => {
+    const known = spread.get(total);
+    if (known !== undefined) return known;
+    let ways = new Float64Array(total + 1);
+    ways[0] = 1;
+    for (const cap of capOf) {
+      const next = new Float64Array(total + 1);
+      for (let had = 0; had <= total; had++) {
+        const from = ways[had]!;
+        if (from === 0) continue;
+        for (let take = 0; take <= cap && had + take <= total; take++) next[had + take]! += from;
+      }
+      ways = next;
+    }
+    const out = ways[total]!;
+    spread.set(total, out);
+    return out;
+  };
+
+  /** The (prefix, opening) PAIRS: the same spread, split into what was opened on. */
+  const pairs = new Map<string, number>();
+  const pairsOf = (opened: number, after: number): number => {
+    const key = `${opened},${after}`;
+    const known = pairs.get(key);
+    if (known !== undefined) return known;
+    const width = after + 1;
+    let ways = new Float64Array((opened + 1) * width);
+    ways[0] = 1;
+    for (const cap of capOf) {
+      const next = new Float64Array((opened + 1) * width);
+      for (let u = 0; u <= opened; u++)
+        for (let w = 0; w <= after; w++) {
+          const from = ways[u * width + w]!;
+          if (from === 0) continue;
+          for (let take = 0; take <= cap; take++)
+            for (let mine = 0; mine <= take; mine++) {
+              const toU = u + mine;
+              const toW = w + take - mine;
+              if (toU <= opened && toW <= after) next[toU * width + toW]! += from;
+            }
+        }
+      ways = next;
+    }
+    const out = ways[opened * width + after]!;
+    pairs.set(key, out);
+    return out;
+  };
+
+  let work = 0;
+  if (!stopping) {
+    const held = draws.map(() => 0);
+    const walk = (at: number, prefix: number): void => {
+      if (at === draws.length) {
+        const fillers = prefix - held.reduce((sum, count) => sum + count, 0);
+        if (fillers >= 0) work += spreadOf(fillers);
+        return;
+      }
+      const spec = draws[at]!;
+      for (let copies = 0; copies <= Math.min(spec.max, longest); copies++) {
+        held[at] = copies;
+        walk(at + 1, prefix + spec.n * copiesUsed(copies, spec));
+      }
+      held[at] = 0;
+    };
+    walk(0, H);
+    return work;
+  }
+
+  /**
+   * Whether the process can reach an extension at all — `splitFactor` would
+   * answer 0 otherwise, and `drawSet` skips such a split without composing
+   * anything, so counting it would over-state the build by a third.
+   *
+   * Decided GREEDILY rather than by the DP the factor uses: place the copies
+   * that add most to the budget first, since that maximises every prefix of the
+   * path at once, and a valid arrangement exists exactly when that one is valid.
+   */
+  const reachable = (
+    opened: readonly number[],
+    later: readonly number[],
+    fillersAfter: number,
+  ): boolean => {
+    const placed = later.map(() => 0);
+    let budget = H;
+    for (let i = 0; i < draws.length; i++)
+      budget += draws[i]!.n * copiesUsed(opened[i]!, draws[i]!);
+    const extension = fillersAfter + later.reduce((sum, count) => sum + count, 0);
+    for (let step = 0; step < extension; step++) {
+      if (budget <= H + step) return false;
+      // The next copy that adds most; a filler adds nothing and goes last.
+      let best = -1;
+      let gain = 0;
+      for (let i = 0; i < later.length; i++) {
+        if (placed[i]! >= later[i]!) continue;
+        const spec = draws[i]!;
+        const held = opened[i]! + placed[i]!;
+        const adds = spec.n * (copiesUsed(held + 1, spec) - copiesUsed(held, spec));
+        if (adds > gain || best < 0) {
+          best = i;
+          gain = adds;
+        }
+      }
+      if (best < 0) continue;
+      placed[best]!++;
+      budget += gain;
+    }
+    return true;
+  };
+
+  const a = draws.map(() => 0);
+  const b = draws.map(() => 0);
+  const walk = (at: number, prefix: number, inOpening: number): void => {
+    if (at === draws.length) {
+      if (inOpening > H) return;
+      const later = b.reduce((sum, count) => sum + count, 0);
+      const fillersAfter = prefix - H - later;
+      const fillersOpen = H - inOpening;
+      if (fillersAfter < 0 || fillersOpen < 0) return;
+      if (reachable(a, b, fillersAfter)) work += pairsOf(fillersOpen, fillersAfter);
+      return;
+    }
+    const spec = draws[at]!;
+    const cap = Math.min(spec.max, longest);
+    for (let opened = 0; opened <= cap; opened++)
+      for (let later = 0; later + opened <= cap; later++) {
+        a[at] = opened;
+        b[at] = later;
+        walk(at + 1, prefix + spec.n * copiesUsed(opened + later, spec), inOpening + opened);
+      }
+    a[at] = 0;
+    b[at] = 0;
+  };
+  walk(0, H, 0);
+  return work;
 }
 
 export interface CompiledLimit {
@@ -439,6 +629,20 @@ export function validateProblem(problem: Problem): void {
 }
 
 /**
+ * A count as the reader needs it, in full. Rounding to millions here once said
+ * "25 million compositions to build, and the engine builds at most 25 million"
+ * — the same number twice, reading as a contradiction, and telling someone who
+ * must drop copies nothing about how many.
+ */
+const exactly = (value: number) => value.toLocaleString('en-US');
+
+/** `1.06×` just over a bound, `32×` well past it: both say how far, neither rounds to `1×`. */
+export function overBy(value: number, bound: number): string {
+  const times = value / bound;
+  return times >= 10 ? `${Math.round(times)}×` : `${times.toFixed(2)}×`;
+}
+
+/**
  * What draw cards make of one hand size — the whole of the engine's refusal
  * list for them, in the `MAX_CLASSES` style: an error where it enters, never a
  * silently wrong probability.
@@ -479,6 +683,11 @@ function checkDraws(
   if (prefix > MAX_PREFIX)
     throw new RangeError(
       `${where}: these draw cards reach ${prefix} cards deep, and the engine scores at most ${MAX_PREFIX} — hold fewer copies of a draw card, or draw fewer cards`,
+    );
+  const work = drawWork(problem, H);
+  if (work > MAX_DRAW_WORK)
+    throw new RangeError(
+      `${where}: these draw cards would take ${exactly(work)} compositions to build, ${overBy(work, MAX_DRAW_WORK)} the ${exactly(MAX_DRAW_WORK)} the engine allows — hold fewer copies of a draw card, merge lines the criteria cannot tell apart, or drop a "stop here"`,
     );
   const largest = largestHand(H, draws);
   if (largest > MAX_HAND)

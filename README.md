@@ -306,6 +306,20 @@ and what `expand` drops. Three Pots of Greed give 11 and 8; three Upstart Goblin
 alone — `analyze` rebuilds the success set on every keystroke — not exactness: $`\binom{60}{16}`$ is
 a long way below $`2^{53}`$.
 
+**And the prefix does not bound the build**, which is the trap that cap invites. The prefix bounds
+how DEEP the enumeration reads; the cost is that depth spread over the CLASSES, and with a "stop
+here" over the openings too. Three copies of Pot of Greed at fifteen classes reach a prefix of 11 —
+comfortably inside `MAX_PREFIX` — and cost 22 million compositions to build, where eighteen classes
+cost 88 million. So `drawWork` counts those compositions **without visiting them**, by the same
+recursion with the inner composition replaced by a count of it (a few thousand operations, whatever
+the answer, and a test holds it exactly equal to the visits the build makes). Two bounds sit on it:
+`MAX_DRAW_WORK = 25,000,000`, past which the engine refuses to build at all — about five seconds at
+the measured 200–400 ms a million — and `ANALYZE_DRAW_WORK = 1,500,000`, past which **`analyze`
+declines to build**, with a notice. The second is far below the first on purpose: a run pays the
+build once and then scores millions of decks against it, where `analyze` runs on every edit,
+synchronously in the main process, and a four-second build there is not a slow readout but a frozen
+application. The template still runs; only the term count and the time estimate go missing.
+
 **There is ONE decision, taken before any card is drawn.** Either nothing is activated, or every
 draw card resolves — including the ones drawn into, bounded only by `oncePerTurn`. There is
 deliberately no choice card by card: that would be a decision tree, where this is a single

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { drawClassesOf, largestHand, longestPrefix } from '../../../src/core/model/problem';
+import {
+  drawClassesOf,
+  drawWork,
+  largestHand,
+  longestPrefix,
+  MAX_DRAW_WORK,
+} from '../../../src/core/model/problem';
 import { drawSet, hasDrawCards, reachablePrefixes } from '../../../src/core/prob/draw-set';
 import { createBlendScorer } from '../../../src/core/prob/scorer';
 import { bit, drawProblem } from '../../helpers/draw-problem';
@@ -239,5 +245,109 @@ describe('drawSet', () => {
         expect(Number.isSafeInteger(den)).toBe(true);
       }
     });
+  });
+});
+
+/**
+ * THE COST OF A BUILD, known before paying it. `MAX_PREFIX` bounds how DEEP the
+ * enumeration reads; it does not bound the cost, which is that depth spread
+ * over the classes and — with a stop criterion — over the openings too. This is
+ * the second bound, and the test that the prediction is the real thing.
+ */
+describe('drawWork', () => {
+  const shapeOf = (classes: number, copies: number, n: number, stop: boolean) =>
+    drawProblem({
+      n: Array.from({ length: classes }, (_, cls) =>
+        cls === 0 ? 40 - copies : cls === 1 ? copies : 0,
+      ),
+      max: Array.from({ length: classes }, (_, cls) => (cls === 0 ? 40 : cls === 1 ? copies : 13)),
+      H: 5,
+      deckSize: 40,
+      draw: { 1: { n } },
+      criteria: [needs(bit(classes - 1), stop ? { stop: true } : {})],
+    });
+
+  it('is 0 for a problem that draws nothing', () => {
+    expect(drawWork(drawProblem({ n: [5, 3], H: 2, criteria: [needs(bit(1))] }), 2)).toBe(0);
+  });
+
+  /**
+   * Two copies of one recursion is how they drift, so the prediction is held to
+   * the visits the build actually makes — over a sweep, and exactly, not within
+   * a factor. A split the process can never reach is composed by neither.
+   */
+  it('is EXACTLY the compositions the build visits, over a sweep of shapes', () => {
+    let checked = 0;
+    for (const classes of [4, 6, 8])
+      for (const copies of [1, 2, 3])
+        for (const n of [1, 2])
+          for (const stop of [false, true]) {
+            const problem = shapeOf(classes, copies, n, stop);
+            expect(drawWork(problem, 5)).toBe(drawSet(problem, 5).visits);
+            checked++;
+          }
+    expect(checked).toBe(36);
+  });
+
+  it('grows with the classes, which no prefix bound can see', () => {
+    // The prefix is 11 at every one of these; only the spread over classes moves.
+    const widths = [5, 10, 15].map((classes) => drawWork(shapeOf(classes, 3, 2, false), 5));
+    expect(widths[0]).toBeLessThan(widths[1]!);
+    expect(widths[1]).toBeLessThan(widths[2]!);
+    for (const classes of [5, 10, 15])
+      expect(longestPrefix(5, drawClassesOf(shapeOf(classes, 3, 2, false).classes))).toBe(11);
+  });
+
+  it('grows again with a stop criterion, which adds the openings to the count', () => {
+    expect(drawWork(shapeOf(10, 3, 2, true), 5)).toBeGreaterThan(
+      drawWork(shapeOf(10, 3, 2, false), 5),
+    );
+  });
+
+  /**
+   * A refusal has to say how FAR over it is, and rounding to millions did not:
+   * a build of 25,400,000 against a cap of 25,000,000 read "25 million … at
+   * most 25 million", the same number twice, which reads as a contradiction and
+   * tells someone who must drop copies nothing about how many.
+   */
+  it('says the real figure and the multiple, never the same number twice', () => {
+    // 16 classes with a stop criterion is 1.06× the cap — the near miss that
+    // rounding destroys, and the one a reader most needs a real number for.
+    const justOver = shapeOf(16, 3, 2, true);
+    const work = drawWork(justOver, 5);
+    expect(work).toBeGreaterThan(MAX_DRAW_WORK);
+    expect(work / MAX_DRAW_WORK).toBeLessThan(1.1);
+    let message = '';
+    try {
+      drawSet(justOver, 5);
+    } catch (failure) {
+      message = (failure as Error).message;
+    }
+    expect(message).toContain(work.toLocaleString('en-US'));
+    expect(message).toContain(MAX_DRAW_WORK.toLocaleString('en-US'));
+    expect(message).toContain('1.06×');
+    // And the two figures in it are different ones.
+    expect(work.toLocaleString('en-US')).not.toBe(MAX_DRAW_WORK.toLocaleString('en-US'));
+    // The three remedies stay.
+    expect(message).toContain('fewer copies');
+    expect(message).toContain('merge lines');
+    expect(message).toContain('"stop here"');
+  });
+
+  it('refuses a build past MAX_DRAW_WORK rather than take minutes over it', () => {
+    // Three copies of Pot of Greed over eighteen classes with a stop criterion.
+    // The PREFIX is 11 — comfortably inside `MAX_PREFIX`, which is exactly why
+    // that bound cannot catch this — and the build is 88 million compositions.
+    const huge = shapeOf(18, 3, 2, true);
+    expect(longestPrefix(5, drawClassesOf(huge.classes))).toBe(11);
+    expect(drawWork(huge, 5)).toBeGreaterThan(MAX_DRAW_WORK);
+    expect(() => drawSet(huge, 5)).toThrow(/compositions to build/);
+    expect(() => createBlendScorer(huge)).toThrow(/compositions to build/);
+  });
+
+  it('builds what is inside the bound', () => {
+    const fine = shapeOf(10, 3, 2, false);
+    expect(drawWork(fine, 5)).toBeLessThan(MAX_DRAW_WORK);
+    expect(() => drawSet(fine, 5)).not.toThrow();
   });
 });

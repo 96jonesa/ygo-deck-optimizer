@@ -29,7 +29,15 @@ import {
   REMAINDER_ID,
 } from './compile';
 import { criterionMeaning, lineMeaning } from './meaning';
-import { type DrawSpec, type HandSize, largestHand, MAX_DECK_SIZE, partProblem } from './problem';
+import {
+  type DrawSpec,
+  drawWork,
+  type HandSize,
+  largestHand,
+  MAX_DECK_SIZE,
+  overBy,
+  partProblem,
+} from './problem';
 import { achievableRange, countSums, type IntRange } from './ranges';
 import {
   type CriterionWhen,
@@ -91,6 +99,7 @@ export type IssueCode =
   | 'drawing-can-fail'
   | 'drawing-is-a-lower-bound'
   | 'subsumption-skipped'
+  | 'work-not-counted'
   | 'infeasible'
   | 'compile'
   | 'internal';
@@ -445,6 +454,25 @@ export const SAMPLE_SIZE = 5;
  * `analyze` stays fast on criteria that expand towards the cap of 256 each.
  */
 export const MAX_SUBSUMPTION_ALTERNATIVES = 128;
+
+/**
+ * The compositions (`drawWork`) past which `analyze` will NOT build a draw
+ * template's success set — with a notice, and nothing scored depends on it, for
+ * the reason `MAX_SUBSUMPTION_ALTERNATIVES` exists.
+ *
+ * `analyze` runs on every edit, SYNCHRONOUSLY IN THE MAIN PROCESS, so its cost
+ * is not a slow readout but a frozen application: the 150 ms debounce coalesces
+ * keystrokes and cannot cancel a build already under way. At roughly 200–400 ms
+ * a million this is some 300–450 ms in the worst case — sluggish, and the price
+ * of the feature — where three copies of Pot of Greed at twelve classes with a
+ * "stop here" would cost 800 ms and at fifteen classes 4.4 seconds.
+ *
+ * It is FAR below `MAX_DRAW_WORK`, deliberately: a RUN pays the build once and
+ * then scores millions of decks against it, so five seconds is affordable
+ * there. Only the per-keystroke call is not, so only the per-keystroke call
+ * declines. The template still runs.
+ */
+export const ANALYZE_DRAW_WORK = 1_500_000;
 
 const error = (code: IssueCode, message: string): Issue => ({ severity: 'error', code, message });
 const warning = (code: IssueCode, message: string): Issue => ({
@@ -1282,35 +1310,49 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
             ),
           );
         work.classVectors = toCount(countSums(compiled.problem.classes, deckSize));
+        const building = compiled.problem.handSizes.reduce(
+          (most, hand) => Math.max(most, drawWork(compiled.problem, hand.H)),
+          0,
+        );
+        if (building > ANALYZE_DRAW_WORK)
+          issues.push(
+            notice(
+              'work-not-counted',
+              `these draw cards would take ${building.toLocaleString('en-US')} compositions to enumerate, ${overBy(building, ANALYZE_DRAW_WORK)} what an analysis will build — and an analysis runs on every edit, so the terms per score and the time estimate built on them are not counted here. The run itself is unaffected: it builds once and then scores every deck against it`,
+            ),
+          );
         // Each part costs what ITS OWN success set costs: the classes are the
         // union's, but the hands that succeed are only its own criteria's. With
         // draw cards a hand size has a part per prefix length, and `createScorers`
         // is the one thing that knows which lengths those are.
-        work.hands = compiled.problem.handSizes.flatMap((hand, at) =>
-          createScorers(partProblem(compiled.problem, hand), hand.H).map(
-            (scorer): HandWork => ({
-              H: hand.H,
-              part: parts[at]!,
-              weight: hand.weight,
-              terms: scorer.terms,
-              complemented: scorer.complemented,
-              ...(scorer.prefix === undefined ? {} : { prefix: scorer.prefix }),
-              groups: scorer.groups,
-            }),
-          ),
-        );
+        if (building <= ANALYZE_DRAW_WORK)
+          work.hands = compiled.problem.handSizes.flatMap((hand, at) =>
+            createScorers(partProblem(compiled.problem, hand), hand.H).map(
+              (scorer): HandWork => ({
+                H: hand.H,
+                part: parts[at]!,
+                weight: hand.weight,
+                terms: scorer.terms,
+                complemented: scorer.complemented,
+                ...(scorer.prefix === undefined ? {} : { prefix: scorer.prefix }),
+                groups: scorer.groups,
+              }),
+            ),
+          );
         // A term of a longer PREFIX costs more than a term of a hand, because it
         // holds cards of more classes and so multiplies more binomials together:
         // measured at 9.7 ns a term over an 11-card prefix against 5.2 ns over a
         // hand of five, which is what `perTermNs` is calibrated on. Scaling by
         // `prefix / H` is that ratio, and it is 1 for every template that draws
         // nothing — so no estimate the tool already gave moves.
-        const perVectorUs = work.hands.reduce(
-          (sum, { terms, H, prefix }) =>
-            sum + cost.perVectorUs + (cost.perTermNs / 1000) * terms * ((prefix ?? H) / H),
-          0,
-        );
-        work.estimatedMs = (countToNumber(work.classVectors) * perVectorUs) / 1000;
+        if (work.hands !== null) {
+          const perVectorUs = work.hands.reduce(
+            (sum, { terms, H, prefix }) =>
+              sum + cost.perVectorUs + (cost.perTermNs / 1000) * terms * ((prefix ?? H) / H),
+            0,
+          );
+          work.estimatedMs = (countToNumber(work.classVectors) * perVectorUs) / 1000;
+        }
       }
     }
   }

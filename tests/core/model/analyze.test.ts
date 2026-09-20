@@ -1474,3 +1474,81 @@ describe('the work estimate with draw cards', () => {
     );
   });
 });
+
+/**
+ * `analyze` runs on every edit, SYNCHRONOUSLY IN THE MAIN PROCESS, so a build
+ * it cannot afford is not a slow readout but a frozen application. Past
+ * `ANALYZE_DRAW_WORK` it declines to build and says so — everything else in the
+ * analysis is still there, and the run itself is unaffected.
+ */
+describe('a draw template too wide to analyse on a keystroke', () => {
+  const LEVELS = Array.from({ length: 12 }, (_, at) => `level ${at + 1} monster`);
+  /**
+   * `classes` lines the criteria can tell apart — each Level is its own
+   * column, so none of them merges into the blank class — three copies of a
+   * draw-2, and one criterion that may stop.
+   */
+  const wide = (classes: number, stop: boolean): Template =>
+    templateOf(
+      [
+        { id: 'pot', text: 'spell', min: 0, max: 3, draw: { n: 2 } },
+        ...Array.from({ length: classes }, (_, at) => line(`l${at}`, LEVELS[at]!, 0, 13)),
+      ],
+      [],
+      {
+        criteria: [
+          {
+            id: 'c1',
+            text: LEVELS.slice(0, classes)
+              .map((level) => `1x ${level}`)
+              .join(' or '),
+            ...(stop ? { stop: true } : {}),
+          },
+        ],
+      },
+    );
+  it('counts the work for an ordinary drawing template', () => {
+    const a = analyze(wide(3, true), ctx);
+    expect(a.work.hands).not.toBeNull();
+    expect(a.work.estimatedMs).not.toBeNull();
+    expect(codes(a.issues)).not.toContain('work-not-counted');
+  });
+
+  it('declines to count it for one that would freeze the editor, and says why', () => {
+    const a = analyze(wide(12, true), ctx);
+    expect(a.work.hands).toBeNull();
+    expect(a.work.estimatedMs).toBeNull();
+    expect(codes(a.issues)).toContain('work-not-counted');
+    const message = a.issues.find((issue) => issue.code === 'work-not-counted')!.message;
+    expect(message).toContain('runs on every edit');
+    expect(message).toContain('The run itself is unaffected');
+    // The real figure and how far over it is, never a rounded pair that reads
+    // as the same number twice.
+    expect(message).toMatch(/\d{1,3}(,\d{3})+ compositions/);
+    expect(message).toMatch(/\d+(\.\d\d)?× what an analysis will build/);
+  });
+
+  /**
+   * Declining is a NOTICE and not an error: the template is perfectly runnable,
+   * and everything the analysis is really for is still in it.
+   */
+  it('is a notice, so the template still runs and everything else is still reported', () => {
+    const a = analyze(wide(12, true), ctx);
+    expect(a.ok).toBe(true);
+    expect(a.classes).not.toBeNull();
+    expect(a.work.classVectors).not.toBeNull();
+    expect(a.work.rawRatios).not.toBeNull();
+  });
+
+  it('never declines for a template that draws nothing, however wide', () => {
+    const a = analyze(
+      templateOf(
+        Array.from({ length: 12 }, (_, at) => line(`l${at}`, LEVELS[at]!, 0, 13)),
+        ['1x level 1 monster'],
+      ),
+      ctx,
+    );
+    expect(codes(a.issues)).not.toContain('work-not-counted');
+    expect(a.work.hands).not.toBeNull();
+  });
+});

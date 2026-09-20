@@ -532,6 +532,23 @@ Two consequences of the single decision point, both of which must be **visible t
 - **Drawing can lower the odds.** A limit is a census over the whole hand and a ceiling makes a surplus matching card fatal, so more cards means more ways to break both: `1-1x starter` measures 0.3734 without a live Pot and 0.3181 with one, monotone downward in copies.
 - **A drawing template's number is a LOWER bound on careful play.** A real player with two Pots could activate one, see the hand is fine, and keep the other; the model resolves both. `analyze` therefore emits `drawing-is-a-lower-bound` on every drawing template.
 
+#### What it costs to BUILD, which is a different question from what it costs to run
+
+`MAX_PREFIX` bounds how **deep** the enumeration reads. The build cost is that depth spread over the **classes**, with a `stop` criterion adding the **openings** as well, so the cap catches only one of three factors: three Pots with a stop at 15 classes is prefix 11, inside the cap, and took **6,471 ms** to build.
+
+That is not a slow editor. `analyze` runs **synchronously in the main process**, so it stalls IPC entirely — the status bar and the picker with it — and the 150 ms debouncer only coalesces keystrokes; it cannot cancel a call already running. Its comment said *"the analysis itself is 0.55–54 ms, so this is not about the cost of computing it"*, which was true when written and which draw cards falsified. **An assumption stated in a comment is a thing that can go out of date**, and this one had no test holding it.
+
+`drawWork(problem, H)` counts the compositions the build would visit **without visiting them** — the same recursion with the inner composition replaced by a count of it — under two bounds, because a run pays the build once and then scores millions of decks against it while an editor pays it per keystroke:
+
+| bound | governs | budget |
+| --- | --- | --- |
+| `MAX_DRAW_WORK = 25,000,000` | what the engine will build at all; a `RangeError` in the `MAX_CLASSES` style | ~5 s |
+| `ANALYZE_DRAW_WORK = 1,500,000` | what `analyze` builds on a keystroke; past it `work.hands` and `estimatedMs` are `null` with a `work-not-counted` notice and the template still runs | ~300–450 ms |
+
+A predictor that disagrees with the thing it predicts is worse than none, and the first one over-counted by **1.37×** by counting `(a, b)` splits the process cannot reach. Reachability is decided greedily — place the copies adding most to the budget first, which maximises every prefix of the path at once — and `DrawSet` carries a `visits` counter that a test holds **exactly equal** to the prediction over a 36-shape sweep. Two copies of one recursion is how they drift.
+
+The refusal message carries the **exact** figure and the multiple (`25,005,120 compositions to build, 1.00× the 25,000,000 the engine allows`) rather than two numbers rounded to the same words, which is what it said first and which read as a contradiction. Worth remembering generally: **a refusal message is code that runs only when someone is already stuck**, so it is the least-exercised text in the product and the most costly to get wrong.
+
 #### Bounds, refusals and the class partition
 
 - **Two size bounds.** The longest **prefix** `L = H + Σ kᵢ·(opt ? 1 : maxᵢ)` drives $`\binom{N}{\ell}`$, the enumeration and the cost; the largest **hand** `H + Σ (kᵢ−1)·(opt ? 1 : maxᵢ)` drives slots and `MAX_HAND`. Three Pots give 11 and 8; three Upstarts give 8 and **5**, the hand never growing. `MAX_HAND_SIZE` is the *opening* hand and is neither.
