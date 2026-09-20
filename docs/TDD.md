@@ -634,12 +634,18 @@ src/
   worker/     protocol.ts  session.ts  optimizer.worker.ts   # imports core only
   preload/    index.ts                     # emitted as index.cjs
   renderer/   index.html  src/{app.tsx, store.ts, model/*, views/*, styles.css}
-  shared/     ipc.ts  types.ts
+  shared/     ipc.ts  types.ts  syntax.ts   # the in-app syntax reference AS DATA; imports nothing
   cli/        index.ts  run.ts  estimate.ts # dev harness, not shipped; exit 0 ok, 1 template/load error, 2 usage
 examples/     motivating.json
 tests/        # mirrors src/
 scripts/      check-licenses.mjs  third-party-notices.mjs
 ```
+
+**The in-app syntax reference is data, and every example in it is executed.** `src/shared/syntax.ts` holds the reference as sections of `{ syntax, means }` rows and **imports nothing at all** — the renderer bundles it, so a runtime import would drag `core/` into the renderer's bundle. `tests/shared/syntax.test.ts` imports that data *and* core's real parsers and runs every row: a description row must parse as a description, a criterion row as a criterion, and a row that deliberately shows an **error** must produce the message the row quotes. The card-naming rows are read *out of the data* rather than hardcoded, so a row cannot be changed to a card that does not exist without the real-install test failing.
+
+This is not ceremony. The criteria hint that shipped from M2e to M2g printed two examples — `1x [Ash Blossom]` and `at most 1x [Brick]` — and **neither parses**: the real card is `Ash Blossom & Joyous Spring`, and no card is called Brick. Copying either out of the app gave an error. Prose about a grammar rots exactly as a code comment does, and the only fix that holds is running it.
+
+The reference is split by **level, not by panel**: `DESCRIPTION_SYNTAX` owns everything that says what a *card* is and is the only place any of it is explained; `CRITERION_SYNTAX` owns only what *wraps* a description — counts, limits, joining, the criterion-level `or` — and points at the other section by name rather than repeating it. A criterion's `when` is not in either table, because it is a control on the row and not text (§14); it is a note under the criteria section.
 
 `core/` purity is enforced twice: its own `tsconfig.core.json` compiles with `lib: ["ES2022"]` and `types: []` (no DOM, no Node globals), and a Biome `noRestrictedImports` override bans `electron`, Node built-ins, and the app layers from inside it. The two are complementary — the tsconfig catches globals (`document`, `process`), the lint rule catches imports — and M0a verified that each fires on a deliberate violation. sql.js reaches `core/cards/index.ts` as an injected instance, so `core/` never calls `initSqlJs()` itself.
 
