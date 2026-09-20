@@ -137,6 +137,10 @@ On BabelCDB@47fc046 this yields 12,252 rows before alias handling.
 
 `CardRecord.limitCode` is `alias || code`. Because lines are independent ranges, a joint "these lines share three copies" constraint is not expressible; `analyze` instead **rejects** a template in which lines sharing a `limitCode` have a combined `max` above 3, naming the lines. An alias whose target is missing keeps the row under its own code, as the sibling does.
 
+**`CardIndex.resolve(code)`** (M2g) reads the first row of that table back the other way: a collapsed alternate-art passcode returns the record it was collapsed onto, and a code that is not an alias at all returns exactly what `get` returns. One hop, as the client and core resolve setcodes; a target the population filter dropped resolves to nothing, since there is no record to hand back. This is what makes `.ydk` import work, because a decklist carries whichever printing the player owns.
+
+The guarantee is "the same card under another number" **only for rows a deck can hold**, and BabelCDB holds one row proving the qualifier is needed. Of its 276 collapsed-and-resolvable ids — 273 near reprints, the 2 far ones above, and one more — that one more is `9995767` "**TBR - Imperial Custom**", a TOKEN (`ot = 0`, `TYPE_TOKEN`) sitting one below the Main Deck card `9995766` "Imperial Custom", so the ±10 window collapses it although the two are not the same card and do not even share a name. It resolves because collapse is decided *before* the population filter — deliberately, since deciding it after would make "this row is the same card as its target" depend on the pre-release setting. No decklist carries a token, so it costs nothing, but it is why the rule above is stated the way it is. (The whole 20-database install has 279 such ids; 276 is BabelCDB alone, which is what the pinned test reads.)
+
 ### 4.4 Load order and layering
 
 Databases are collected as the sibling does — non-empty `cards.cdb`, then `expansions/` and `repositories/` recursively, sorted — and later rows **replace** earlier rows with the same id. This matters more than it looks: one `cards.cdb` is not the card pool. On the examined install the base database is from 2025-04 and `cards.delta.cdb` replaces 879 of its rows and adds 1,027.
@@ -475,14 +479,18 @@ Defined once in `src/shared/ipc.ts` as a channel-name constant plus a `RendererA
 | `desc:parse` | invoke | `text → { ok: true, desc, echo, count, samples } \| { ok: false, message, span }` |
 | `desc:complete` | invoke | `{ text, caret, groups } → { ok: true, site, options } \| NotReady \| InvalidRequest` (§5.4) |
 | `template:analyze` | invoke | `Template → Analysis` (§9) |
-| `template:open` / `template:save` | invoke | dialogs and file I/O in main; `→ Template \| null` / `Template → path \| null` |
-| `results:export` | invoke | `{ runId, format: 'csv' \| 'json' } → path \| null` |
+| `template:open` / `template:save` | invoke | dialogs and file I/O in main; `→ { template, path, notices } \| Cancelled \| FileFailure \| NotReady \| InvalidRequest`, and `Template → { path, warnings } \| …` the same way |
+| `deck:list` | invoke | `→ { decks: string[] } \| NotReady \| FileFailure` — the `.ydk` files in `<workdir>/deck/`, by **name** |
+| `deck:import` | invoke | `{ name? } → { template, deck, warnings } \| Cancelled \| FileFailure \| NotReady \| InvalidRequest`; no `name` opens a file dialog instead |
+| `results:export` | invoke | `{ runId, format: 'csv' \| 'json' } → { path } \| Cancelled \| FileFailure \| { reason: 'no-run' } \| InvalidRequest` |
 | `run:start` / `run:cancel` / `run:confirm` | invoke | `{ template, options } → { ok, runId }` and control results; `cancel` resolves when the run has actually ended |
 | `run:event` | main→renderer push | `started` → `progress`* → optional `needs-confirmation` → exactly one of `result` / `cancelled` / `error`, all carrying `runId` |
 
 Push-only channels live in a separate `IpcEvents` constant, so "every `IpcChannels` entry has a registered handler" can stay an asserted invariant. A renderer must subscribe *before* calling `run:start`: `started` can arrive before the invoke resolves.
 
 `template:analyze` is called on every edit (debounced ~150 ms in the renderer). Sequencing is the IPC layer's job, not the services': requests and responses travel as `Sequenced<T> = { seq, payload }`, the services stay pure functions of their input, and the renderer keeps one `LatestOnly` per request kind and drops stale responses.
+
+The file channels are result unions rather than `T | null` for the reason the rest of this section gives: `null` would make "you cancelled the dialog" and "line 3's stored `desc` has `level: [\"four\"]`" the same answer, and only one of those deserves a message. **Deck *names* cross IPC, never paths** — `deck:import` resolves a name only if `deck:list` really produced it, so a traversal attempt resolves to no deck.
 
 Result shapes distinguish *why* there is no answer: `desc:parse` fails with `reason: 'parse' | 'not-ready' | 'invalid'`; `template:analyze` returns `{ ok: true, analysis } | NotReady | InvalidRequest`, where the outer `ok` means "an Analysis was produced" and `analysis.ok` means "this template can be run". `settings:set` takes a **patch** and returns the resulting `Settings`; it persists first, then triggers a card reload only if `workdir` or `includePrerelease` changed, without awaiting it — status arrives by push.
 
@@ -512,15 +520,30 @@ Plain JSON, `version`ed, written only by the main process (§12).
   ],
   "lines": [
     { "id": "l1", "card": { "passcode": 14558127, "name": "Ash Blossom & Joyous Spring" }, "min": 0, "max": 3 },
-    { "id": "l2", "text": "level 4 monster", "desc": { "anyOf": [] }, "min": 2, "max": 3 }
+    {
+      "id": "l2",
+      "text": "level 4 monster",
+      "desc": { "anyOf": [{ "t": "clause", "clause": { "kinds": ["monster"], "level": [4] } }] },
+      "min": 2,
+      "max": 3
+    }
   ],
   "remainder": { "min": 0, "max": null },
-  "criteria": [{ "id": "c1", "name": "full combo", "text": "1x [..] and 1x [..]", "expr": { "op": "and", "args": [] } }],
+  "criteria": [
+    {
+      "id": "c1",
+      "name": "full combo",
+      "text": "1x [Ash Blossom & Joyous Spring]",
+      "expr": { "op": "req", "n": 1, "desc": { "anyOf": [{ "t": "card", "passcode": 14558127 }] } }
+    }
+  ],
   "cardSnapshot": { "14558127": { "type": 4129, "attribute": 4, "race": 16, "level": 3, "atk": 0, "def": 1800, "setcodes": [] } }
 }
 ```
 
-- **The AST is authoritative; text is kept for editing.** On load, if re-parsing `text` no longer yields `desc` (the grammar evolved), the file still means what it meant, and the editor flags the line.
+- **The AST is authoritative; text is kept for editing.** On load, if re-parsing `text` no longer yields `desc` (the grammar evolved), the file still means what it meant, and the editor flags the line. The two halves are a **pair**: the editor drops the stored AST on every text edit (`withLineText`, `withCriterionText`), which is what makes the authority safe — a present `desc` always came from that exact text. Without the drop, typing would change nothing that runs; without the authority, a file whose text no longer parses would lose its meaning.
+- **Authority requires validation, which is the subtle half.** The moment the AST is what `implies` judges, it arrives as `unknown` from a file or over IPC and must be checked like any other input: `src/core/desc/validate.ts` and `src/core/criteria/validate.ts`, called from `validateTemplate`, return the **canonical** form so a stored AST and a fresh parse are comparable by `JSON.stringify`. The example above is a real parse of its own `text`, generated rather than written — the version this section shipped with was neither, and was refused by these validators the day they existed (`"desc": { "anyOf": [] }` means "matches nothing" and `{ "op": "and", "args": [] }` means "a criterion of no terms").
+- **One meaning, one place.** `resolveTemplate` and `analyze` each used to parse the line text independently. With the AST authoritative that divergence would be silent and file-only — the readout describing one description while the run scored another — so both now call `src/core/model/meaning.ts` (`lineMeaning` / `criterionMeaning`). There were **three** `TODO(M2g)` markers, not the two §14 and §8 implied; `analyze.ts` carried the third.
 - **`cardSnapshot`** records the fields of every named card as they were when the file was saved. Results depend on the card database *only* through named cards, so this is what makes "a template file reproduces the same numbers on another machine" (PRD §14) checkable: on load, a named card that is missing from the local database or whose fields differ produces a notice, and the user chooses local data or the snapshot.
 - Unknown `version` → refuse with a clear message; older versions migrate forward in `src/core/model/migrate.ts`.
 - `groups` and `remainder` may be omitted in a hand-written file and default to none and `{ min: 0, max: null }`; a line may be given as `text` alone (`"[Elemental HERO Stratos]"`), in which case it is parsed on load. A **generic** line that matches no card is accepted with a `no-match` *notice* — a line states what its cards are known to be, not which cards exist (PRD §5.1); the motivating example's Level 7 FIRE Beast-Warrior line is exactly this case. A picker `card` line whose passcode the local database lacks is a *warning* (§6.2), and a `[Name]` the database cannot resolve is a parse error, since a named card has to be identified. Until M2g the harness reads the `text` path only.
@@ -626,7 +649,7 @@ M3 and M4 are sliced when M2 is in hand.
 | ~~`?nodeWorker` bundling or asar path resolution for the worker~~ | **Retired (M2b).** Proven in `npm run dev`, in the built app, and inside a hand-packed `app.asar`; the fallback (a second rollup input) was not needed |
 | Scored-vector count explodes on very wide templates | Exact count and ETA shown before the run; cancel; shard-ready enumeration; prefix-sharing trie held in reserve (§11.3) |
 | Class cap of 30 | A template with more than 30 *distinguishable* classes is far outside the use case; clear error rather than silent BigInt slow path |
-| A collapsed alternate-art passcode (`#36996508`) resolves to "no such card", since the index keeps no alias → target map | Add `CardIndex.resolve(code)` when `.ydk` import lands (M3): decklists routinely carry alt-art passcodes |
+| A collapsed alternate-art passcode (`#36996508`) resolves to "no such card", since the index keeps no alias → target map | **Retired in M2g.** `CardIndex.resolve(code)` added — one hop, `get` for a code that is not an alias. It was not optional: `18144507` (an alternate-art Harpie's Feather Duster, canonical `18144506`) is in two of the five real decks, including the first alphabetically, and imports as the canonical card |
 | `strings.conf` alternates or overrides change a name's meaning between installs | Archetypes are stored in template files as setcodes, not names; the name is display only |
 
 ## Appendix A. Constant tables
