@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CardRecord } from '../../../src/core/cards/record';
 import type { DescContext } from '../../../src/core/desc/context';
 import { groupLookupOf } from '../../../src/core/model/compile';
-import type { Template } from '../../../src/core/model/template';
-import { validateTemplate } from '../../../src/core/model/template';
+import { type Template, validateTemplate } from '../../../src/core/model/template';
 import {
   namedPasscodes,
   snapshotNotices,
@@ -56,6 +55,32 @@ describe('namedPasscodes', () => {
       criteria: [{ id: 'k1', text: '1x #14558127' }],
     });
     expect(namedPasscodes(template, ctxFor(template))).toEqual([14558127, 89631139]);
+  });
+
+  it('collects a card named as the card you draw, which a result depends on just as much', () => {
+    const template = templateOf({
+      lines: [{ id: 'l1', text: 'monster', min: 0, max: 3 }],
+      criteria: [{ id: 'k1', text: '1x #89631139 then 1x #14558127', when: 'second' }],
+    });
+    expect(namedPasscodes(template, ctxFor(template))).toEqual([14558127, 89631139]);
+    // And so the snapshot records it: without it the file could not be checked.
+    const { template: saved } = templateToFile(template, ctxFor(template));
+    expect(Object.keys(saved.cardSnapshot ?? {}).sort()).toEqual(['14558127', '89631139']);
+  });
+
+  it("writes the split back in the criterion's stored AST, and reads it in again", () => {
+    const template = templateOf({
+      lines: [{ id: 'l1', text: 'monster', min: 0, max: 3 }],
+      criteria: [{ id: 'k1', text: '1x monster then 1x #14558127', when: 'second' }],
+    });
+    const { template: saved, warnings } = templateToFile(template, ctxFor(template));
+    expect(warnings).toEqual([]);
+    expect(saved.criteria[0]!.expr).toMatchObject({ op: 'split' });
+    // And a round trip through `validateTemplate` gives back the same AST: the
+    // stored form is authoritative (TDD §14), so it has to survive the check.
+    const reread = validateTemplate(JSON.parse(JSON.stringify(saved)));
+    if (!reread.ok) throw new Error(reread.errors.join('\n'));
+    expect(reread.template.criteria[0]!.expr).toEqual(saved.criteria[0]!.expr);
   });
 
   it('skips a line or criterion that does not parse rather than failing', () => {

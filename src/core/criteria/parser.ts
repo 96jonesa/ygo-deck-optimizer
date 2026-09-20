@@ -2,7 +2,7 @@ import type { Description } from '../desc/ast';
 import type { DescContext } from '../desc/context';
 import type { Span, Token } from '../desc/lexer';
 import { parseTokens } from '../desc/parser';
-import { canonicalizeExpr, type Expr, MAX_COUNT } from './ast';
+import { canonicalizeExpr, type Expr, MAX_COUNT, MAX_SIXTH_SLOTS, slotsOf } from './ast';
 import { type CriterionToken, lexCriterion } from './lexer';
 
 export type CriterionParseResult =
@@ -57,11 +57,48 @@ class Parser {
   ) {}
 
   parseAll(): Expr {
+    // `then` binds looser than everything, and a criterion has one: the hand
+    // comes in two pieces, not three. A LEADING one says the opening five may
+    // be anything and only the card drawn is asked about.
+    if (this.peek()?.t === 'then') {
+      this.next();
+      return { op: 'split', sixth: this.sixthPart() };
+    }
     const expr = this.orExpr(0);
+    const separator = this.peek();
+    if (separator?.t === 'then') {
+      this.next();
+      return { op: 'split', five: expr, sixth: this.sixthPart() };
+    }
     const extra = this.peek();
-    // `term` lets only `and`, `or` and `)` follow it, and the first two are always consumed.
+    // `term` lets only `and`, `or`, `then` and `)` follow it, and the first two are always consumed.
     if (extra !== undefined) throw new Failure('this `)` has no matching `(`', extra.span);
     return expr;
+  }
+
+  /** What follows `then`: the sixth card's own criterion, over ONE card. */
+  private sixthPart(): Expr {
+    if (this.peek() === undefined)
+      throw new Failure(
+        'expected what the card you draw must be after `then`, as in `1x [Ash Blossom & Joyous Spring]` or `no trap`',
+        this.spanAt(this.pos),
+      );
+    const start = this.pos;
+    const sixth = this.orExpr(0);
+    const extra = this.peek();
+    if (extra?.t === 'then')
+      throw new Failure(
+        'a criterion has one `then`: it separates the five cards you open on from the one you draw, and there is only one card drawn',
+        extra.span,
+      );
+    if (extra !== undefined) throw new Failure('this `)` has no matching `(`', extra.span);
+    const slots = slotsOf(sixth);
+    if (slots > MAX_SIXTH_SLOTS)
+      throw new Failure(
+        `the sixth card is one card, and this asks ${slots} of it: after \`then\`, write one requirement — \`1x …\` — or limits alone, as in \`no trap\``,
+        { start: this.spanAt(start).start, end: this.spanAt(this.pos - 1).end },
+      );
+    return sixth;
   }
 
   private peek(): CriterionToken | undefined {
@@ -127,7 +164,13 @@ class Parser {
     const expr = this.termBody(depth);
     const after = this.peek();
     // A description runs to the end of its term, so this is what follows a group: `(1x [C]) [D]`.
-    if (after !== undefined && after.t !== 'and' && after.t !== 'or' && !isPunct(after, ')'))
+    if (
+      after !== undefined &&
+      after.t !== 'and' &&
+      after.t !== 'or' &&
+      after.t !== 'then' &&
+      !isPunct(after, ')')
+    )
       throw new Failure(
         `expected \`and\`, \`,\` or \`or\` before \`${this.textOf(after)}\``,
         after.span,
@@ -143,7 +186,13 @@ class Parser {
 
     const before = this.tokens[this.pos - 1];
     const where = before === undefined ? '' : ` after \`${this.textOf(before)}\``;
-    if (token === undefined || token.t === 'and' || token.t === 'or' || isPunct(token, ')'))
+    if (
+      token === undefined ||
+      token.t === 'and' ||
+      token.t === 'or' ||
+      token.t === 'then' ||
+      isPunct(token, ')')
+    )
       throw new Failure(`expected ${TERM_EXAMPLES}${where}`, this.spanAt(this.pos));
     throw this.missingCount(token);
   }
@@ -182,8 +231,14 @@ class Parser {
     if (depth >= MAX_DEPTH) throw new Failure('too many nested parentheses', open.span);
     this.next();
     const inner = this.orExpr(depth + 1);
-    // As in `parseAll`: what stopped `orExpr` is a `)` or the end.
-    if (this.peek() === undefined) throw new Failure('this `(` is never closed', open.span);
+    // As in `parseAll`: what stopped `orExpr` is a `)`, a `then` or the end.
+    const stopped = this.peek();
+    if (stopped?.t === 'then')
+      throw new Failure(
+        '`then` separates the five cards you open on from the one you draw, so it stands between them and not inside parentheses',
+        stopped.span,
+      );
+    if (stopped === undefined) throw new Failure('this `(` is never closed', open.span);
     this.next();
     return inner;
   }
@@ -289,6 +344,14 @@ class Parser {
         depth--;
       } else if (token.t === 'or') {
         if (depth === 0 && this.startsTerm(end + 1)) break;
+      } else if (token.t === 'then') {
+        // `then` ends the term it follows, exactly as `and` does; nothing in a
+        // description's own parentheses can be the sixth card's part.
+        if (depth === 0) break;
+        throw new Failure(
+          "`then` separates the five cards you open on from the one you draw and cannot stand inside a description's parentheses; close the `)` first",
+          token.span,
+        );
       } else if (token.t === 'and' || isTermWord(token)) {
         // With nothing read yet the description is what is missing, and its parser says so.
         if (depth === 0 && (token.t === 'and' || end === start)) break;
@@ -350,6 +413,15 @@ class Parser {
  * (`2000 ATK monster`), and the one place a description and a term can both
  * stand is after an `or`; there the `x` is what tells them apart, and a count
  * keeps it.
+ *
+ * `then` separates the five cards you open on from the one you draw going
+ * second (PRD §5.6). It binds looser than everything else, so no parentheses
+ * are ever needed around either side, and a criterion holds at most one: the
+ * hand comes in two pieces, not three. A LEADING `then` leaves the opening
+ * five unasked about. What follows it is about ONE card, so its requirement
+ * slots are counted here — `slotsOf` counts them exactly as expansion would —
+ * and `… then 2x monster` is refused with the span of what asks too much,
+ * rather than scoring zero for a reason nobody can see.
  *
  * `exactly n` is sugar for the range `[n, n]` and nothing more: it parses to
  * the very node `n-nx` parses to, so no later pass can tell the two apart. It

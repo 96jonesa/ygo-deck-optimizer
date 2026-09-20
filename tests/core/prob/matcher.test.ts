@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { CompiledCriterion, Problem } from '../../../src/core/model/problem';
-import { compileMatcher, compileWeigher, handSucceeds } from '../../../src/core/prob/matcher';
+import {
+  compileMatcher,
+  compileValuer,
+  compileWeigher,
+  handSucceeds,
+  type Worth,
+} from '../../../src/core/prob/matcher';
 import { createJudge } from '../../../src/core/prob/montecarlo';
 import { same } from '../../helpers/assert';
 import { compositions } from '../../helpers/combinatorics';
@@ -503,5 +509,147 @@ describe('compileWeigher', () => {
     expect([...seen].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     // Pinned so the size of the check is on record; it moves only if the generator does.
     expect(compared).toBe(18_416);
+  });
+});
+
+/**
+ * The SIXTH CARD (PRD §5.6). Classes: 0 blank, 1 X, 2 Y, 3 Z (both). A hand of
+ * three whose last card is drawn: the two cards opened on, and the one drawn.
+ */
+describe('compileValuer', () => {
+  const worth = (problem: Problem, h: number[], H: number, drawn: boolean): Worth => {
+    const into: Worth = { value: 0, plain: 0 };
+    compileValuer(problem, H, { drawn }).worth(h, into);
+    return into;
+  };
+
+  describe('with nothing split', () => {
+    it('is the weight of the hand, once per outcome', () => {
+      const problem = problemOf([{ slots: [FILLS_X], limits: [] }]);
+      expect(worth(problem, [2, 1, 0, 0], 3, false)).toEqual({ value: 1, plain: 1 });
+      expect(worth(problem, [2, 1, 0, 0], 3, true)).toEqual({ value: 3, plain: 3 });
+      expect(worth(problem, [3, 0, 0, 0], 3, true)).toEqual({ value: 0, plain: 0 });
+    });
+
+    it('scales a criterion weight the same way', () => {
+      const problem = problemOf([{ slots: [FILLS_X], limits: [], weight: 5 }]);
+      expect(worth(problem, [2, 1, 0, 0], 3, true)).toEqual({ value: 15, plain: 3 });
+    });
+
+    it('reports the outcomes and the ceilings a composition can reach', () => {
+      const problem = problemOf([{ slots: [FILLS_X], limits: [], weight: 5 }]);
+      expect(compileValuer(problem, 3, { drawn: true })).toMatchObject({
+        outcomes: 3,
+        maxValue: 15,
+        maxPlain: 3,
+      });
+      expect(compileValuer(problem, 3, {})).toMatchObject({
+        outcomes: 1,
+        maxValue: 5,
+        maxPlain: 1,
+      });
+    });
+  });
+
+  describe('with a split criterion', () => {
+    /** A hand of `H` whose last card is drawn separately. */
+    const drawnOf = (criteria: CompiledCriterion[], H = 3): Problem => ({
+      ...problemOf(criteria),
+      handSizes: [{ H, weight: 1, drawn: true }],
+    });
+    /** The cards opened on hold an X, and the card drawn is a Y — Z being both. */
+    const xThenY = drawnOf([
+      { slots: [FILLS_X], limits: [], sixth: { slots: [FILLS_Y], limits: [] } },
+    ]);
+
+    it('counts one outcome per card that could have been the one drawn', () => {
+      // [blank, X, Y, Z] = one X, one Y, one blank. Only the Y can be the card
+      // drawn, and the two left then hold the X: one outcome of three.
+      expect(worth(xThenY, [1, 1, 1, 0], 3, true)).toEqual({ value: 1, plain: 1 });
+      // Two Y's: either can be the one drawn, and the other two cards still
+      // hold the X.
+      expect(worth(xThenY, [0, 1, 2, 0], 3, true)).toEqual({ value: 2, plain: 2 });
+      // No Y at all: no outcome succeeds.
+      expect(worth(xThenY, [1, 2, 0, 0], 3, true)).toEqual({ value: 0, plain: 0 });
+      // A Y but no X beside it: the Y is drawn and the rest hold nothing.
+      expect(worth(xThenY, [2, 0, 1, 0], 3, true)).toEqual({ value: 0, plain: 0 });
+    });
+
+    it('takes the card drawn OUT of the cards opened on', () => {
+      // One X and one Y and nothing else, at a hand of two: the Y is drawn, the
+      // X is opened on. The X cannot be both.
+      const two = { ...xThenY, handSizes: [{ H: 2, weight: 1, drawn: true as const }] };
+      expect(worth(two, [0, 1, 1, 0], 2, true)).toEqual({ value: 1, plain: 1 });
+      // Two X's and no Y fails; one Z (which is both) drawn leaves the other
+      // card to hold the X.
+      expect(worth(two, [0, 2, 0, 0], 2, true)).toEqual({ value: 0, plain: 0 });
+      expect(worth(two, [0, 1, 0, 1], 2, true)).toEqual({ value: 1, plain: 1 });
+      // One Z alone, at a hand of one card, cannot be both windows.
+      const one = { ...xThenY, handSizes: [{ H: 2, weight: 1, drawn: true as const }] };
+      expect(worth(one, [1, 0, 0, 1], 2, true)).toEqual({ value: 0, plain: 0 });
+    });
+
+    it('lets the BLANK class be the card drawn when the sixth part is limits alone', () => {
+      // `no Y` of one card: a blank card is not a Y, so it passes — which is
+      // what a limit has always meant (it counts what provably matches).
+      const noY = drawnOf(
+        [{ slots: [FILLS_X], limits: [], sixth: { slots: [], limits: [{ mask: FILLS_Y, n: 0 }] } }],
+        2,
+      );
+      // Blank drawn, X opened on: one outcome. X drawn: not an X left over, so no.
+      expect(worth(noY, [1, 1, 0, 0], 2, true)).toEqual({ value: 1, plain: 1 });
+      // Two X's: either drawn leaves the other to fill the slot, and an X is not a Y.
+      expect(worth(noY, [0, 2, 0, 0], 2, true)).toEqual({ value: 2, plain: 2 });
+      // A Y drawn fails its own part, and with the Y opened on instead there is
+      // no X left to fill the slot: neither outcome succeeds.
+      expect(worth(noY, [0, 1, 1, 0], 2, true)).toEqual({ value: 0, plain: 0 });
+    });
+
+    it('takes the best of the unsplit and split criteria, outcome by outcome', () => {
+      const both = drawnOf([
+        { slots: [FILLS_X], limits: [], sixth: { slots: [FILLS_Y], limits: [] }, weight: 10 },
+        { slots: [FILLS_Y], limits: [], weight: 3 },
+      ]);
+      // One X and one Y: the Y drawn meets the split criterion (10); the X
+      // drawn meets only the unsplit one, which the whole hand meets (3).
+      expect(worth(both, [1, 1, 1, 0], 3, true)).toEqual({ value: 10 + 3 + 3, plain: 3 });
+      // No Y: only the unsplit criterion, and it is not met either.
+      expect(worth(both, [1, 2, 0, 0], 3, true)).toEqual({ value: 0, plain: 0 });
+    });
+
+    it('refuses to be asked for a hand that draws no card', () => {
+      expect(() => compileValuer(xThenY, 3, {})).toThrow(
+        /criterion 0 is about the card you draw, but this hand of 3 draws none/,
+      );
+      // And the two readers that see a hand as ONE window refuse it outright.
+      expect(() => compileMatcher(xThenY)).toThrow(/a matcher reads a hand as one window/);
+      expect(() => compileWeigher(xThenY)).toThrow(/a weigher reads a hand as one window/);
+    });
+  });
+
+  it('answers what the unsplit weigher answers, on every composition of a generated problem', () => {
+    // Two implementations of "the highest weight among the criteria met": the
+    // weigher's, and the valuer's undrawn path. They are held equal rather than
+    // shared, which is what stops them drifting.
+    for (let seed = 0; seed < 120; seed++) {
+      const rng = seededRng(0x5a1500 + seed);
+      const { problem, H } = genClassProblem(seededRng(0x5a1600 + seed), {
+        classes: [2, 6],
+        deckSize: [40, 40],
+        handSize: [1, 6],
+        slots: [0, 7],
+        criteria: [1, 3],
+      });
+      for (const criterion of problem.criteria) criterion.weight = rng.pick([1, 1, 2, 5, 9]);
+      const weigh = compileWeigher(problem);
+      const valuer = compileValuer(problem, H, {});
+      const into: Worth = { value: 0, plain: 0 };
+      for (const h of compositions(problem.classes.length, H)) {
+        valuer.worth(h, into);
+        const weight = weigh(h, H);
+        same(into.value, weight, () => ({ seed, problem, h, H }));
+        same(into.plain, weight > 0 ? 1 : 0, () => ({ seed, problem, h, H }));
+      }
+    }
   });
 });

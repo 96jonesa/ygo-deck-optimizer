@@ -300,6 +300,79 @@ describe('createJudge', () => {
     expect(judge([0, 3, 3])).toBe(false);
     expect(judge([2, 0, 3])).toBe(true);
   });
+
+  /**
+   * The SIXTH CARD (PRD §5.6). `drawHand` fills position `i` at step `i`, so
+   * the LAST position of the hand is the card drawn last; a split criterion
+   * judges its own part over the positions before it and its `sixth` part over
+   * that one card.
+   */
+  describe('a split criterion', () => {
+    // Lines again: 0 = X, 1 = Y, 2 = Z (both), 3 = remainder.
+    const xThenY = judgeOf([
+      { reqs: [{ n: 1, desc: 0 }], limits: [], sixth: { reqs: [{ n: 1, desc: 1 }], limits: [] } },
+    ]);
+
+    it('asks its sixth part of the LAST card and its own of the rest', () => {
+      // X opened on, Y drawn.
+      expect(xThenY([0, 1])).toBe(true);
+      // The same two cards the other way round: the X is drawn and fills nothing.
+      expect(xThenY([1, 0])).toBe(false);
+      // Z is both, so it can be the card drawn while the X is opened on.
+      expect(xThenY([0, 2])).toBe(true);
+      // …but not both at once: one card cannot be the five and the sixth.
+      expect(xThenY([3, 2])).toBe(false);
+      expect(xThenY([2])).toBe(false);
+    });
+
+    it('never lets one card serve both windows', () => {
+      // Two Z's: one opened on, one drawn.
+      expect(xThenY([2, 2])).toBe(true);
+      // A Y drawn with only a Y opened on: nothing fills the X slot.
+      expect(xThenY([1, 1])).toBe(false);
+    });
+
+    it('counts a limit of its own part over the cards opened on alone', () => {
+      const noYThenY = judgeOf([
+        {
+          reqs: [{ n: 1, desc: 0 }],
+          limits: [{ n: 0, desc: 1 }],
+          sixth: { reqs: [{ n: 1, desc: 1 }], limits: [] },
+        },
+      ]);
+      // The Y drawn does not count against `no y` over the cards opened on.
+      expect(noYThenY([0, 1])).toBe(true);
+      // A second Y among them does.
+      expect(noYThenY([0, 1, 1])).toBe(false);
+    });
+
+    it('counts a limit of the sixth part over that one card alone', () => {
+      const noY = judgeOf([
+        { reqs: [{ n: 1, desc: 0 }], limits: [], sixth: { reqs: [], limits: [{ n: 0, desc: 1 }] } },
+      ]);
+      // An X drawn is not a y; the remainder drawn is not either.
+      expect(noY([0, 0])).toBe(true);
+      expect(noY([0, 3])).toBe(true);
+      // A Y drawn is.
+      expect(noY([0, 1])).toBe(false);
+      // And a Y among the cards opened on says nothing about the one drawn.
+      expect(noY([0, 1, 3])).toBe(true);
+    });
+
+    it('is never met by a hand of no cards: there is no card to draw', () => {
+      expect(xThenY([], 0)).toBe(false);
+    });
+
+    it('judges unsplit criteria beside it over the whole hand', () => {
+      const either = judgeOf([
+        { reqs: [{ n: 1, desc: 0 }], limits: [], sixth: { reqs: [{ n: 1, desc: 1 }], limits: [] } },
+        { reqs: [{ n: 2, desc: 1 }], limits: [] },
+      ]);
+      // The split one fails (the X is drawn) but the unsplit one holds.
+      expect(either([1, 1, 0])).toBe(true);
+      expect(either([1, 0])).toBe(false);
+    });
+  });
 });
 
 describe('estimate', () => {

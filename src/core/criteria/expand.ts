@@ -1,6 +1,6 @@
 import { canonicalize } from '../desc/ast';
 import type { Counted, CountedRange, Expr, FlatCriterion } from './ast';
-import { MAX_RANGES } from './ast';
+import { MAX_RANGES, MAX_SIXTH_SLOTS } from './ast';
 
 /** Expansion is exponential in the number of `or`s in principle; more alternatives than this is an error. */
 export const MAX_FLAT_CRITERIA = 256;
@@ -26,7 +26,12 @@ export type ExpandResult =
       /** Distinct alternatives left out of `flat` because they need more cards than a hand holds. */
       dropped: number;
     }
-  | { ok: false; message: string };
+  | {
+      ok: false;
+      message: string;
+      /** What went wrong, for a caller that reports these under different codes. */
+      reason: 'cap' | 'ranges' | 'sixth-card';
+    };
 
 /** Internal control flow only: `expandAll` catches it and never lets it escape. */
 class TooMany {}
@@ -35,7 +40,22 @@ class TooMany {}
 interface Draft {
   reqs: Map<string, CountedRange>;
   limits: Map<string, Counted>;
+  /**
+   * The SIXTH CARD's own draft, when the criterion is split. Only a `split` at
+   * the ROOT ever sets it, and `both` never sees one: merging a split with
+   * anything would be asking which five of which five, which the grammar and
+   * `validateExpr` both refuse.
+   */
+  sixth?: Parts;
 }
+
+/** The two lists a draft is, without the split: one side of a split criterion. */
+interface Parts {
+  reqs: Map<string, CountedRange>;
+  limits: Map<string, Counted>;
+}
+
+const nothing = (): Parts => ({ reqs: new Map(), limits: new Map() });
 
 /**
  * Descriptions are merged when they are structurally identical and never when
@@ -92,9 +112,13 @@ function both(a: Draft, b: Draft): Draft {
 
 /** Equal for two drafts exactly when they ask the same, in whatever order. */
 function identityOf(draft: Draft): string {
-  const reqs = [...draft.reqs].map(([key, { n, max }]) => `${n}-${max ?? ''}x${key}`).sort();
-  const limits = [...draft.limits].map(([key, { n }]) => `${n}x${key}`).sort();
-  return JSON.stringify([reqs, limits]);
+  const sideOf = ({ reqs, limits }: Parts) => [
+    [...reqs].map(([key, { n, max }]) => `${n}-${max ?? ''}x${key}`).sort(),
+    [...limits].map(([key, { n }]) => `${n}x${key}`).sort(),
+  ];
+  // The sixth card's part is part of what the alternative ASKS, so two
+  // alternatives agreeing on the five and differing on the card drawn are two.
+  return JSON.stringify([sideOf(draft), draft.sixth === undefined ? null : sideOf(draft.sixth)]);
 }
 
 /**
@@ -122,6 +146,24 @@ function* flatMapped(exprs: readonly Expr[]): Iterable<Draft> {
   for (const expr of exprs) yield* alternativesOf(expr);
 }
 
+function* splitProducts(five: readonly Draft[], sixth: readonly Draft[]): Iterable<Draft> {
+  for (const a of five)
+    for (const b of sixth)
+      yield { reqs: a.reqs, limits: a.limits, sixth: { reqs: b.reqs, limits: b.limits } };
+}
+
+/**
+ * The alternatives of a criterion at its ROOT, which is the one place a
+ * `split` may stand. Both sides distribute `and` over `or` on their own and
+ * the alternatives are their product: `(1x A or 1x B) then 1x C` is two ways
+ * to open and one card to draw, and each pairing is one alternative.
+ */
+function rootAlternativesOf(expr: Expr): Draft[] {
+  if (expr.op !== 'split') return alternativesOf(expr);
+  const five = expr.five === undefined ? [nothing()] : alternativesOf(expr.five);
+  return distinct(splitProducts(five, alternativesOf(expr.sixth)));
+}
+
 /**
  * `distinct` over the criteria at the ROOT, remembering which of them each
  * surviving alternative came from. The cap is enforced exactly as `distinct`
@@ -133,7 +175,7 @@ function distinctWithSources(exprs: readonly Expr[]): { drafts: Draft[]; sources
   const drafts: Draft[] = [];
   const sources: number[][] = [];
   exprs.forEach((expr, source) => {
-    for (const draft of alternativesOf(expr)) {
+    for (const draft of rootAlternativesOf(expr)) {
       const identity = identityOf(draft);
       let index = at.get(identity);
       if (index === undefined) {
@@ -152,6 +194,10 @@ function distinctWithSources(exprs: readonly Expr[]): { drafts: Draft[]; sources
 /** `and` distributed over `or`: the alternatives of `expr`, each merged, none repeated. */
 function alternativesOf(expr: Expr): Draft[] {
   switch (expr.op) {
+    case 'split':
+      // `rootAlternativesOf` takes it, and the grammar and `validateExpr` keep
+      // it out of every other position; reaching here is a bug, not bad input.
+      throw new RangeError('a `split` stands only at the root of a criterion');
     case 'req': {
       // A requirement of no cards and no ceiling asks for nothing; `0-b×` still
       // rules out leftovers, so it stays.
@@ -190,6 +236,13 @@ function alternativesOf(expr: Expr): Draft[] {
  *    more than `MAX_FLAT_CRITERIA` DISTINCT alternatives at any point is an
  *    error, found while distributing and not after. Dropping (3) never rescues
  *    an expansion from the cap.
+ * A SPLIT criterion (`five then sixth`) distributes on both sides and its
+ * alternatives are the product: each pairs one way to open with one card to
+ * draw. The five-card part is then judged over `maxHandSize - 1` cards, and
+ * the sixth card's part over one — more than `MAX_SIXTH_SLOTS` slots there is
+ * an ERROR and not a drop, because no card can ever be two cards and a hand
+ * that silently scores 0 teaches nobody why.
+ *
  * 3. An alternative whose requirement LOWER bounds need more than
  *    `maxHandSize` cards can never be satisfied and is dropped, and counted.
  *    `flat` may come back empty — the criteria can then never be met, which is
@@ -208,26 +261,51 @@ export function expandAll(exprs: readonly Expr[], opts: ExpandOptions): ExpandRe
     if (!(failure instanceof TooMany)) throw failure;
     return {
       ok: false,
+      reason: 'cap',
       message: `these criteria expand to more than ${MAX_FLAT_CRITERIA} alternatives; use fewer nested \`or\`s, or put the choice inside one description, as in \`1x ([A] or [B])\``,
     };
   }
+  /** Only the LOWER bounds need cards: `0-2x A` asks for none. */
+  const slotsIn = ({ reqs }: Parts) => [...reqs.values()].reduce((sum, { n }) => sum + n, 0);
+  /**
+   * A ceiling of `room` or more can never bind — that side of the hand holds
+   * no more cards than that — so it costs the matcher nothing and is not
+   * capped.
+   */
+  const rangesIn = ({ reqs }: Parts, room: number) =>
+    [...reqs.values()].filter(({ max }) => max !== undefined && max < room).length;
+  const listed = ({ reqs, limits }: Parts) => ({
+    reqs: [...reqs.values()],
+    limits: [...limits.values()],
+  });
+
   const flat: FlatCriterion[] = [];
   const sources: number[][] = [];
-  for (const [index, { reqs, limits }] of drafts.entries()) {
-    // Only the LOWER bounds need cards: `0-2x A` asks for none.
-    const slots = [...reqs.values()].reduce((sum, { n }) => sum + n, 0);
-    if (slots > opts.maxHandSize) continue;
-    // A ceiling of `maxHandSize` or more can never bind — the hand holds no
-    // more cards than that — so it costs the matcher nothing and is not capped.
-    const ranges = [...reqs.values()].filter(
-      ({ max }) => max !== undefined && max < opts.maxHandSize,
-    ).length;
+  for (const [index, draft] of drafts.entries()) {
+    const { sixth } = draft;
+    // A split criterion's five-card part is judged over one card FEWER than
+    // the hand holds: going second you see five and then draw the sixth.
+    const room = sixth === undefined ? opts.maxHandSize : opts.maxHandSize - 1;
+    if (slotsIn(draft) > room) continue;
+    if (sixth !== undefined) {
+      const asked = slotsIn(sixth);
+      if (asked > MAX_SIXTH_SLOTS)
+        return {
+          ok: false,
+          reason: 'sixth-card',
+          message: `the sixth card is one card, and this alternative asks ${asked} of it: after \`then\`, write one requirement — \`1x …\` — or limits alone, as in \`no trap\``,
+        };
+    }
+    const ranges = rangesIn(draft, room) + (sixth === undefined ? 0 : rangesIn(sixth, 1));
     if (ranges > MAX_RANGES)
       return {
         ok: false,
+        reason: 'ranges',
         message: `this alternative has ${ranges} range requirements that can bind; the engine judges at most ${MAX_RANGES} — widen a range past the hand size, or write plain \`nx\` requirements`,
       };
-    flat.push({ reqs: [...reqs.values()], limits: [...limits.values()] });
+    const alternative: FlatCriterion = listed(draft);
+    if (sixth !== undefined) alternative.sixth = listed(sixth);
+    flat.push(alternative);
     sources.push(from[index]!);
   }
   return { ok: true, flat, sources, dropped: drafts.length - flat.length };

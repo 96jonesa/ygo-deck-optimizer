@@ -36,6 +36,51 @@ function flat(reqs: readonly Entry[], limits: readonly Entry[] = []): FlatCriter
 }
 
 describe('subsumes', () => {
+  describe('a split criterion', () => {
+    const splitFlat = (
+      five: readonly Entry[],
+      sixth: readonly Entry[],
+      sixthLimits: readonly Entry[] = [],
+    ): FlatCriterion => ({
+      ...flat(five),
+      sixth: { reqs: counted(sixth), limits: counted(sixthLimits) },
+    });
+
+    it('holds of a split criterion and itself', () => {
+      const A = splitFlat([[1, 'level 4 monster']], [[1, 'trap']]);
+      expect(subsumes(A, A, ctx)).toBe(true);
+    });
+
+    it('reads the injection over BOTH windows', () => {
+      const narrow = splitFlat([[1, 'level 4 monster']], [[1, 'quick-play spell']]);
+      const wide = splitFlat([[1, 'monster']], [[1, 'spell']]);
+      expect(subsumes(wide, narrow, ctx)).toBe(true);
+      expect(subsumes(narrow, wide, ctx)).toBe(false);
+      // Widening only the five-card part is not enough: the sixth card's part
+      // of the wider one must be reachable too.
+      const halfWide = splitFlat([[1, 'monster']], [[1, 'quick-play spell']]);
+      expect(subsumes(halfWide, narrow, ctx)).toBe(true);
+      expect(subsumes(splitFlat([[1, 'monster']], [[1, 'monster']]), narrow, ctx)).toBe(false);
+    });
+
+    it('gives up between a split criterion and an unsplit one, both ways round', () => {
+      // They are about different sample spaces, and `false` is advice withheld
+      // rather than a claim that neither subsumes the other.
+      const split = splitFlat([[1, 'monster']], [[1, 'monster']]);
+      const whole = flat([[1, 'monster']]);
+      expect(subsumes(whole, split, ctx)).toBe(false);
+      expect(subsumes(split, whole, ctx)).toBe(false);
+    });
+
+    it("covers the sixth card's limits over a hand of ONE card", () => {
+      // `at most 1x trap` of one card holds always, so it needs no cover.
+      const tight = splitFlat([[1, 'monster']], [[1, 'monster']], [[0, 'trap']]);
+      const loose = splitFlat([[1, 'monster']], [[1, 'monster']], [[1, 'trap']]);
+      expect(subsumes(loose, tight, ctx)).toBe(true);
+      expect(subsumes(tight, loose, ctx)).toBe(false);
+    });
+  });
+
   it('holds of a criterion and itself', () => {
     const A = flat(
       [

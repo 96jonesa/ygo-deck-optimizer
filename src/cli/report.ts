@@ -101,6 +101,11 @@ export function criteriaSection(a: Analysis): string {
  * writes them: distinct counts joined by `/`, and a range kept apart from the
  * plain count it would otherwise read as — `1x monster` and `1-2x monster` are
  * different criteria and must not print alike.
+ *
+ * An appearance asked of the SIXTH CARD is kept apart from the same count asked
+ * of the hand, and says so: `1x trap` of the card you draw is a different
+ * statement from `1x trap` in six cards, and one row for both would be one row
+ * for two questions.
  */
 function countsOf(
   appearsIn: readonly Appearance[],
@@ -108,13 +113,15 @@ function countsOf(
 ): string {
   const seen = new Map<string, Appearance>();
   for (const appearance of appearsIn)
-    seen.set(`${appearance.n}-${appearance.max ?? ''}`, appearance);
+    seen.set(`${appearance.n}-${appearance.max ?? ''}-${appearance.sixth === true}`, appearance);
   return [...seen.values()]
     .sort(
       (x, y) =>
-        x.n - y.n || (x.max ?? Number.POSITIVE_INFINITY) - (y.max ?? Number.POSITIVE_INFINITY),
+        Number(x.sixth === true) - Number(y.sixth === true) ||
+        x.n - y.n ||
+        (x.max ?? Number.POSITIVE_INFINITY) - (y.max ?? Number.POSITIVE_INFINITY),
     )
-    .map(say)
+    .map((appearance) => (appearance.sixth === true ? `${say(appearance)} drawn` : say(appearance)))
     .join(' / ');
 }
 

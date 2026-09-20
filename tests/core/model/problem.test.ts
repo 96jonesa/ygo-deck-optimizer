@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_RANGES } from '../../../src/core/criteria/ast';
 import {
+  checkWeightBound,
   MAX_CLASSES,
   MAX_DECK_SIZE,
   MAX_HAND_SIZE,
+  outcomesOf,
   type Problem,
   partProblem,
   validateProblem,
@@ -27,7 +29,93 @@ function classes(count: number): Problem['classes'] {
   return Array.from({ length: count }, (_, cls) => ({ lineIds: [`l${cls}`], min: 0, max: 3 }));
 }
 
+describe('outcomesOf', () => {
+  it('is 1 for a hand that draws no card of its own', () => {
+    expect(outcomesOf({ H: 6 })).toBe(1);
+    expect(outcomesOf({ H: 5, drawn: false })).toBe(1);
+  });
+
+  it('is the hand size where the last card is drawn: one outcome per card it could be', () => {
+    expect(outcomesOf({ H: 6, drawn: true })).toBe(6);
+    expect(outcomesOf({ H: 2, drawn: true })).toBe(2);
+  });
+});
+
 describe('validateProblem', () => {
+  describe('the sixth card', () => {
+    /** Blank, A and B; the five hold an A and the card drawn is a B. */
+    const split = (): Problem => ({
+      ...valid(),
+      handSizes: [{ H: 6, weight: 1, drawn: true }],
+      criteria: [{ slots: [0b010], limits: [], sixth: { slots: [0b100], limits: [] } }],
+    });
+
+    it('accepts a split criterion judged by a hand that draws one', () => {
+      expect(() => validateProblem(split())).not.toThrow();
+    });
+
+    it('refuses a split criterion judged by a hand that draws none', () => {
+      const first = { ...split(), handSizes: [{ H: 6, weight: 1 }] };
+      expect(() => validateProblem(first)).toThrow(
+        /criterion 0 is about the card you draw, but this hand does not draw one/,
+      );
+      // And through a part's own criteria list, not only the implicit "all of them".
+      const tagged = {
+        ...split(),
+        handSizes: [
+          { H: 5, weight: 1, criteria: [0] },
+          { H: 6, weight: 1, drawn: true, criteria: [0] },
+        ],
+      };
+      expect(() => validateProblem(tagged)).toThrow(/hand size 5: criterion 0/);
+    });
+
+    it('lets a hand draw one with nothing split: it is the same score, six times over', () => {
+      expect(() =>
+        validateProblem({ ...valid(), handSizes: [{ H: 6, weight: 1, drawn: true }] }),
+      ).not.toThrow();
+    });
+
+    it('refuses a hand of one that draws its only card: there is nothing to open on', () => {
+      expect(() =>
+        validateProblem({ ...valid(), handSizes: [{ H: 1, weight: 1, drawn: true }] }),
+      ).toThrow(/holds at least 2 cards/);
+    });
+
+    it('refuses a sixth card asked for more than one card', () => {
+      const greedy = {
+        ...split(),
+        criteria: [{ slots: [0b010], limits: [], sixth: { slots: [0b100, 0b100], limits: [] } }],
+      };
+      expect(() => validateProblem(greedy)).toThrow(
+        /criterion 0: the sixth card is one card, and its part asks for 2/,
+      );
+    });
+
+    it("checks the sixth card's own masks, limits and ranges", () => {
+      const blank = {
+        ...split(),
+        criteria: [{ slots: [], limits: [], sixth: { slots: [0b001], limits: [] } }],
+      };
+      expect(() => validateProblem(blank)).toThrow(
+        /criterion 0, the sixth card, slot 0: the blank class \(bit 0\) cannot fill a requirement/,
+      );
+      const bad = {
+        ...split(),
+        criteria: [
+          {
+            slots: [],
+            limits: [],
+            sixth: { slots: [], limits: [], reqs: [{ mask: 0b100, min: 0, max: null }] },
+          },
+        ],
+      };
+      expect(() => validateProblem(bad)).toThrow(
+        /criterion 0, the sixth card: with no ceiling to keep/,
+      );
+    });
+  });
+
   it('accepts a well-formed problem', () => {
     expect(() => validateProblem(valid())).not.toThrow();
   });
@@ -252,6 +340,40 @@ describe('validateProblem', () => {
  * ONE part of a blend as a problem of its own (PRD §5.5): the same deck, the
  * SAME classes, and only the criteria that part is judged against.
  */
+describe('checkWeightBound', () => {
+  it('lets every weight the editor allows through, drawn or not', () => {
+    for (const outcomes of [1, 6])
+      expect(() => checkWeightBound(60, 6, 1000, outcomes)).not.toThrow();
+  });
+
+  /**
+   * The sixth card multiplies the headroom away exactly as a weight does, so it
+   * belongs to the SAME bound: `6 · C(60, 6) = 300,383,160` leaves 29,985,699
+   * where an undrawn hand leaves 179,914,198.
+   */
+  it('counts the outcomes per hand against the same 2^53', () => {
+    expect(() => checkWeightBound(60, 6, 179_914_198)).not.toThrow();
+    expect(() => checkWeightBound(60, 6, 179_914_199)).toThrow(/past 2\^53/);
+    expect(() => checkWeightBound(60, 6, 29_985_699, 6)).not.toThrow();
+    expect(() => checkWeightBound(60, 6, 29_985_700, 6)).toThrow(/past 2\^53/);
+  });
+
+  it('names the outcomes in the message, and the largest weight that fits', () => {
+    expect(() => checkWeightBound(60, 6, 29_985_700, 6)).toThrow(
+      /6 × C\(60, 6\) = 29985700 × 300383160/,
+    );
+    expect(() => checkWeightBound(60, 6, 29_985_700, 6)).toThrow(
+      /the largest weight this deck and hand allow is 29985699/,
+    );
+  });
+
+  it('is checked for a weight of 1 too, since the outcomes alone can be the whole of it', () => {
+    // A weight of 1 was once returned on unchecked; with outcomes in the product
+    // that shortcut would be the one place the bound is not looked at.
+    expect(() => checkWeightBound(60, 6, 1, 6)).not.toThrow();
+  });
+});
+
 describe('partProblem', () => {
   /** Two criteria, so a part can have one of them. */
   function twoCriteria(): Problem {
@@ -267,6 +389,20 @@ describe('partProblem', () => {
       ],
     };
   }
+
+  it('carries `drawn` into the part: it says what a HAND is', () => {
+    const problem = {
+      ...twoCriteria(),
+      handSizes: [
+        { H: 5, weight: 1, criteria: [0] },
+        { H: 6, weight: 2, drawn: true as const, criteria: [1] },
+      ],
+    };
+    expect(partProblem(problem, problem.handSizes[0]!).handSizes).toEqual([{ H: 5, weight: 1 }]);
+    expect(partProblem(problem, problem.handSizes[1]!).handSizes).toEqual([
+      { H: 6, weight: 1, drawn: true },
+    ]);
+  });
 
   it('keeps only the criteria the part names, in the order it names them', () => {
     const problem = twoCriteria();

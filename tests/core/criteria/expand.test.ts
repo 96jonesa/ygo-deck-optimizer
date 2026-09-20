@@ -254,6 +254,90 @@ describe('expand', () => {
     ]);
   });
 
+  describe('a split criterion', () => {
+    const split = (five: Expr | undefined, sixth: Expr): Expr =>
+      five === undefined ? { op: 'split', sixth } : { op: 'split', five, sixth };
+
+    it('keeps the two sides apart, each merged on its own', () => {
+      expect(flatOf(split(and(req(1, A), req(1, A)), atMost(0, B)))).toEqual([
+        { reqs: [{ n: 2, desc: A }], limits: [], sixth: { reqs: [], limits: [{ n: 0, desc: B }] } },
+      ]);
+    });
+
+    it('does not merge across then: the five and the one drawn are different cards', () => {
+      // `1x A then 1x A` needs an A among the five AND an A drawn, which is two
+      // A's — but the two requirements are about different windows, so neither
+      // side sums.
+      expect(flatOf(split(req(1, A), req(1, A)))).toEqual([
+        { reqs: [{ n: 1, desc: A }], limits: [], sixth: { reqs: [{ n: 1, desc: A }], limits: [] } },
+      ]);
+    });
+
+    it('is the product of the two sides distributed, in reading order', () => {
+      expect(flatOf(split(or(req(1, A), req(1, B)), or(req(1, C), req(1, D))))).toEqual([
+        { reqs: [{ n: 1, desc: A }], limits: [], sixth: { reqs: [{ n: 1, desc: C }], limits: [] } },
+        { reqs: [{ n: 1, desc: A }], limits: [], sixth: { reqs: [{ n: 1, desc: D }], limits: [] } },
+        { reqs: [{ n: 1, desc: B }], limits: [], sixth: { reqs: [{ n: 1, desc: C }], limits: [] } },
+        { reqs: [{ n: 1, desc: B }], limits: [], sixth: { reqs: [{ n: 1, desc: D }], limits: [] } },
+      ]);
+    });
+
+    it('carries an empty five-card part as an alternative that asks nothing of it', () => {
+      expect(flatOf(split(undefined, req(1, A)))).toEqual([
+        { reqs: [], limits: [], sixth: { reqs: [{ n: 1, desc: A }], limits: [] } },
+      ]);
+    });
+
+    it('counts two alternatives as one only when BOTH sides agree', () => {
+      const same5 = split(or(req(1, A), req(1, A)), req(1, B));
+      expect(flatOf(same5)).toHaveLength(1);
+      // The same five, two different cards drawn: two alternatives.
+      expect(flatOf(split(req(1, A), or(req(1, B), req(1, C))))).toHaveLength(2);
+    });
+
+    it('drops a five-card part that needs more than the hand less the card drawn', () => {
+      // At a hand of 6, the five you open on are five: `6x A` can never hold
+      // there, while `5x A` can.
+      expect(expand(split(req(5, A), req(1, B)), HAND)).toMatchObject({ ok: true, dropped: 0 });
+      expect(expand(split(req(6, A), req(1, B)), HAND)).toMatchObject({
+        ok: true,
+        flat: [],
+        dropped: 1,
+      });
+      // An unsplit criterion still gets all six.
+      expect(expand(and(req(6, A)), HAND)).toMatchObject({ ok: true, dropped: 0 });
+    });
+
+    it('refuses more than one card of the sixth, as an error and not a drop', () => {
+      // A hand-written AST bypasses the parser's own check, so expansion keeps
+      // one: a silent zero is exactly what this must not become.
+      expect(expandAll([{ op: 'split', sixth: and(req(1, A), req(1, B)) }], HAND)).toEqual({
+        ok: false,
+        reason: 'sixth-card',
+        message:
+          'the sixth card is one card, and this alternative asks 2 of it: after `then`, write one requirement — `1x …` — or limits alone, as in `no trap`',
+      });
+      // And merging is what can make it two: `1x A and 1x A` asks for two cards.
+      expect(expandAll([{ op: 'split', sixth: and(req(1, A), req(1, A)) }], HAND)).toMatchObject({
+        ok: false,
+        reason: 'sixth-card',
+      });
+    });
+
+    it('never lets a split stand below the root', () => {
+      const nested = and(req(1, A), { op: 'split', sixth: req(1, B) } as Expr);
+      expect(() => expandAll([nested], HAND)).toThrow(/only at the root/);
+    });
+
+    it('says which criteria a shared split alternative came from', () => {
+      const one = split(req(1, A), req(1, B));
+      const two = split(or(req(1, A), req(1, C)), req(1, B));
+      const result = expandAll([one, two], HAND);
+      if (!result.ok) throw new Error(result.message);
+      expect(result.sources).toEqual([[0, 1], [1]]);
+    });
+  });
+
   describe('dropping what the hand cannot hold', () => {
     it('drops an alternative with more slots than cards in the hand, and counts it', () => {
       const expr = or(req(1, A), and(req(3, B), req(3, C)), and(req(2, B), req(3, C)));
@@ -323,6 +407,7 @@ describe('expand', () => {
     it('refuses one more, with a message that names the cap', () => {
       expect(expand(ranges(MAX_RANGES + 1), HAND)).toEqual({
         ok: false,
+        reason: 'ranges',
         message: expect.stringContaining(String(MAX_RANGES)),
       });
     });
@@ -380,7 +465,11 @@ describe('expand', () => {
 
     it('refuses 512 with a message that names the cap', () => {
       const result = expand(productOfChoices(9), { maxHandSize: 9 });
-      expect(result).toEqual({ ok: false, message: expect.stringContaining('256') });
+      expect(result).toEqual({
+        ok: false,
+        reason: 'cap',
+        message: expect.stringContaining('256'),
+      });
     });
 
     it('refuses before it drops: 512 alternatives no hand can hold are still an error', () => {
@@ -574,7 +663,7 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
   }
 
   /** A random table of which card type fills which description, and a hand drawn from the types. */
-  function genCase(rng: Rng, rangeChance = 0): Case {
+  function genCase(rng: Rng, rangeChance = 0, splitChance = 0): Case {
     const density = rng.pick([0.25, 0.4, 0.6]);
     const table = Array.from({ length: CARD_TYPES }, () =>
       DESCRIPTIONS.map(() => rng.chance(density)),
@@ -585,6 +674,7 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
       maxArgs: 3,
       limitChance: 0.2,
       rangeChance,
+      splitChance,
     });
     const hand = Array.from({ length: rng.int(0, 6) }, () => rng.int(0, CARD_TYPES - 1));
     return {
@@ -702,6 +792,38 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
     expect(satisfied / compared).toBeLessThan(0.8);
     expect(ranged).toBeGreaterThan(3000);
     expect(merged).toBeGreaterThan(200);
+  });
+
+  it('agrees on 6,000 generated criteria and hands WHERE HALF NAME THE CARD DRAWN', () => {
+    const rng = seededRng(0xe1e1516a);
+    let compared = 0;
+    let satisfied = 0;
+    let split = 0;
+    let sixthOnly = 0;
+    for (let i = 0; i < 6000; i++) {
+      const { expr, hand, fills } = genCase(rng, 0, 0.5);
+      const direct = satisfiesTree(expr, hand, fills);
+      // A split criterion's five-card part is judged over one card fewer, so
+      // the hand it is expanded for is the WHOLE hand and expansion takes the
+      // card away itself — the one place the two sides of `then` differ.
+      const exact = expand(expr, { maxHandSize: Math.max(hand.length, 1) });
+      if (!exact.ok) continue;
+      compared++;
+      if (direct) satisfied++;
+      if (expr.op === 'split') {
+        split++;
+        if (expr.five === undefined) sixthOnly++;
+      }
+      // The tree evaluator splits the HAND and walks the tree; `expand` splits
+      // the CRITERION and merges each side. That they agree on which card is
+      // which is the whole of what this checks.
+      same(satisfiesAnyFlat(exact.flat, hand, fills), direct, () => ({ expr, hand }));
+    }
+    expect(compared).toBeGreaterThan(5500);
+    expect(split).toBeGreaterThan(2500);
+    expect(sixthOnly).toBeGreaterThan(400);
+    expect(satisfied / compared).toBeGreaterThan(0.05);
+    expect(satisfied / compared).toBeLessThan(0.6);
   });
 
   it('covers nested or-in-and-in-or, limits at every depth and repeated descriptions', () => {

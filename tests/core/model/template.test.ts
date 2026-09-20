@@ -6,6 +6,7 @@ import {
   handSizeForMode,
   modeOf,
   partsOfMode,
+  splitNeedsSecond,
   TEMPLATE_VERSION,
   validateTemplate,
   weightOf,
@@ -395,6 +396,20 @@ describe('modes and criterion tags', () => {
       expect([countsFor('first', 'first'), countsFor('first', 'second')]).toEqual([true, false]);
       expect([countsFor('second', 'first'), countsFor('second', 'second')]).toEqual([false, true]);
       expect([countsFor('both', 'first'), countsFor('both', 'second')]).toEqual([true, true]);
+    });
+  });
+
+  describe('splitNeedsSecond', () => {
+    it('names the hand the criterion is tagged for, and both ways out of it', () => {
+      expect(splitNeedsSecond('first')).toContain('this one is judged going first');
+      expect(splitNeedsSecond('both')).toContain('this one is judged for both hands');
+      for (const when of ['first', 'both'] as const) {
+        expect(splitNeedsSecond(when), when).toContain(
+          '`then` is about the card you draw going second',
+        );
+        expect(splitNeedsSecond(when), when).toContain('tag it going second');
+        expect(splitNeedsSecond(when), when).toContain('drop the `then`');
+      }
     });
   });
 

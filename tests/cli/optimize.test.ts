@@ -636,3 +636,81 @@ describe('optimize and weighted criteria', () => {
     expect(argsFor('--unweighted').weighted).toBe(false);
   });
 });
+
+/**
+ * A criterion SPLIT across the opening five and the card drawn (PRD §5.6), the
+ * whole way through the CLI. The route this is really about is `runOptimize`'s
+ * own `handSizes` construction: nothing there says `drawn`, and it must not —
+ * `compileProblem` derives it from the alternatives the hand judges.
+ */
+describe('optimize and the sixth card', () => {
+  const DRAWN = {
+    version: 1,
+    deckSize: 40,
+    mode: 'second',
+    hand: { size: 6 },
+    groups: [],
+    lines: [
+      { id: 'combo', text: 'level 4 monster', min: 0, max: 20 },
+      { id: 'answer', text: 'spell', min: 0, max: 20 },
+    ],
+    remainder: { min: 20, max: null },
+    criteria: [
+      {
+        id: 'c1',
+        name: 'open on the combo, draw the answer',
+        text: '1x level 4 monster then 1x spell',
+        when: 'second',
+      },
+    ],
+  };
+  const split = write('split.json', JSON.stringify(DRAWN));
+  /** The same question asked of all six cards, for the comparison that matters. */
+  const whole = write(
+    'whole.json',
+    JSON.stringify({
+      ...DRAWN,
+      criteria: [{ ...DRAWN.criteria[0], text: '1x level 4 monster and 1x spell' }],
+    }),
+  );
+
+  it('reports the score over the outcomes of a drawn hand: 6 × C(40, 6)', async () => {
+    const { code, stdout } = await run([split, '--workdir', WORKDIR, '--force', '--top', '1']);
+    expect(code).toBe(EXIT_OK);
+    // 6 · C(40, 6) = 6 · 3,838,380 = 23,030,280.
+    expect(stdout).toMatch(/P\(success\) = [\d,]+ \/ 23,030,280/);
+    expect(section(stdout, 'Search')).toEqual(
+      expect.arrayContaining([expect.stringMatching(/hands\s+6 cards/)]),
+    );
+  });
+
+  it('is a harder question than asking the same of all six cards', async () => {
+    const percent = async (file: string) => {
+      const { code, stdout } = await run([file, '--workdir', WORKDIR, '--force', '--top', '1']);
+      expect(code).toBe(EXIT_OK);
+      const matched = /P\(success\) = [\d,]+ \/ [\d,]+ = ([\d.]+)%/.exec(stdout);
+      if (matched === null) throw new Error(`no best ratio in:\n${stdout}`);
+      return Number(matched[1]);
+    };
+    const [drawn, together] = [await percent(split), await percent(whole)];
+    expect(drawn).toBeLessThan(together);
+    // And both are real probabilities, so neither is a rounding of the other.
+    expect(drawn).toBeGreaterThan(0);
+    expect(together).toBeLessThan(100);
+  });
+
+  it('refuses to run a split criterion that is not tagged going second', async () => {
+    const both = write(
+      'split-both.json',
+      JSON.stringify({
+        ...DRAWN,
+        criteria: [{ ...DRAWN.criteria[0], when: 'both' }],
+      }),
+    );
+    const { code, stdout, stderr } = await run([both, '--workdir', WORKDIR, '--force']);
+    expect(code).toBe(EXIT_FAILED);
+    expect(stderr).toContain('has errors; nothing was scored');
+    // The reason is on the criterion, in the report, where the reader is.
+    expect(stdout).toContain('tag it going second');
+  });
+});

@@ -718,10 +718,15 @@ export function breakdown(
     const all = own.map((_, at) => at);
     const alone: Problem = {
       ...compiled.problem,
+      // `drawn` is the RUN's, not this criterion's: it says what a hand IS, and
+      // a row scored over a sixth of the headline's denominator would not sit
+      // under it. A criterion that names no sixth card is simply worth the same
+      // whichever of the six cards was drawn.
       handSizes: compiled.problem.handSizes.map((hand, at) => ({
         H: hand.H,
         weight: hand.weight,
         criteria: (parts?.[at] ?? true) ? all : [],
+        ...(hand.drawn === true ? { drawn: true as const } : {}),
       })),
       criteria: own,
     };

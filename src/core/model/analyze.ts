@@ -43,6 +43,7 @@ import {
   type Part,
   partsOfMode,
   type RunMode,
+  splitNeedsSecond,
   type Template,
   whenOf,
 } from './template';
@@ -78,6 +79,7 @@ export type IssueCode =
   | 'limit-counts-nothing'
   // a criterion
   | 'expansion-cap'
+  | 'sixth-card'
   | 'never-satisfiable'
   | 'subsumed'
   | 'absent-card'
@@ -152,6 +154,13 @@ export interface Appearance {
   n: number;
   /** A requirement's ceiling, when it was written `a-b×`; never set for a limit. */
   max?: number;
+  /**
+   * Whether it is asked of the SIXTH CARD rather than of the hand (PRD §5.6).
+   * It changes what the row MEANS — `1x trap` of the card you draw is a
+   * different statement from `1x trap` in six cards — so a readout that showed
+   * the two alike would be showing the same row for two questions.
+   */
+  sixth?: true;
 }
 
 export interface NearMissAnalysis {
@@ -439,7 +448,10 @@ interface ParsedCriterion {
 
 /** The descriptions of a criterion, as written. */
 function descsOf(expr: Expr): Description[] {
-  return expr.op === 'and' || expr.op === 'or' ? expr.args.flatMap(descsOf) : [expr.desc];
+  if (expr.op === 'and' || expr.op === 'or') return expr.args.flatMap(descsOf);
+  if (expr.op === 'split')
+    return [...(expr.five === undefined ? [] : descsOf(expr.five)), ...descsOf(expr.sixth)];
+  return [expr.desc];
 }
 
 function flatText(flat: FlatCriterion, ctx: DescContext): string {
@@ -447,11 +459,21 @@ function flatText(flat: FlatCriterion, ctx: DescContext): string {
     const text = print(desc, ctx);
     return `${prefix} ${desc.anyOf.length > 1 ? `(${text})` : text}`;
   };
-  const parts = [
-    ...flat.reqs.map(({ n, max, desc }) => counted(countPrefix(n, max), desc)),
-    ...flat.limits.map(({ n, desc }) => counted(n === 0 ? 'no' : `at most ${n}x`, desc)),
-  ];
-  return parts.length === 0 ? '(nothing: every hand meets it)' : parts.join(', ');
+  const sideText = ({ reqs, limits }: Pick<FlatCriterion, 'reqs' | 'limits'>): string => {
+    const parts = [
+      ...reqs.map(({ n, max, desc }) => counted(countPrefix(n, max), desc)),
+      ...limits.map(({ n, desc }) => counted(n === 0 ? 'no' : `at most ${n}x`, desc)),
+    ];
+    return parts.join(', ');
+  };
+  const five = sideText(flat);
+  // A split alternative reads as it is written: the five you open on, `then`,
+  // the card you draw. An empty five-card part is the one that leads with it.
+  if (flat.sixth !== undefined) {
+    const sixth = sideText(flat.sixth);
+    return five === '' ? `then ${sixth}` : `${five} then ${sixth}`;
+  }
+  return five === '' ? '(nothing: every hand meets it)' : five;
 }
 
 /** One pass over the database; remembered in `ctx.memo`, under a key that holds all it depends on. */
@@ -783,23 +805,48 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     }
     if (result.stale !== null) out.issues.push(warning('stale-text', result.stale));
     out.parsed = { ok: true, canonical: printCriterion(result.expr, descCtx) };
+    // A criterion that names the card you draw is a criterion about going
+    // second, and `resolveTemplate` refuses it any other way round; saying so
+    // here, in the same words, is what stops the readout and the run from
+    // disagreeing about whether the template is runnable.
+    if (result.expr.op === 'split' && when !== 'second')
+      out.issues.push(error('sixth-card', splitNeedsSecond(when)));
     const expanded = expand(result.expr, { maxHandSize: handSize });
     if (!expanded.ok) {
-      out.issues.push(error('expansion-cap', expanded.message));
+      out.issues.push(
+        error(expanded.reason === 'sixth-card' ? 'sixth-card' : 'expansion-cap', expanded.message),
+      );
       parsedCriteria.push({ expr: result.expr, flat: null });
       return out;
     }
     out.dropped = expanded.dropped;
     out.alternatives = expanded.flat.map((flat) => flatText(flat, descCtx));
-    expanded.flat.forEach(({ reqs, limits }, alternative) => {
-      for (const { n, max, desc } of reqs)
-        column(desc).required.push(
-          max === undefined
-            ? { criterion: criterion.id, alternative, n }
-            : { criterion: criterion.id, alternative, n, max },
-        );
-      for (const { n, desc } of limits)
-        column(desc).limited.push({ criterion: criterion.id, alternative, n });
+    expanded.flat.forEach(({ reqs, limits, sixth }, alternative) => {
+      /**
+       * One window's requirements and limits into the columns. The SIXTH CARD's
+       * go in too, and must: a description only it mentions is still a column of
+       * the match matrix (`indexFlat` makes one), so leaving it out here would
+       * give it a column with no appearances — no `filledBy`, no near misses, no
+       * "no line fills this requirement" — which is a readout that quietly says
+       * nothing about half a criterion.
+       */
+      const register = (
+        side: FlatCriterion | NonNullable<FlatCriterion['sixth']>,
+        where: { sixth?: true },
+      ) => {
+        for (const { n, max, desc } of side.reqs)
+          column(desc).required.push({
+            criterion: criterion.id,
+            alternative,
+            n,
+            ...(max === undefined ? {} : { max }),
+            ...where,
+          });
+        for (const { n, desc } of side.limits)
+          column(desc).limited.push({ criterion: criterion.id, alternative, n, ...where });
+      };
+      register({ reqs, limits }, {});
+      if (sixth !== undefined) register(sixth, { sixth: true });
     });
     parsedCriteria.push({ expr: result.expr, flat: expanded.flat });
     return out;
@@ -1081,7 +1128,8 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       parsedCriteria.map((criterion) => criterion!.expr),
       { maxHandSize: handSize },
     );
-    if (!all.ok) issues.push(error('expansion-cap', all.message));
+    if (!all.ok)
+      issues.push(error(all.reason === 'sixth-card' ? 'sixth-card' : 'expansion-cap', all.message));
     else if (countable && handIsValid && rangesAreValid) {
       const input: CompileInput = {
         deckSize,

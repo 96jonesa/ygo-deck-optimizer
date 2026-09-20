@@ -11,6 +11,8 @@ export type CriterionTokenBody =
   | { t: 'no' }
   /** `exactly`: the count that follows is both ends of a range (TDD §7.1). */
   | { t: 'exactly' }
+  /** `then`: what comes after it is about the SIXTH CARD, the one you draw going second. */
+  | { t: 'then' }
   /** `and` or `,`: the two are interchangeable (TDD §7.1). */
   | { t: 'and' };
 
@@ -39,6 +41,7 @@ const KEYWORDS: readonly [RegExp, CriterionTokenBody][] = [
   [new RegExp(`at\\s+most${NOT_IN_A_WORD}`, 'iuy'), { t: 'atMost' }],
   [new RegExp(`no${NOT_IN_A_WORD}`, 'iuy'), { t: 'no' }],
   [new RegExp(`exactly${NOT_IN_A_WORD}`, 'iuy'), { t: 'exactly' }],
+  [new RegExp(`then${NOT_IN_A_WORD}`, 'iuy'), { t: 'then' }],
   [new RegExp(`and${NOT_IN_A_WORD}`, 'iuy'), { t: 'and' }],
   [/,/y, { t: 'and' }],
 ];
@@ -69,8 +72,8 @@ function keywordAt(text: string, pos: number): [CriterionTokenBody, number] | un
 
 /**
  * Split a criterion into tokens (TDD §7.1): the description lexer's, plus
- * counts, `at most`, `no`, `exactly`, `and` and the comma, which are tried
- * first wherever a token starts. They are whole words, so `non-tuner`,
+ * counts, `at most`, `no`, `exactly`, `then`, `and` and the comma, which are
+ * tried first wherever a token starts. They are whole words, so `non-tuner`,
  * `normal` and a name in brackets or quotes are never touched; `or` stays the
  * description lexer's,
  * and which of the two "or"s one is is the parser's call. Case-insensitive;

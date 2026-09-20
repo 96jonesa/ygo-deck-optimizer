@@ -1,4 +1,4 @@
-import type { Expr } from '../../src/core/criteria/ast';
+import { type Expr, MAX_SIXTH_SLOTS, slotsOf } from '../../src/core/criteria/ast';
 import type { Description } from '../../src/core/desc/ast';
 import type { Rng } from './prng';
 
@@ -13,6 +13,38 @@ export interface GenExprOptions {
   limitChance: number;
   /** How often a requirement is a RANGE, `a-b×`; 0 by default, so old callers generate what they did. */
   rangeChance?: number;
+  /**
+   * How often the WHOLE criterion is split across the five cards opened on and
+   * the one drawn; 0 by default, so a generator that never splits consumes no
+   * draw and every problem the older suites pinned stays the problem it was.
+   */
+  splitChance?: number;
+}
+
+/**
+ * A criterion for the SIXTH CARD: it is one card, so at most one requirement
+ * — `slotsOf` is held to `MAX_SIXTH_SLOTS` here rather than generate-and-reject
+ * — with any number of limits beside it, and `or` between whole branches.
+ */
+function genSixthPart(rng: Rng, options: GenExprOptions): Expr {
+  const limit = (): Expr => ({
+    op: 'atMost',
+    n: rng.pick([0, 0, 0, 1]),
+    desc: options.desc(rng),
+  });
+  const branch = (): Expr => {
+    const terms: Expr[] = [
+      rng.chance(options.limitChance) ? limit() : { op: 'req', n: 1, desc: options.desc(rng) },
+    ];
+    while (rng.chance(0.3)) terms.push(limit());
+    return terms.length === 1 ? terms[0]! : { op: 'and', args: terms };
+  };
+  const branches = [branch()];
+  while (rng.chance(0.25)) branches.push(branch());
+  const sixth: Expr = branches.length === 1 ? branches[0]! : { op: 'or', args: branches };
+  if (slotsOf(sixth) > MAX_SIXTH_SLOTS)
+    throw new Error(`the generator asked ${slotsOf(sixth)} cards of the sixth card`);
+  return sixth;
 }
 
 function genLeaf(rng: Rng, options: GenExprOptions): Expr {
@@ -50,6 +82,15 @@ function genNode(rng: Rng, options: GenExprOptions, depth: number, parent?: 'and
  * at every depth, and descriptions repeat as often as `options.desc` repeats.
  */
 export function genExpr(rng: Rng, options: GenExprOptions): Expr {
+  const splitChance = options.splitChance ?? 0;
+  if (splitChance > 0 && rng.chance(splitChance)) {
+    const sixth = genSixthPart(rng, options);
+    // A fifth of them leave the opening five unasked about, which is the
+    // `then 1x [Ash Blossom & Joyous Spring]` form.
+    return rng.chance(0.2)
+      ? { op: 'split', sixth }
+      : { op: 'split', five: genNode(rng, options, 0), sixth };
+  }
   return genNode(rng, options, 0);
 }
 

@@ -1,5 +1,10 @@
-import type { CompiledCriterion, CompiledRequirement, Problem } from '../../src/core/model/problem';
-import type { MatchProblem } from '../../src/core/prob/montecarlo';
+import type {
+  CompiledCriterion,
+  CompiledRequirement,
+  Problem,
+  SixthCard,
+} from '../../src/core/model/problem';
+import type { MatchCounted, MatchProblem, MatchRange } from '../../src/core/prob/montecarlo';
 
 /**
  * A `MatchProblem` as the exact engine's `Problem`, WITHOUT class merging —
@@ -39,34 +44,47 @@ export function problemFromMatrix(match: MatchProblem, handSizes: readonly numbe
     return mask >>> 0;
   };
 
+  // A hand DRAWS its last card exactly where some alternative names it, which
+  // is the rule `compileProblem` follows — written out again here rather than
+  // borrowed, since this helper is what the engine is checked against.
+  const drawn = match.flat.some(({ sixth }) => sixth !== undefined);
+
   const problem: Problem = {
     deckSize: match.deckSize,
-    handSizes: handSizes.map((H) => ({ H, weight: 1 })),
+    handSizes: handSizes.map((H) => (drawn ? { H, weight: 1, drawn: true } : { H, weight: 1 })),
     classes: lineOfClass.map((line) => ({
       lineIds: line === null ? [] : [line === remainderLine ? 'remainder' : `line${line}`],
       min: 0,
       max: line === null ? 0 : match.deckSize,
     })),
-    criteria: match.flat.map(({ reqs, limits }): CompiledCriterion => {
+    criteria: match.flat.map(({ reqs, limits, sixth }): CompiledCriterion => {
       // Built here rather than by `compileCriterion`, so that a differential
       // test owes nothing to the code it is checking: a ceiling is kept exactly
       // as written, with none of compile's dropping.
-      const compiled = reqs.map(
-        ({ n, max, desc }): CompiledRequirement => ({
-          mask: maskOf(desc),
-          min: n,
-          max: max ?? null,
-        }),
-      );
-      const criterion: CompiledCriterion = {
-        slots: compiled.flatMap(({ mask, min }) => new Array<number>(min).fill(mask)),
-        limits: limits.map(({ n, desc }) => ({ mask: maskOf(desc), n })),
+      const window = (side: {
+        reqs: readonly MatchRange[];
+        limits: readonly MatchCounted[];
+      }): SixthCard => {
+        const compiled = side.reqs.map(
+          ({ n, max, desc }): CompiledRequirement => ({
+            mask: maskOf(desc),
+            min: n,
+            max: max ?? null,
+          }),
+        );
+        const part: SixthCard = {
+          slots: compiled.flatMap(({ mask, min }) => new Array<number>(min).fill(mask)),
+          limits: side.limits.map(({ n, desc }) => ({ mask: maskOf(desc), n })),
+        };
+        // `validateProblem` refuses a ceiling no class can reach, and a hand
+        // never holds a card of such a class anyway: an unreachable ceiling is
+        // the same as none.
+        if (compiled.some(({ mask, max }) => max !== null && mask !== 0))
+          part.reqs = compiled.map((req) => (req.mask === 0 ? { ...req, max: null } : req));
+        return part;
       };
-      // `validateProblem` refuses a ceiling no class can reach, and a hand
-      // never holds a card of such a class anyway: an unreachable ceiling is
-      // the same as none.
-      if (compiled.some(({ mask, max }) => max !== null && mask !== 0))
-        criterion.reqs = compiled.map((req) => (req.mask === 0 ? { ...req, max: null } : req));
+      const criterion: CompiledCriterion = window({ reqs, limits });
+      if (sixth !== undefined) criterion.sixth = window(sixth);
       return criterion;
     }),
   };

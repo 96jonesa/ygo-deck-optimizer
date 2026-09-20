@@ -1,6 +1,6 @@
 import type { Description } from '../desc/ast';
 import { validateDescription } from '../desc/validate';
-import { canonicalizeExpr, type Expr, MAX_COUNT } from './ast';
+import { canonicalizeExpr, type Expr, MAX_COUNT, MAX_SIXTH_SLOTS, slotsOf } from './ast';
 
 // Checking a criterion AST that came from outside (TDD §14) — the `expr` beside
 // a criterion's text, as `validateDescription` checks the `desc` beside a
@@ -89,9 +89,28 @@ class ExprValidator {
         if (n === undefined || desc === undefined) return undefined;
         return max === undefined ? { op: 'req', n, desc } : { op: 'req', n, max, desc };
       }
+      case 'split': {
+        // The root and nowhere else: a hand comes in two pieces, and a `split`
+        // under an `and` would be asking which five of which five.
+        if (depth > 0)
+          return this.fail(
+            `${where}: \`split\` is the whole of a criterion — the five cards you open on, then the one you draw — and cannot stand inside \`and\`, \`or\` or another \`split\``,
+          );
+        const sixth = this.expr(`${where}.sixth`, value.sixth, depth + 1);
+        const five =
+          value.five === undefined ? undefined : this.expr(`${where}.five`, value.five, depth + 1);
+        if (sixth === undefined || (value.five !== undefined && five === undefined))
+          return undefined;
+        const slots = slotsOf(sixth);
+        if (slots > MAX_SIXTH_SLOTS)
+          return this.fail(
+            `${where}.sixth: the sixth card is one card, and this asks ${slots} of it`,
+          );
+        return five === undefined ? { op: 'split', sixth } : { op: 'split', five, sixth };
+      }
       default:
         return this.fail(
-          `${where}: \`op\` must be "and", "or", "req" or "atMost", not ${show(value.op)}`,
+          `${where}: \`op\` must be "and", "or", "req", "atMost" or "split", not ${show(value.op)}`,
         );
     }
   }

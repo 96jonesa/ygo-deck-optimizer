@@ -327,3 +327,116 @@ describe('successSet with weighted criteria', () => {
     expect(unweighted.count).toBe(2);
   });
 });
+
+/**
+ * The sixth card (PRD §5.6). The enumeration does not change: the same
+ * compositions of `H` cards, stored with what all of their OUTCOMES come to.
+ */
+describe('successSet with the sixth card drawn', () => {
+  const drawnOf = (classCount: number, criteria: CompiledCriterion[], H = 2): Problem => ({
+    ...problemOf(classCount, criteria),
+    handSizes: [{ H, weight: 1, drawn: true }],
+  });
+
+  it('reports the outcomes per hand and the ceilings of both sums', () => {
+    const set = successSet(
+      drawnOf(3, [{ slots: [A], limits: [], sixth: { slots: [B], limits: [] } }]),
+      2,
+    );
+    expect(set).toMatchObject({ H: 2, outcomes: 2, maxWeight: 1, maxValue: 2, maxPlain: 2 });
+  });
+
+  it('is 1 outcome per hand where the hand draws none, as it always was', () => {
+    const set = successSet(problemOf(3, [{ slots: [A], limits: [] }]), 2);
+    expect(set).toMatchObject({ outcomes: 1, maxValue: 1, maxPlain: 1 });
+  });
+
+  it('stores what all the outcomes of a composition come to', () => {
+    // `1x A then 1x B` at a hand of two: the A is opened on and the B drawn.
+    const set = successSet(
+      drawnOf(3, [{ slots: [A], limits: [], sixth: { slots: [B], limits: [] } }]),
+      2,
+      { storage: 'successes' },
+    );
+    // Only [blank 0, A 1, B 1] succeeds, and only one of its two outcomes does.
+    expect(rowsOf(set)).toEqual([[0, 1, 1]]);
+    expect([...set.values]).toEqual([1]);
+    expect([...set.plains]).toEqual([1]);
+    expect(set.successes).toBe(1);
+  });
+
+  it('counts an outcome per card that could have been the one drawn', () => {
+    // `then 1x B`: nothing is asked of the cards opened on, so a composition
+    // holding `k` cards of B is worth `k` — one outcome per B drawn.
+    const set = successSet(
+      drawnOf(3, [{ slots: [], limits: [], sixth: { slots: [B], limits: [] } }]),
+      2,
+      {
+        storage: 'successes',
+      },
+    );
+    const worth = new Map(rowsOf(set).map((row, at) => [row.join(','), set.values[at]!]));
+    expect(worth.get('1,0,1')).toBe(1);
+    expect(worth.get('0,1,1')).toBe(1);
+    expect(worth.get('0,0,2')).toBe(2);
+    expect(worth.has('2,0,0')).toBe(false);
+  });
+
+  it('carries a criterion weight per outcome, and the plain count beside it', () => {
+    const set = successSet(
+      drawnOf(3, [{ slots: [], limits: [], sixth: { slots: [B], limits: [] }, weight: 5 }]),
+      2,
+      { storage: 'successes' },
+    );
+    const rows = new Map(rowsOf(set).map((row, at) => [row.join(','), at]));
+    expect(set.maxValue).toBe(10);
+    expect(set.maxPlain).toBe(2);
+    expect(set.values[rows.get('0,0,2')!]).toBe(10);
+    expect(set.plains[rows.get('0,0,2')!]).toBe(2);
+    expect(set.values[rows.get('1,0,1')!]).toBe(5);
+    expect(set.plains[rows.get('1,0,1')!]).toBe(1);
+  });
+
+  it('stores the complement as what a row falls short of, on both sums', () => {
+    const problem = drawnOf(3, [{ slots: [], limits: [], sixth: { slots: [B], limits: [] } }]);
+    const direct = successSet(problem, 2, { storage: 'successes' });
+    const flipped = successSet(problem, 2, { storage: 'complement' });
+    const value = (set: SuccessSet, row: string) => {
+      const at = rowsOf(set).findIndex((entry) => entry.join(',') === row);
+      return at < 0 ? 0 : set.values[at]!;
+    };
+    const plain = (set: SuccessSet, row: string) => {
+      const at = rowsOf(set).findIndex((entry) => entry.join(',') === row);
+      return at < 0 ? 0 : set.plains[at]!;
+    };
+    // Every composition, and both stores, must answer the ceiling between them.
+    expect(direct.maxValue).toBe(2);
+    expect(direct.maxPlain).toBe(2);
+    for (const h of compositions(3, 2)) {
+      const row = h.join(',');
+      expect(value(direct, row) + value(flipped, row), row).toBe(direct.maxValue);
+      expect(plain(direct, row) + plain(flipped, row), row).toBe(direct.maxPlain);
+    }
+  });
+
+  it('holds the plain count equal to the value whenever nothing is weighted', () => {
+    const rng = seededRng(0x51c5e7);
+    for (let seed = 0; seed < 40; seed++) {
+      const { problem, H } = genClassProblem(seededRng(0x51c600 + seed), {
+        classes: [2, 5],
+        deckSize: [40, 40],
+        handSize: [2, 5],
+        slots: [0, 3],
+        criteria: [1, 3],
+      });
+      // Half the criteria ask about the card drawn, over one class.
+      problem.criteria.forEach((criterion, at) => {
+        if (at % 2 === 0)
+          criterion.sixth = { slots: [1 << rng.int(1, problem.classes.length - 1)], limits: [] };
+      });
+      problem.handSizes = [{ H, weight: 1, drawn: true }];
+      const set = successSet(problem, H);
+      expect([...set.values], `seed ${seed}`).toEqual([...set.plains]);
+    }
+  });
+});

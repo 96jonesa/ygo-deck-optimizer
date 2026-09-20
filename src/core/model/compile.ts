@@ -18,6 +18,7 @@ import {
   type HandSize,
   MAX_CLASSES,
   type Problem,
+  type SixthCard,
   validateProblem,
 } from './problem';
 import { countSums, type IntRange } from './ranges';
@@ -27,6 +28,7 @@ import {
   NAMED_CARD_MAX,
   partsOfMode,
   type RunMode,
+  splitNeedsSecond,
   type Template,
   type TemplateGroup,
   weightOf,
@@ -81,9 +83,19 @@ export interface ResolvedRange extends ResolvedCounted {
   max?: number;
 }
 
-export interface ResolvedFlat {
+/** One side of a resolved alternative: requirements and limits over columns. */
+export interface ResolvedSide {
   reqs: ResolvedRange[];
   limits: ResolvedCounted[];
+}
+
+export interface ResolvedFlat extends ResolvedSide {
+  /**
+   * The SIXTH CARD's own part (PRD §5.6). Present: `reqs` and `limits` are then
+   * about the five cards opened on, and this about the one drawn. Absent: the
+   * alternative is judged over the whole hand, as every alternative was before.
+   */
+  sixth?: ResolvedSide;
   /**
    * What a hand meeting this alternative is WORTH (PRD §5.6). Absent is 1, and
    * is what every alternative of a template that does not weight its criteria
@@ -167,14 +179,19 @@ export function indexFlat(
   /** What alternative `at` is worth; the default leaves every one unweighted. */
   weightOf: (at: number) => number | undefined = () => undefined,
 ): ResolvedFlat[] {
-  return flat.map(({ reqs, limits }, at) => {
-    const indexed: ResolvedFlat = {
-      reqs: reqs.map(({ n, max, desc }) => {
-        const column = columnOf(desc, 'inRequirement');
-        return max === undefined ? { n, desc: column } : { n, max, desc: column };
-      }),
-      limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc, 'inLimit') })),
-    };
+  const side = ({ reqs, limits }: Pick<FlatCriterion, 'reqs' | 'limits'>): ResolvedSide => ({
+    reqs: reqs.map(({ n, max, desc }) => {
+      const column = columnOf(desc, 'inRequirement');
+      return max === undefined ? { n, desc: column } : { n, max, desc: column };
+    }),
+    limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc, 'inLimit') })),
+  });
+  return flat.map(({ reqs, limits, sixth }, at) => {
+    const indexed: ResolvedFlat = side({ reqs, limits });
+    // The sixth card's descriptions are columns of the SAME match matrix: a
+    // class has to tell apart every description any criterion mentions,
+    // wherever in the criterion it stands.
+    if (sixth !== undefined) indexed.sixth = side(sixth);
     const weight = weightOf(at);
     // Left out when it is 1, so an unweighted template is byte for byte what it was.
     if (weight !== undefined && weight !== 1) indexed.weight = weight;
@@ -319,6 +336,8 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
     }
     if (meant.stale !== null) warnings.push(`criterion ${JSON.stringify(id)}: ${meant.stale}`);
     const when = whenOf(criterion);
+    if (meant.expr.op === 'split' && when !== 'second')
+      errors.push(`criterion ${JSON.stringify(id)}: ${splitNeedsSecond(when)}`);
     const weight = weights[at]!;
     parsedCriteria.push(
       name === undefined
@@ -479,6 +498,8 @@ export interface FlatAlternative {
   limits: readonly ResolvedCounted[];
   /** What meeting it is worth; absent is 1 (PRD §5.6). */
   weight?: number;
+  /** The sixth card's own part; absent is a criterion judged over the whole hand. */
+  sixth?: { reqs: readonly ResolvedRange[]; limits: readonly ResolvedCounted[] };
 }
 
 /** A member line of a class: its index in `CompileInput.lines`, and its range with `max: null` clamped. */
@@ -514,6 +535,8 @@ export interface DroppedLimit {
   desc: number;
   n: number;
   reason: DroppedReason;
+  /** Whether it was the SIXTH CARD's limit, where one card is the whole hand. */
+  sixth?: true;
 }
 
 export type DroppedReason = 'counts-nothing' | 'never-binds';
@@ -531,6 +554,8 @@ export interface DroppedCeiling {
   n: number;
   max: number;
   reason: DroppedReason;
+  /** Whether it was the SIXTH CARD's ceiling, where one card is the whole hand. */
+  sixth?: true;
 }
 
 /** What one flat alternative compiled to, and the ceilings and limits that fell away doing it. */
@@ -555,33 +580,55 @@ interface CompiledAlternative {
  * - a limit becomes a mask, dropped on the same two grounds.
  */
 export function compileCriterion(
-  { reqs, limits, weight }: FlatAlternative,
+  { reqs, limits, weight, sixth }: FlatAlternative,
   maskOf: (desc: number) => number,
   largestHand: number,
 ): CompiledAlternative {
   const droppedLimits: Omit<DroppedLimit, 'criterion'>[] = [];
   const droppedCeilings: Omit<DroppedCeiling, 'criterion'>[] = [];
-  const compiled = reqs.map(({ n, max, desc }): CompiledRequirement => {
-    const mask = maskOf(desc);
-    if (max === undefined) return { mask, min: n, max: null };
-    const reason = mask === 0 ? 'counts-nothing' : max >= largestHand ? 'never-binds' : undefined;
-    if (reason === undefined) return { mask, min: n, max };
-    droppedCeilings.push({ desc, n, max, reason });
-    return { mask, min: n, max: null };
-  });
-  const criterion: CompiledCriterion = {
-    slots: compiled.flatMap(({ mask, min }) => new Array<number>(min).fill(mask)),
-    limits: limits.flatMap(({ n, desc }) => {
+  /**
+   * One window: the whole hand, the five cards opened on, or the card drawn.
+   * `room` is how many cards it holds, which is what decides whether a ceiling
+   * or a limit can ever bind — ONE for the sixth card, so `at most 1x trap`
+   * there is dropped while `no trap` is kept and means what it says.
+   */
+  const window = (
+    side: { reqs: readonly ResolvedRange[]; limits: readonly ResolvedCounted[] },
+    room: number,
+    /** Stamped on what this window drops, so a readout can say which half it was. */
+    from: { sixth?: true },
+  ): SixthCard => {
+    const compiled = side.reqs.map(({ n, max, desc }): CompiledRequirement => {
       const mask = maskOf(desc);
-      const reason = mask === 0 ? 'counts-nothing' : n >= largestHand ? 'never-binds' : undefined;
-      if (reason === undefined) return [{ mask, n }];
-      droppedLimits.push({ desc, n, reason });
-      return [];
-    }),
+      if (max === undefined) return { mask, min: n, max: null };
+      const reason = mask === 0 ? 'counts-nothing' : max >= room ? 'never-binds' : undefined;
+      if (reason === undefined) return { mask, min: n, max };
+      droppedCeilings.push({ desc, n, max, reason, ...from });
+      return { mask, min: n, max: null };
+    });
+    const part: SixthCard = {
+      slots: compiled.flatMap(({ mask, min }) => new Array<number>(min).fill(mask)),
+      limits: side.limits.flatMap(({ n, desc }) => {
+        const mask = maskOf(desc);
+        const reason = mask === 0 ? 'counts-nothing' : n >= room ? 'never-binds' : undefined;
+        if (reason === undefined) return [{ mask, n }];
+        droppedLimits.push({ desc, n, reason, ...from });
+        return [];
+      }),
+    };
+    // Left out when nothing is left to say: `slots` alone is the criterion the
+    // language had before ranges, and the matcher's old path judges it.
+    if (compiled.some(({ max }) => max !== null)) part.reqs = compiled;
+    return part;
   };
-  // Left out when nothing is left to say: `slots` alone is the criterion the
-  // language had before ranges, and the matcher's old path judges it.
-  if (compiled.some(({ max }) => max !== null)) criterion.reqs = compiled;
+
+  // A split criterion's own requirements are judged over the five cards opened
+  // on, one card fewer than the hand holds.
+  const criterion: CompiledCriterion =
+    sixth === undefined
+      ? window({ reqs, limits }, largestHand, {})
+      : window({ reqs, limits }, largestHand - 1, {});
+  if (sixth !== undefined) criterion.sixth = window(sixth, 1, { sixth: true });
   // Left out at 1 for the same reason: the weigher then answers exactly what
   // the matcher answered, and the success set carries the 1s it always did.
   if (weight !== undefined && weight !== 1) criterion.weight = weight;
@@ -767,11 +814,18 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
 
   const problem: Problem = {
     deckSize,
-    handSizes: handSizes.map((hand) =>
-      hand.criteria === undefined
-        ? hand
-        : { ...hand, criteria: hand.criteria.map((old) => indexOf.get(old)!) },
-    ),
+    handSizes: handSizes.map((hand) => {
+      // A hand DRAWS its last card wherever an alternative it judges asks about
+      // that card — and wherever the caller says so, which is how a criterion's
+      // own row of a breakdown ends up a fraction over the headline's
+      // denominator instead of one sixth of it.
+      const mineHere = hand.criteria ?? flat.map((_, at) => at);
+      const drawn = hand.drawn === true || mineHere.some((at) => flat[at]?.sixth !== undefined);
+      const out: HandSize = { H: hand.H, weight: hand.weight };
+      if (hand.criteria !== undefined) out.criteria = hand.criteria.map((old) => indexOf.get(old)!);
+      if (drawn) out.drawn = true;
+      return out;
+    }),
     classes: classes.map(
       ({ lines: members, min, max }): ClassInfo => ({
         lineIds: members.map((member) => member.id),
