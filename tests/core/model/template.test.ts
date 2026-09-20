@@ -1,11 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  CRITERION_WEIGHT_MAX,
   countsFor,
   handSizeForMode,
   modeOf,
   partsOfMode,
+  TEMPLATE_VERSION,
   validateTemplate,
+  weightOf,
   whenOf,
 } from '../../../src/core/model/template';
 import { motivatingTemplate } from '../../helpers/motivating';
@@ -459,5 +462,88 @@ describe('modes and criterion tags', () => {
       ]);
       expect(errorsOf({ ...withField('mode', 'first'), hand: { size: 5 } })).toEqual([]);
     });
+  });
+});
+
+/**
+ * Weighting the criteria (PRD §5.6). `weighted` and `weight` are both OPTIONAL
+ * on read — which is why `TEMPLATE_VERSION` is not bumped for them: a file
+ * written before weighting existed reads as the unweighted run it always was.
+ */
+describe('criterion weights', () => {
+  it('reads a template that says nothing about weighting as unweighted', () => {
+    const result = validateTemplate(valid());
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    expect(result.template.weighted).toBeUndefined();
+    expect(result.template.criteria[0]).not.toHaveProperty('weight');
+    expect(weightOf(result.template.criteria[0]!)).toBe(1);
+    // The SAME version: nothing here needs a migration.
+    expect(result.template.version).toBe(TEMPLATE_VERSION);
+  });
+
+  it('reads the switch and the weights when they are there', () => {
+    const json = {
+      ...withField('weighted', true),
+      criteria: [
+        { id: 'c1', text: '1x monster', weight: 5 },
+        { id: 'c2', text: '1x spell' },
+      ],
+    };
+    const result = validateTemplate(json);
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    expect(result.template.weighted).toBe(true);
+    expect(result.template.criteria.map(weightOf)).toEqual([5, 1]);
+  });
+
+  it('keeps `weighted: false` apart from saying nothing, since a file may say either', () => {
+    const result = validateTemplate(withField('weighted', false));
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    expect(result.template.weighted).toBe(false);
+  });
+
+  it('refuses a switch that is not a boolean', () => {
+    expect(errorsOf(withField('weighted', 'yes'))).toEqual([
+      '`weighted` must be true or false, not "yes"',
+    ]);
+    expect(errorsOf(withField('weighted', 1))).toEqual(['`weighted` must be true or false, not 1']);
+  });
+
+  it('refuses a weight that is not a whole number in range', () => {
+    const withWeight = (weight: unknown) => ({
+      ...valid(),
+      criteria: [{ id: 'c1', text: '1x monster', weight }],
+    });
+    expect(errorsOf(withWeight(0))).toEqual([
+      `criteria[0] ("c1"): \`weight\` is 0; a criterion is worth 1 to ${CRITERION_WEIGHT_MAX}`,
+    ]);
+    expect(errorsOf(withWeight(CRITERION_WEIGHT_MAX + 1))).toEqual([
+      `criteria[0] ("c1"): \`weight\` is ${CRITERION_WEIGHT_MAX + 1}; a criterion is worth 1 to ${CRITERION_WEIGHT_MAX}`,
+    ]);
+    expect(errorsOf(withWeight(-2))).toEqual([
+      'criteria[0] ("c1"): `weight` is -2; a count cannot be negative',
+    ]);
+    expect(errorsOf(withWeight(1.5))).toEqual([
+      'criteria[0] ("c1"): `weight` must be a whole number, not 1.5',
+    ]);
+    expect(errorsOf(withWeight('3'))).toEqual([
+      'criteria[0] ("c1"): `weight` must be a whole number, not "3"',
+    ]);
+  });
+
+  it('reads a weight even with the switch off: the switch decides whether it COUNTS', () => {
+    // A weight is kept through turning weighting off and on again, so it has to
+    // survive the file too; a broken one is a broken file either way.
+    const json = { ...valid(), criteria: [{ id: 'c1', text: '1x monster', weight: 7 }] };
+    const result = validateTemplate(json);
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    expect(result.template.weighted).toBeUndefined();
+    expect(result.template.criteria[0]!.weight).toBe(7);
+  });
+
+  it('bounds the editor far below what the engine can score exactly', () => {
+    // The engine's own bound is `floor((2^53 - 1) / C(N, H))` and is enforced by
+    // `checkWeightBound`; this one is about a field that must not accept a typo.
+    expect(CRITERION_WEIGHT_MAX).toBe(1000);
+    expect(CRITERION_WEIGHT_MAX).toBeLessThan(Number.MAX_SAFE_INTEGER / 50_063_860);
   });
 });

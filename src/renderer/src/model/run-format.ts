@@ -47,6 +47,31 @@ export function percentText(fraction: Fraction): string {
   return `${((100 * fraction.num) / fraction.den).toFixed(4)}%`;
 }
 
+/**
+ * `0.9317`: an exact fraction as an EXPECTED WEIGHT per hand — what a weighted
+ * run reports instead of a percentage (PRD §5.6). It runs from 0 to the largest
+ * weight in play, so it is not a share of anything and a `%` would be a lie.
+ * Four places, for the same reason a percentage has four.
+ */
+export function weightText(fraction: Fraction): string {
+  return (fraction.num / fraction.den).toFixed(4);
+}
+
+/**
+ * The score as the run reports it: the expected weight where the criteria are
+ * weighted, the probability as a percentage where they are not. Which of the
+ * two it is comes off the RESULT (`weighted`), never off the template on
+ * screen — a result stays put while the template is edited under it (TDD §3).
+ */
+export function scoreText(fraction: Fraction, weighted: boolean): string {
+  return weighted ? weightText(fraction) : percentText(fraction);
+}
+
+/** What a run's headline number is CALLED: enough that no reader has to guess. */
+export function scoreLabel(weighted: boolean): string {
+  return weighted ? 'expected weight per hand' : 'P(at least one criterion)';
+}
+
 /** `46,185 / 658,008`: the fraction the ranking is actually done in. */
 export function exactText({ num, den }: Fraction): string {
   return `${formatCount(num)} / ${formatCount(den)}`;
@@ -121,8 +146,12 @@ export interface ScoreLine {
   label: string;
   /** The hand size, for a test or a tooltip that wants the number itself. */
   hand: number;
-  percent: string;
+  /** The score this hand contributes, as shown: a percentage, or an expected weight. */
+  value: string;
   exact: string;
+  /** This hand's P(at least one criterion); the same number as `value` unless the run is weighted. */
+  successPercent: string;
+  successExact: string;
 }
 
 /**
@@ -135,15 +164,20 @@ export interface ScoreLine {
  * beside them is the run's own exact `blend` — never an average worked out
  * here (TDD §3): nothing in the renderer computes a probability.
  */
-export function partLines(score: BlendScore): ScoreLine[] {
+export function partLines(score: BlendScore, weighted = false): ScoreLine[] {
   if (score.parts.length < 2) return [];
   const even = score.parts.every((part) => part.weight === score.parts[0]!.weight);
-  return score.parts.map((part) => ({
-    label: `going ${part.H === 5 ? 'first' : 'second'}${even ? '' : ` × ${part.weight}`}`,
-    hand: part.H,
-    percent: percentText(part),
-    exact: exactText(part),
-  }));
+  return score.parts.map((part) => {
+    const success = { num: part.successNum, den: part.den };
+    return {
+      label: `going ${part.H === 5 ? 'first' : 'second'}${even ? '' : ` × ${part.weight}`}`,
+      hand: part.H,
+      value: scoreText(part, weighted),
+      exact: exactText(part),
+      successPercent: percentText(success),
+      successExact: exactText(success),
+    };
+  });
 }
 
 export interface TopRow {
@@ -153,9 +187,16 @@ export interface TopRow {
   rank: number;
   /** How many kept rows hold this same exact score; 1 when it stands alone. */
   tiedWith: number;
-  /** The score the row is RANKED by: the average, when there are two hands. */
-  percent: string;
+  /**
+   * The score the row is RANKED by, as shown: the average when there are two
+   * hands, and an expected weight rather than a percentage when the criteria
+   * are weighted.
+   */
+  value: string;
   exact: string;
+  /** P(at least one criterion) for the row; the same as `value` unless the run is weighted. */
+  successPercent: string;
+  successExact: string;
   /** Each hand on its own; empty for a run of one hand. */
   parts: ScoreLine[];
   /** One deck behind the row: a count per line, in the order of `result.lines`. */
@@ -184,9 +225,11 @@ export function topRows(result: RunResult, rows: number): TopRow[] {
     key: vector.classTotals.join('-'),
     rank: (firstAt.get(vector.blend.num) ?? at) + 1,
     tiedWith: tied.get(vector.blend.num) ?? 1,
-    percent: percentText(vector.blend),
+    value: scoreText(vector.blend, result.weighted),
     exact: exactText(vector.blend),
-    parts: partLines(vector.score),
+    successPercent: percentText(vector.success),
+    successExact: exactText(vector.success),
+    parts: partLines(vector.score, result.weighted),
     example: result.rankedRatios[at]?.example ?? [],
     rawRatios: formatCount(vector.rawRatios),
   }));

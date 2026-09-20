@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { CompiledCriterion, Problem } from '../../../src/core/model/problem';
-import { compileMatcher, handSucceeds } from '../../../src/core/prob/matcher';
+import { compileMatcher, compileWeigher, handSucceeds } from '../../../src/core/prob/matcher';
 import { createJudge } from '../../../src/core/prob/montecarlo';
 import { same } from '../../helpers/assert';
 import { compositions } from '../../helpers/combinatorics';
 import { satisfiesAnyFlat } from '../../helpers/criteria-oracle';
 import { genClassProblem } from '../../helpers/gen-class-problem';
 import { fillsOf, hasRange, smallProblems, smallRangedProblems } from '../../helpers/gen-problem';
-import { bruteForceMeets, bruteForceSucceeds } from '../../helpers/matcher-oracle';
+import {
+  bruteForceMeets,
+  bruteForceSucceeds,
+  bruteForceWeight,
+} from '../../helpers/matcher-oracle';
 import { seededRng } from '../../helpers/prng';
 import { handOfComposition, problemFromMatrix } from '../../helpers/problem-from-matrix';
 
@@ -401,5 +405,103 @@ describe("Hall's condition against brute-force assignment, hand by hand", () => 
       }
     }
     expect({ compared, feasible }).toEqual({ compared: 18_573, feasible: 3580 });
+  });
+});
+
+/**
+ * Weighted criteria (PRD §5.6): what a hand is WORTH, rather than whether it
+ * succeeds. The engine sorts the criteria by weight and stops at the first one
+ * met; the oracle asks every criterion and takes the maximum, so the sort is
+ * exactly what is under test.
+ */
+describe('compileWeigher', () => {
+  /** Two criteria one hand can meet at once: the heavier is what it is worth. */
+  const BOTH: CompiledCriterion[] = [
+    { slots: [FILLS_X], limits: [], weight: 1 },
+    { slots: [FILLS_Y], limits: [], weight: 5 },
+  ];
+
+  it('is worth the HIGHEST weight of the criteria met, never their sum', () => {
+    const weigh = compileWeigher(problemOf(BOTH));
+    // A hand of one Z meets both — Z fills `x` and `y` — and is worth 5, not 6.
+    expect(weigh([2, 0, 0, 1], 3)).toBe(5);
+    expect(weigh([1, 1, 1, 0], 3)).toBe(5);
+    expect(weigh([2, 1, 0, 0], 3)).toBe(1);
+    expect(weigh([2, 0, 1, 0], 3)).toBe(5);
+    expect(weigh([3, 0, 0, 0], 3)).toBe(0);
+  });
+
+  it('does not depend on the order the criteria are written in', () => {
+    const forwards = compileWeigher(problemOf(BOTH));
+    const backwards = compileWeigher(problemOf([...BOTH].reverse()));
+    for (const h of compositions(4, 3)) expect(backwards(h, 3)).toBe(forwards(h, 3));
+  });
+
+  it('answers 1 and 0 exactly where the matcher answers true and false', () => {
+    for (const criteria of [
+      [{ slots: [FILLS_X, FILLS_X], limits: [] }],
+      [{ slots: [FILLS_X], limits: [{ mask: FILLS_Y, n: 1 }] }],
+      [
+        { slots: [FILLS_X], limits: [] },
+        { slots: [FILLS_Y], limits: [] },
+      ],
+      [{ slots: [], limits: [] }],
+      [],
+    ] satisfies CompiledCriterion[][]) {
+      const problem = problemOf(criteria);
+      const matches = compileMatcher(problem);
+      const weigh = compileWeigher(problem);
+      for (const h of compositions(4, 3)) same(weigh(h, 3), matches(h, 3) ? 1 : 0, () => ({ h }));
+    }
+  });
+
+  it('judges by one criterion alone when asked to, weight and all', () => {
+    const problem = problemOf(BOTH);
+    expect(compileWeigher(problem, { criterion: 0 })([2, 0, 0, 1], 3)).toBe(1);
+    expect(compileWeigher(problem, { criterion: 1 })([2, 0, 0, 1], 3)).toBe(5);
+    expect(compileWeigher(problem, { criterion: 1 })([2, 1, 0, 0], 3)).toBe(0);
+    expect(() => compileWeigher(problem, { criterion: 2 })).toThrow(/no criterion 2/);
+  });
+
+  it('respects a ceiling, which decides which weight a hand reaches', () => {
+    // `exactly 1x x` at weight 9, or plainly `1x x` at weight 2.
+    const criteria: CompiledCriterion[] = [
+      { slots: [FILLS_X], limits: [], reqs: [{ mask: FILLS_X, min: 1, max: 1 }], weight: 9 },
+      { slots: [FILLS_X], limits: [], weight: 2 },
+    ];
+    const weigh = compileWeigher(problemOf(criteria));
+    expect(weigh([2, 1, 0, 0], 3)).toBe(9);
+    expect(weigh([1, 2, 0, 0], 3)).toBe(2);
+    expect(weigh([3, 0, 0, 0], 3)).toBe(0);
+  });
+
+  it('agrees with the brute-force maximum on every composition of generated problems', () => {
+    let compared = 0;
+    const seen = new Set<number>();
+    for (let seed = 0; seed < 150; seed++) {
+      const rng = seededRng(97_000 + seed);
+      const { problem, H } = genClassProblem(seededRng(96_000 + seed), {
+        classes: [2, 7],
+        deckSize: [40, 40],
+        handSize: [1, 6],
+        slots: [0, 7],
+        criteria: [1, 4],
+      });
+      const weighted: Problem = {
+        ...problem,
+        criteria: problem.criteria.map((criterion) => ({ ...criterion, weight: rng.int(1, 7) })),
+      };
+      const weigh = compileWeigher(weighted);
+      for (const h of compositions(weighted.classes.length, H)) {
+        const worth = bruteForceWeight(weighted, h);
+        same(weigh(h, H), worth, () => ({ seed, h, H, problem: weighted }));
+        seen.add(worth);
+        compared++;
+      }
+    }
+    // Every weight in the range is reached, and so is 0: the agreement is not vacuous.
+    expect([...seen].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    // Pinned so the size of the check is on record; it moves only if the generator does.
+    expect(compared).toBe(18_416);
   });
 });

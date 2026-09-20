@@ -66,9 +66,14 @@ describe('resultCsv', () => {
 
   it('heads the table with the fraction, never a percentage', () => {
     expect(rows[0]).toBe(
-      ['rank', 'numerator', 'denominator', 'rawRatios', ...RESULT.lines.map((l) => l.label)].join(
-        ',',
-      ),
+      [
+        'rank',
+        'numerator',
+        'denominator',
+        'successNumerator',
+        'rawRatios',
+        ...RESULT.lines.map((l) => l.label),
+      ].join(','),
     );
     expect(csv).not.toContain('%');
   });
@@ -76,13 +81,16 @@ describe('resultCsv', () => {
   it('writes one row per kept vector, with the counts of each line', () => {
     expect(rows).toHaveLength(RESULT.ranked.length + 1);
     const best = rows[1]!.split(',');
-    expect(best.slice(0, 4)).toEqual([
+    expect(best.slice(0, 5)).toEqual([
       '1',
       String(RESULT.best.blend.num),
       String(RESULT.best.blend.den),
+      String(RESULT.best.success.num),
       String(RESULT.best.rawRatios),
     ]);
-    expect(best.slice(4).map(Number)).toEqual(RESULT.rankedRatios[0]!.example);
+    // An unweighted run ranked by the probability, so the two numerators agree.
+    expect(best[1]).toBe(best[3]);
+    expect(best.slice(5).map(Number)).toEqual(RESULT.rankedRatios[0]!.example);
   });
 
   it('gives exactly tied vectors one rank, as the table on screen does', () => {

@@ -14,11 +14,18 @@ import {
   progressLine,
   readyText,
   runStatsText,
+  scoreLabel,
+  scoreText,
   startFailureLines,
   topRows,
+  weightText,
 } from '../../../../src/renderer/src/model/run-format';
 import type { Analysis, Fraction, RunStartResult, Template } from '../../../../src/shared/types';
-import { motivatingIn, motivatingResult } from '../../../helpers/motivating-run';
+import {
+  motivatingIn,
+  motivatingResult,
+  motivatingWeighted,
+} from '../../../helpers/motivating-run';
 
 const SQL = await initSqlJs();
 const RESULT = motivatingResult(SQL);
@@ -216,8 +223,11 @@ describe('topRows', () => {
       key: '23-3-3-8-3',
       rank: 1,
       tiedWith: 1,
-      percent: '7.0189%',
+      value: '7.0189%',
       exact: '46,185 / 658,008',
+      // An unweighted run ranked by the probability, so the two agree exactly.
+      successPercent: '7.0189%',
+      successExact: '46,185 / 658,008',
       parts: [],
       example: [3, 3, 5, 3, 3, 7, 3, 13],
       rawRatios: '32',
@@ -254,7 +264,7 @@ describe('topRows', () => {
       { ...RESULT.ranked[1]!, blend: { num: 10_000_000, den: 65_800_800 } },
     ];
     const rows = topRows({ ...RESULT, ranked }, 2);
-    expect(rows.map((row) => row.percent)).toEqual(['15.1974%', '15.1974%']);
+    expect(rows.map((row) => row.value)).toEqual(['15.1974%', '15.1974%']);
     expect(rows.map((row) => row.rank)).toEqual([1, 2]);
     expect(rows.map((row) => row.tiedWith)).toEqual([1, 1]);
   });
@@ -400,8 +410,10 @@ describe('a run over both hands', () => {
       expect(lines[0]).toEqual({
         label: 'going first',
         hand: 5,
-        percent: percentText(first!),
+        value: percentText(first!),
         exact: exactText(first!),
+        successPercent: percentText(first!),
+        successExact: exactText(first!),
       });
       expect(lines[1]!.exact).toBe(exactText(second!));
       // The two really are over different denominators.
@@ -421,7 +433,7 @@ describe('a run over both hands', () => {
   describe('topRows', () => {
     it('shows the average as the score, and both hands beside it', () => {
       const [row] = topRows(AVERAGE, 1);
-      expect(row!.percent).toBe(percentText(AVERAGE.ranked[0]!.blend));
+      expect(row!.value).toBe(percentText(AVERAGE.ranked[0]!.blend));
       expect(row!.exact).toBe(exactText(AVERAGE.ranked[0]!.blend));
       expect(row!.parts).toEqual(partLines(AVERAGE.ranked[0]!.score));
       expect(row!.parts).toHaveLength(2);
@@ -467,5 +479,49 @@ describe('a run over both hands', () => {
     // Untagged, both parts count it: the same run, all three tags reached.
     const both = motivatingResult(SQL, motivatingIn('average')).breakdown;
     expect(both[0]!.score.parts.map((part) => part.num === 0)).toEqual([false, false]);
+  });
+});
+
+/**
+ * A weighted run on screen (PRD §5.6). The headline stops being a percentage
+ * and becomes an expected weight per hand — 0 to the largest weight, so a `%`
+ * would be a lie — and the plain probability is carried beside it rather than
+ * replaced. Which of the two a figure is comes off the RESULT, never off the
+ * template on screen (TDD §3).
+ */
+describe('a weighted run', () => {
+  /** `A, B and any monster` worth 4; `A, B and a low-Level monster` worth 1. */
+  const WEIGHTED = motivatingResult(SQL, motivatingWeighted({ c1: 4 }));
+
+  it('says which kind of number the headline is', () => {
+    expect(scoreLabel(false)).toBe('P(at least one criterion)');
+    expect(scoreLabel(true)).toBe('expected weight per hand');
+  });
+
+  it('shows an expected weight as a plain number, to four places', () => {
+    expect(weightText({ num: 46_185, den: 658_008 })).toBe('0.0702');
+    expect(weightText({ num: 3 * 658_008, den: 658_008 })).toBe('3.0000');
+    // scoreText is the one that chooses, and it chooses by the run's own flag.
+    expect(scoreText({ num: 46_185, den: 658_008 }, false)).toBe('7.0189%');
+    expect(scoreText({ num: 46_185, den: 658_008 }, true)).toBe('0.0702');
+  });
+
+  it('ranks the table by the weighted score and prints the probability beside it', () => {
+    expect(WEIGHTED.weighted).toBe(true);
+    const [row] = topRows(WEIGHTED, 1);
+    expect(row!.value).toBe(weightText(WEIGHTED.best.blend));
+    expect(row!.exact).toBe(exactText(WEIGHTED.best.blend));
+    expect(row!.successPercent).toBe(percentText(WEIGHTED.best.success));
+    // The motivating example's second criterion is subsumed by its first, so
+    // every hand that meets anything meets the heavy one: four times over.
+    expect(WEIGHTED.best.blend.num).toBe(4 * WEIGHTED.best.success.num);
+    expect(row!.value).toBe('0.2808');
+    expect(row!.successPercent).toBe('7.0189%');
+  });
+
+  it('is the unweighted readout again with the switch off', () => {
+    const off = motivatingResult(SQL, { ...motivatingWeighted({ c1: 4 }), weighted: false });
+    expect(off.weighted).toBe(false);
+    expect(topRows(off, 5)).toEqual(topRows(RESULT, 5));
   });
 });

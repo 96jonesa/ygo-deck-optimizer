@@ -27,6 +27,7 @@ import {
   withCriterion,
   withCriterionName,
   withCriterionText,
+  withCriterionWeight,
   withCriterionWhen,
   withDeckSize,
   withDescriptionLine,
@@ -45,6 +46,7 @@ import {
   withoutLine,
   withRenamedGroup,
   withSuggestedLine,
+  withWeighted,
 } from './model/template-edit';
 
 // The renderer's one store (TDD §3): what main has pushed, what the user is
@@ -144,6 +146,10 @@ export interface AppState {
   setCriterionName(id: string, name: string): void;
   /** Which hand the criterion is judged for. */
   setCriterionWhen(id: string, when: CriterionWhen): void;
+  /** What meeting the criterion is worth, when the template weights them (PRD §5.6). */
+  setCriterionWeight(id: string, weight: number): void;
+  /** Whether the criteria are weighted at all; the weights themselves are left alone either way. */
+  setWeighted(weighted: boolean): void;
   /** One place up (`by` -1) or down (`by` +1); a criterion at that end does not move. */
   moveCriterion(id: string, by: number): void;
   addGroup(name: string): void;
@@ -238,6 +244,8 @@ export function createAppStore(): AppStore {
       setCriterionText: edit(withCriterionText),
       setCriterionName: edit(withCriterionName),
       setCriterionWhen: edit(withCriterionWhen),
+      setCriterionWeight: edit(withCriterionWeight),
+      setWeighted: edit(withWeighted),
       moveCriterion: edit(withMovedCriterion),
       addGroup: edit(withGroup),
       renameGroup: edit(withRenamedGroup),

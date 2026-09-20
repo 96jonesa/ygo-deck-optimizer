@@ -248,31 +248,42 @@ export function withoutCriterion(template: Template, id: string): Template {
 }
 
 /**
+ * The criterion WITHOUT its stored AST, and with everything else untouched.
+ *
+ * Dropping the AST is the rule of TDD §14: a stored `expr` may be trusted
+ * because it always came from text that still means that, so an edit to the
+ * text takes it away. Keeping everything else is the other half of the rule,
+ * and it was got wrong here — these transforms used to rebuild the criterion
+ * out of `id`, `text` and `name`, which silently reset the `when` tag of any
+ * criterion whose text was typed into. Nothing but the parsed form goes.
+ */
+function withoutExpr(criterion: TemplateCriterion): TemplateCriterion {
+  if (criterion.expr === undefined) return criterion;
+  const { expr: _dropped, ...rest } = criterion;
+  return rest;
+}
+
+/**
  * The text of a criterion. Any AST stored beside it is dropped, since it is no
  * longer what the text says (TDD §14) — the same rule `withLineText` follows.
+ * The tag and the weight stay: neither is text, and neither is what changed.
  */
 export function withCriterionText(template: Template, id: string, text: string): Template {
-  return mapCriterion(template, id, (criterion) => {
-    const next: TemplateCriterion = { id: criterion.id, text };
-    if (criterion.name !== undefined) next.name = criterion.name;
-    return next;
-  });
+  return mapCriterion(template, id, (criterion) => ({ ...withoutExpr(criterion), text }));
 }
 
 /**
  * The criterion's own name — the example's "A, B and any monster" — which is
  * what the readouts call it instead of its id. Trimmed; cleared to nothing, the
  * field goes away rather than being stored blank, so a saved template says
- * "unnamed" the one way.
+ * "unnamed" the one way. The stored AST is KEPT: a name is not a description.
  */
 export function withCriterionName(template: Template, id: string, name: string): Template {
   const trimmed = name.trim();
   return mapCriterion(template, id, (criterion) => {
     if ((criterion.name ?? '') === trimmed) return criterion;
-    const next: TemplateCriterion = { id: criterion.id, text: criterion.text };
-    if (trimmed !== '') next.name = trimmed;
-    if (criterion.expr !== undefined) next.expr = criterion.expr;
-    return next;
+    const { name: _old, ...rest } = criterion;
+    return trimmed === '' ? rest : { ...rest, name: trimmed };
   });
 }
 
@@ -286,6 +297,36 @@ export function withCriterionWhen(template: Template, id: string, when: Criterio
     if ((criterion.when ?? 'both') === when) return criterion;
     return { ...criterion, when };
   });
+}
+
+/**
+ * What a criterion is WORTH when the template weights its criteria (PRD §5.6).
+ * The stored AST is KEPT, for the reason `withCriterionWhen` keeps it: a weight
+ * says what meeting the criterion is worth, not what it asks for, so the text
+ * and its parsed form still agree.
+ *
+ * A weight of 1 is stored as no weight at all, so that one criterion has one
+ * spelling: a template where nothing is weighted is the template it would have
+ * been, byte for byte, and the file a criterion of weight 1 is saved to is the
+ * file it was before weighting existed.
+ */
+export function withCriterionWeight(template: Template, id: string, weight: number): Template {
+  return mapCriterion(template, id, (criterion) => {
+    if ((criterion.weight ?? 1) === weight) return criterion;
+    const { weight: _old, ...rest } = criterion;
+    return weight === 1 ? rest : { ...rest, weight };
+  });
+}
+
+/**
+ * Whether the criteria are weighted at all (PRD §5.6). The per-criterion
+ * weights are LEFT ALONE either way: the switch decides whether they count, so
+ * turning it off and on again gives back exactly what was set — and turning it
+ * off gives back, exactly, the template's unweighted answer.
+ */
+export function withWeighted(template: Template, weighted: boolean): Template {
+  if ((template.weighted ?? false) === weighted) return template;
+  return { ...template, weighted };
 }
 
 /** One place up (`by` -1) or down (`by` +1); a criterion already at that end does not move. */
@@ -394,12 +435,11 @@ export function withoutGroup(template: Template, id: string): Template {
       ? { id: line.id, min: line.min, max: line.max, text: line.text }
       : line,
   );
-  const criteria = template.criteria.map((criterion) => {
-    if (criterion.expr === undefined || !exprNamesGroup(criterion.expr, id)) return criterion;
-    const next: TemplateCriterion = { id: criterion.id, text: criterion.text };
-    if (criterion.name !== undefined) next.name = criterion.name;
-    return next;
-  });
+  const criteria = template.criteria.map((criterion) =>
+    criterion.expr === undefined || !exprNamesGroup(criterion.expr, id)
+      ? criterion
+      : withoutExpr(criterion),
+  );
   return { ...template, groups, lines, criteria };
 }
 

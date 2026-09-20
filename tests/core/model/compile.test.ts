@@ -608,6 +608,7 @@ describe('compileProblem', () => {
       expect(createScorer(c.problem, 5).score([23, 3, 3, 8, 3])).toEqual({
         num: 46185,
         den: 658008,
+        successNum: 46185,
       });
     });
 
@@ -1525,5 +1526,115 @@ describe('the raw ratios behind a class vector (oracle C2)', () => {
     expect([...ids].sort()).toEqual(
       [...ranged!.ranges.map((_, line) => lineIdOf(line)), REMAINDER_ID].sort(),
     );
+  });
+});
+
+/**
+ * Weighting, from the template to the compiled problem (PRD §5.6). The switch
+ * is applied TWICE on purpose — where the weights come from, and again in
+ * `compileProblem` — so a compiled problem can never carry weights the run is
+ * not meant to read, whichever of the two a caller goes through.
+ */
+describe('weighted criteria through resolve and compile', () => {
+  const weightedTemplate = (weights: number[], weighted = true): Template => {
+    const template = templateOf(
+      [line('mon', 'monster', 0, 10), line('sp', 'spell', 0, 10)],
+      ['1x monster', '1x spell'],
+    );
+    return {
+      ...template,
+      weighted,
+      criteria: template.criteria.map((criterion, at) => ({ ...criterion, weight: weights[at] })),
+    };
+  };
+
+  it('carries each criterion its weight, and puts it on the alternatives it produced', () => {
+    const r = resolved(weightedTemplate([4, 1]));
+    expect(r.weighted).toBe(true);
+    expect(r.criteria.map((criterion) => criterion.weight)).toEqual([4, 1]);
+    // `flat` is the criteria expanded together: the heavy one's alternative
+    // carries 4, the light one's carries nothing (1 is left out).
+    const byWeight = r.flat.map((alternative) => alternative.weight);
+    expect(byWeight).toEqual([4, undefined]);
+    // A criterion's OWN `alternatives` stay unweighted: they are what the
+    // per-criterion breakdown scores, and that is a probability.
+    for (const criterion of r.criteria)
+      for (const alternative of criterion.alternatives)
+        expect(alternative).not.toHaveProperty('weight');
+  });
+
+  it('reads no weight at all with the switch off, and resolves to the template it always was', () => {
+    const off = weightedTemplate([4, 1], false);
+    const never = templateOf(
+      [line('mon', 'monster', 0, 10), line('sp', 'spell', 0, 10)],
+      ['1x monster', '1x spell'],
+    );
+    const a = resolved(off);
+    const b = resolved(never);
+    expect(a.weighted).toBe(false);
+    expect(a.criteria.map((criterion) => criterion.weight)).toEqual([1, 1]);
+    expect(a.flat).toEqual(b.flat);
+  });
+
+  /**
+   * The rule that only the shared expansion can show: `expandAll` removes
+   * duplicate alternatives ACROSS criteria, and a hand meeting the survivor
+   * meets every criterion that produced it — so it is worth the highest of
+   * their weights, not the first one's and not their sum.
+   */
+  it('gives an alternative two criteria share the HIGHEST of their weights', () => {
+    const template = templateOf(
+      [line('mon', 'monster', 0, 10)],
+      ['1x monster', '1x monster or 2x monster'],
+    );
+    const shared: Template = {
+      ...template,
+      weighted: true,
+      criteria: [
+        { ...template.criteria[0]!, weight: 2 },
+        { ...template.criteria[1]!, weight: 9 },
+      ],
+    };
+    const r = resolved(shared);
+    // `1x monster` came from both criteria; `2x monster` from the second alone.
+    expect(r.flatSources[0]).toEqual([0, 1]);
+    expect(r.flat[0]!.weight).toBe(9);
+    expect(r.flat.find((_, at) => r.flatSources[at]!.join() === '1')!.weight).toBe(9);
+    // Reversed, the answer is the same: it is a maximum, not a first or a last.
+    const flipped = resolved({
+      ...shared,
+      criteria: [
+        { ...shared.criteria[0]!, weight: 9 },
+        { ...shared.criteria[1]!, weight: 2 },
+      ],
+    });
+    expect(flipped.flat[0]!.weight).toBe(9);
+  });
+
+  it('compiles the weights onto the criteria the engine judges, and only with the switch on', () => {
+    const on = compileProblem(resolved(weightedTemplate([4, 1])));
+    if (!on.ok) throw new Error(on.errors.join('\n'));
+    expect(on.weighted).toBe(true);
+    expect(on.problem.criteria.map((criterion) => criterion.weight)).toEqual([4, undefined]);
+
+    // The same resolved template compiled with the switch off: no weight survives.
+    const off = compileProblem({ ...resolved(weightedTemplate([4, 1])), weighted: false });
+    if (!off.ok) throw new Error(off.errors.join('\n'));
+    expect(off.weighted).toBe(false);
+    expect(off.problem.criteria.every((criterion) => criterion.weight === undefined)).toBe(true);
+    // And it is the problem the unweighted template compiles to, byte for byte.
+    const never = compileProblem(resolved(weightedTemplate([1, 1], false)));
+    if (!never.ok) throw new Error(never.errors.join('\n'));
+    expect(off.problem).toEqual(never.problem);
+  });
+
+  it('refuses, as a compile error, a weight the deck and hand cannot score exactly', () => {
+    const huge = weightedTemplate([13_688_586_241, 1]);
+    // The FILE validator would never let this through; `compileProblem` is the
+    // engine's own guard, and it says no rather than rounding.
+    const result = compileProblem(resolved(huge));
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected the weight to be refused');
+    expect(result.errors.join('\n')).toMatch(/past 2\^53/);
   });
 });

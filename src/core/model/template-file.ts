@@ -10,6 +10,7 @@ import {
   type TemplateCriterion,
   type TemplateLine,
   type TemplateRemainder,
+  weightOf,
   whenOf,
 } from './template';
 
@@ -95,6 +96,14 @@ export function templateToFile(template: Template, ctx: DescContext): TemplateFi
     // the user's decision, and a file that leaves it to a default is a file
     // whose meaning changes if the default ever does.
     out.when = whenOf(criterion);
+    // The weight, on the other hand, is written only where it says something.
+    // `when`'s default is one of three choices and could be reinterpreted; a
+    // weight of 1 is the identity of a maximum, and a criterion without one is
+    // a criterion that adds nothing to the weighting. Writing it out would put
+    // `"weight": 1` on every criterion of every file for no reader's benefit —
+    // and it is kept even when `weighted` is off, so that turning the switch
+    // off and on again gives back what was set.
+    if (weightOf(criterion) !== 1) out.weight = weightOf(criterion);
     if (meant.ok) out.expr = meant.expr;
     else
       warnings.push(
@@ -130,6 +139,11 @@ export function templateToFile(template: Template, ctx: DescContext): TemplateFi
       // opening the file gives back the mode that was run (`validateTemplate`).
       hand: { size: handSizeForMode(mode) },
       mode,
+      // Written out in full, `false` included, for the reason `mode` is: it
+      // decides what the answer MEANS — a probability or an expected weight —
+      // and a file that leaves that to a default is a file whose numbers change
+      // if the default ever does.
+      weighted: template.weighted === true,
       groups: template.groups.map((group) => ({ ...group, cards: [...group.cards] })),
       lines,
       remainder,

@@ -228,3 +228,56 @@ describe('snapshotNotices', () => {
     );
   });
 });
+
+/**
+ * Weighting, as the file records it (PRD §5.6). Two different rules, and each
+ * for a reason worth stating: the SWITCH is written out always, `false`
+ * included, because it decides what the answer means; a WEIGHT is written only
+ * where it says something, because 1 is the identity of a maximum rather than a
+ * default that could be reinterpreted.
+ */
+describe('templateToFile and weighting', () => {
+  const weighted = templateOf({
+    weighted: true,
+    criteria: [
+      { id: 'k1', text: '1x monster', weight: 4 },
+      { id: 'k2', text: '1x spell' },
+    ],
+  });
+
+  it('writes the switch out in full, on or off', () => {
+    expect(templateToFile(weighted, ctxFor(weighted)).template.weighted).toBe(true);
+    const off = templateOf({ criteria: weighted.criteria });
+    expect(templateToFile(off, ctxFor(off)).template.weighted).toBe(false);
+  });
+
+  it('writes a weight only where it is not 1', () => {
+    const { template: file } = templateToFile(weighted, ctxFor(weighted));
+    expect(file.criteria[0]!.weight).toBe(4);
+    expect(file.criteria[1]).not.toHaveProperty('weight');
+  });
+
+  it('keeps the weights when the switch is off, so turning it back on restores them', () => {
+    const off = templateOf({ weighted: false, criteria: weighted.criteria });
+    const { template: file } = templateToFile(off, ctxFor(off));
+    expect(file.weighted).toBe(false);
+    expect(file.criteria[0]!.weight).toBe(4);
+  });
+
+  it('adds nothing but the switch to an unweighted template', () => {
+    // The one new field, and no `weight` anywhere: a file of a template that
+    // does not weight its criteria is the file it was, plus `"weighted": false`.
+    const plain = templateOf({ criteria: [{ id: 'k1', text: '1x monster' }] });
+    const { template: file } = templateToFile(plain, ctxFor(plain));
+    expect(Object.keys(file).filter((key) => key === 'weighted')).toEqual(['weighted']);
+    expect(file.criteria.every((criterion) => criterion.weight === undefined)).toBe(true);
+  });
+
+  it('reads back as itself, weights and all', () => {
+    const { template: file } = templateToFile(weighted, ctxFor(weighted));
+    const reread = validateTemplate(JSON.parse(JSON.stringify(file)));
+    if (!reread.ok) throw new Error(reread.errors.join('\n'));
+    expect(reread.template.weighted).toBe(true);
+    expect(reread.template.criteria.map((criterion) => criterion.weight)).toEqual([4, undefined]);
+  });
+});

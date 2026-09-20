@@ -24,6 +24,8 @@ import {
   percentText,
   progressLine,
   runStatsText,
+  scoreLabel,
+  scoreText,
   startFailureLines,
   topRows,
 } from '../model/run-format';
@@ -62,24 +64,36 @@ const COLUMN_CHARS = 16;
 
 function BestRatio({ result }: { result: RunResult }) {
   const labels = lineLabels(result);
-  const parts = partLines(result.best.score);
+  const { weighted } = result;
+  const parts = partLines(result.best.score, weighted);
   return (
     <div className="headline" data-testid="run-headline">
       <p className="headline-label">
         {result.partial ? 'Best of what was scored' : 'Best ratio'}
         <span className="dim">
           {' '}
-          — P(at least one criterion){parts.length > 0 ? ', averaged over the two hands' : ''}
+          — {scoreLabel(weighted)}
+          {parts.length > 0 ? ', averaged over the two hands' : ''}
         </span>
       </p>
       <p className="headline-value">
         <strong className="big tabular" data-testid="run-best-percent">
-          {percentText(result.best.blend)}
+          {scoreText(result.best.blend, weighted)}
         </strong>
         <span className="exact tabular" data-testid="run-best">
           {exactText(result.best.blend)} exactly
         </span>
       </p>
+      {/* Weighting replaces the headline, it does not hide the probability:
+          the chance of meeting SOME criterion is the same question it always
+          was, and it comes out of the same success set for nothing. */}
+      {weighted && (
+        <p className="headline-aside" data-testid="run-best-success">
+          <span className="dim">P(at least one criterion)</span>{' '}
+          <strong className="tabular">{percentText(result.best.success)}</strong>{' '}
+          <span className="exact tabular dim">{exactText(result.best.success)}</span>
+        </p>
+      )}
       {/* Over both hands the headline is the AVERAGE, and the two hands are
           given whole beneath it: their denominators differ — C(N,5) against
           C(N,6) — so neither fraction is the other's, and the mean is neither. */}
@@ -89,8 +103,9 @@ function BestRatio({ result }: { result: RunResult }) {
             {parts.map((part) => (
               <tr key={part.label} data-testid={`run-best-part-${part.hand}`}>
                 <th>{part.label}</th>
-                <td className="num">{part.percent}</td>
+                <td className="num">{part.value}</td>
                 <td className="num dim">{part.exact}</td>
+                {weighted && <td className="num dim">{part.successPercent}</td>}
               </tr>
             ))}
           </tbody>
@@ -163,9 +178,10 @@ function Ranked({ result }: { result: RunResult }) {
             <tr>
               <th>#</th>
               <th title={parts.length > 0 ? 'the average of the two hands' : undefined}>
-                {parts.length > 0 ? 'average' : 'P'}
+                {parts.length > 0 ? 'average' : result.weighted ? 'weight' : 'P'}
               </th>
               <th>exact</th>
+              {result.weighted && <th title="P(at least one criterion)">P</th>}
               {/* One column per hand, its percentage over its own exact
                   fraction: four columns here pushed the deck ratio — the
                   thing being chosen — off the panel entirely. */}
@@ -200,11 +216,12 @@ function Ranked({ result }: { result: RunResult }) {
                     row.rank
                   )}
                 </td>
-                <td className="num">{row.percent}</td>
+                <td className="num">{row.value}</td>
                 <td className="num">{row.exact}</td>
+                {result.weighted && <td className="num dim">{row.successPercent}</td>}
                 {row.parts.map((part) => (
                   <td key={part.hand} className="num stacked">
-                    {part.percent}
+                    {part.value}
                     <span className="dim">{part.exact}</span>
                   </td>
                 ))}
@@ -337,15 +354,26 @@ function Plateau({ result, onRun }: { result: RunResult; onRun: () => void }) {
   );
 }
 
+/**
+ * Each criterion's own PROBABILITY at the best ratio — which is what it is in a
+ * weighted run too (`breakdown`): the row answers how often the criterion is
+ * met, and a weighted score is a MAXIMUM over the criteria a hand meets, so
+ * there is no per-criterion share of it to show instead. The weight is a column
+ * beside the probability, and the total is P(any of them) — the run's own
+ * `success`, never its weighted headline, which is not of the same kind as the
+ * rows above it.
+ */
 function Breakdown({ rows, result }: { rows: BreakdownRow[]; result: RunResult }) {
-  const parts = partLines(result.best.score);
+  const { weighted } = result;
+  const parts = partLines(result.best.score, weighted);
   return (
     <table className="rows tight breakdown" data-testid="breakdown">
-      {parts.length > 0 && (
+      {(parts.length > 0 || weighted) && (
         <thead>
           <tr>
             <th />
-            <th className="num">average</th>
+            {weighted && <th className="num">weight</th>}
+            <th className="num">{parts.length > 0 ? 'average' : 'P'}</th>
             <th className="num">exact</th>
             {parts.map((part) => (
               <th key={part.hand} className="num">
@@ -359,24 +387,30 @@ function Breakdown({ rows, result }: { rows: BreakdownRow[]; result: RunResult }
         {rows.map((row) => (
           <tr key={row.id} data-testid={`breakdown-${row.id}`}>
             <th>{row.label}</th>
+            {weighted && (
+              <td className="num" data-testid={`breakdown-weight-${row.id}`}>
+                ×{row.weight}
+              </td>
+            )}
             <td className="num">{row.percent}</td>
             <td className="num dim">{row.exact}</td>
             {row.parts.map((part) => (
               <td key={part.hand} className="num stacked">
-                {part.percent}
-                <span className="dim">{part.exact}</span>
+                {part.successPercent}
+                <span className="dim">{part.successExact}</span>
               </td>
             ))}
           </tr>
         ))}
         <tr className="total" data-testid="breakdown-any">
           <th>any of them</th>
-          <td className="num">{percentText(result.best.blend)}</td>
-          <td className="num dim">{exactText(result.best.blend)}</td>
-          {partLines(result.best.score).map((part) => (
+          {weighted && <td className="num" />}
+          <td className="num">{percentText(result.best.success)}</td>
+          <td className="num dim">{exactText(result.best.success)}</td>
+          {parts.map((part) => (
             <td key={part.hand} className="num stacked">
-              {part.percent}
-              <span className="dim">{part.exact}</span>
+              {part.successPercent}
+              <span className="dim">{part.successExact}</span>
             </td>
           ))}
         </tr>
@@ -434,10 +468,10 @@ function Irrelevant({
                 className={cell.best ? 'cell best' : 'cell'}
                 title={[
                   cell.exact,
-                  ...cell.parts.map((part) => `${part.label}: ${part.exact} = ${part.percent}`),
+                  ...cell.parts.map((part) => `${part.label}: ${part.exact} = ${part.value}`),
                 ].join(' — ')}
               >
-                <span className="dim">{cell.counts}:</span> {cell.percent}
+                <span className="dim">{cell.counts}:</span> {cell.value}
               </span>
             ))}
           </p>
@@ -522,17 +556,23 @@ function RunResultReadout({
 
       <Plateau result={result} onRun={onRun} />
 
-      <Heading note="The best probability reachable with a line held at each count, everything else re-optimized. Each chart is scaled to its own line — the figures at its left are where that line's axis starts and ends, and an axis starts at zero only where it says 0.0000%.">
+      <Heading
+        note={`The best ${result.weighted ? 'weighted score' : 'probability'} reachable with a line held at each count, everything else re-optimized. Each chart is scaled to its own line — the figures at its left are where that line's axis starts and ends, and an axis starts at zero only where it says so.`}
+      >
         Copies vs odds
       </Heading>
-      <SweepCharts sweeps={result.sweeps} labels={lineLabels(result)} />
+      <SweepCharts sweeps={result.sweeps} labels={lineLabels(result)} weighted={result.weighted} />
 
       <Heading
-        note={
+        note={`${
           result.handSizes.length > 1
             ? 'Each criterion on its own, at the best ratio, in each hand. They overlap, so they do not add up — and a criterion for one hand scores 0 in the other, which halves its share of the average rather than hiding it.'
             : 'Each criterion on its own, at the best ratio. They overlap, so they do not add up.'
-        }
+        }${
+          result.weighted
+            ? ' These are probabilities: a weighted score is the highest weight a hand reaches, not a sum, so no criterion has a share of it to report.'
+            : ''
+        }`}
       >
         Per criterion
       </Heading>

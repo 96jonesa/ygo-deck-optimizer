@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CRITERION_WEIGHT_MAX as CORE_CRITERION_WEIGHT_MAX,
   CRITERION_WHENS as CORE_CRITERION_WHENS,
   DECK_SIZE_MAX as CORE_DECK_SIZE_MAX,
   DECK_SIZE_MIN as CORE_DECK_SIZE_MIN,
@@ -8,8 +9,11 @@ import {
   handSizeForMode as coreHandSizeForMode,
 } from '../../../../src/core/model/template';
 import {
+  CRITERION_WEIGHT_MAX,
+  CRITERION_WEIGHT_MIN,
   CRITERION_WHENS,
   commitDeckSize,
+  commitWeight,
   DECK_SIZE_MAX,
   DECK_SIZE_MIN,
   HAND_SIZES,
@@ -81,5 +85,33 @@ describe('isHandSize', () => {
     expect(isHandSize(4)).toBe(false);
     expect(isHandSize(7)).toBe(false);
     expect(isHandSize(0)).toBe(false);
+  });
+});
+
+/**
+ * What a criterion may be worth (PRD §5.6). The bounds are written out here as
+ * everything else in `deck-form` is — the renderer takes no code from `core`
+ * (TDD §3) — so the test that matters is that the two copies agree.
+ */
+describe('commitWeight', () => {
+  it('holds the same bounds core does', () => {
+    expect(CRITERION_WEIGHT_MAX).toBe(CORE_CRITERION_WEIGHT_MAX);
+    expect(CRITERION_WEIGHT_MIN).toBe(1);
+  });
+
+  it('reads a whole number', () => {
+    expect(commitWeight('7', 1)).toBe(7);
+    expect(commitWeight(' 12 ', 1)).toBe(12);
+  });
+
+  it('leaves the weight as it was when the field cannot be read', () => {
+    expect(commitWeight('', 4)).toBe(4);
+    expect(commitWeight('lots', 4)).toBe(4);
+    expect(commitWeight('1.5', 4)).toBe(4);
+  });
+
+  it('clamps to the bounds: a criterion worth nothing is one that is not there', () => {
+    expect(commitWeight('0', 3)).toBe(CRITERION_WEIGHT_MIN);
+    expect(commitWeight(String(CRITERION_WEIGHT_MAX + 1), 3)).toBe(CRITERION_WEIGHT_MAX);
   });
 });

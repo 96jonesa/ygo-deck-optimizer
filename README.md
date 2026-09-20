@@ -88,6 +88,19 @@ guess, along with any alternative dropped for needing more cards than a hand hol
 carry their own notices: one that adds nothing because another already covers it, one that can
 never be met, and one naming a card no line of the template has.
 
+**Not every criterion is worth the same, and you can say so.** **Weight the criteria** is one
+switch above them; with it on, each criterion carries a whole number from 1 to 1000 and a hand is
+worth the **highest** weight among the criteria it meets — never their sum, since one hand does
+one thing. The run then ranks by the **expected weight per hand** rather than by a probability,
+and the headline, the ranked table, the plateau and the sweeps all follow it. The plain chance of
+meeting *any* criterion is still reported beside it and every criterion's own probability is
+still in the per-criterion table, with its weight in a column of its own — a weighted score is a
+maximum, not a sum, so no single criterion has a share of it to report. Only the ratios matter:
+3 : 1 and 30 : 10 are the same run. Turning the switch off gives back exactly the answer the
+template had before, weights and all left where they were; `optimize --weighted` and
+`--unweighted` override it from the harness, which is how the same template gives two answers one
+command apart.
+
 Under them are the two readouts the tool exists for. **Per requirement**: the lines that fill it
 and — the point — the near misses, each with the dimension it leaves unsaid (`` `monster`:
 Level unstated ``) and a one-click **split** that adds the line which *would* count, exactly as
@@ -184,10 +197,20 @@ sample — so decks are ranked by **exact** odds (`src/core/prob`: `binomial`, `
 `success-set`, `scorer`). Whether a hand succeeds depends only on how many cards of each class
 it holds (decided by Hall's condition, no search), so the successful hand compositions are found
 once per problem and every candidate deck is then a short sum of products of binomials.
-`createScorer(problem, H).score(classTotals)` returns `{ num, den }`: two exact integers — every
-numerator is at most $`\binom{60}{6} = 50{,}063{,}860`$, far below $`2^{53}`$, so there is no
-rounding, no BigInt and no epsilon; two decks tie iff their numerators are equal (`compareScores`
-ranks a going-first / going-second blend the same way). The Monte Carlo engine below shares no code
+`createScorer(problem, H).score(classTotals)` returns `{ num, den, successNum }`: exact integers
+— every numerator is at most $`\binom{60}{6} = 50{,}063{,}860`$, far below $`2^{53}`$, so there is
+no rounding, no BigInt and no epsilon; two decks tie iff their numerators are equal
+(`compareScores` ranks a going-first / going-second blend the same way).
+
+**Weighted criteria are the same sum with a coefficient.** A composition of the success set is
+stored with what it is *worth* — the highest weight among the criteria it meets — and the scorer
+sums $`w \cdot \text{ways}`$ where it summed $`\text{ways}`$: the same enumeration, the same
+sample space, no new search. The numerator is then at most $`\max(w) \cdot \binom{N}{H}`$, so
+exactness holds up to $`\lfloor (2^{53} - 1) / \binom{N}{H} \rfloor`$ — 179,914,198 for the
+largest deck and hand there is — and `validateProblem` **throws** past that rather than answer by
+rounding. The editor stops far short, at 1000. `successNum`, the plain count of hands meeting any
+criterion, comes out of the same walk, so a weighted run reports the probability beside its score
+for nothing. The Monte Carlo engine below shares no code
 with any of this and is the cross-check: the two must agree within five standard errors on generated
 problems at real deck sizes, and the scorer must match a count of every hand of small decks exactly.
 
@@ -313,12 +336,12 @@ EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- optimize examples/m
 | --- | --- |
 | Card database … Notices | The analysis, as `analyze` prints it: what the numbers below are numbers *of* |
 | Search | Class vectors scored of the exact total (counted up front), the raw ratios they stand for, the hand sizes, and the time estimate from a per-term cost **calibrated on this machine** at startup |
-| Best ratio | `P(success) = 46,185 / 658,008 = 7.0189%`, then the ratio **in lines**: a count, or a range where a class total splits freely among its lines (`8 copies among monster, fire-bw — any split`) |
+| Best ratio | `P(success) = 46,185 / 658,008 = 7.0189%`, then the ratio **in lines**: a count, or a range where a class total splits freely among its lines (`8 copies among monster, fire-bw — any split`). Weighted, the headline is `expected weight per hand` with `P(success)` under it |
 | Ranked | The top `--top` class vectors: percentage, exact fraction, the copies of each line that matters, the blank cards, and how many raw ratios tie in that vector |
 | Plateau | How many class vectors and raw ratios are within `--delta` percentage points of the best — decided in exact integers — and the copies each line takes across them: "2 or 3 are equally fine" |
 | Irrelevant lines | Lines no requirement or limit can see. Usually every count ties (`spell (0–7)`), said in one line instead of a table; when their copies can only come at the expense of cards that matter — the remainder past a point, always — the table is shown after all |
 | Sweeps | For **every** line that matters, the best `P` with the line held at each count and everything else re-optimized, the best count starred. `--sweep <lineId>` adds that line in detail: the deck behind each count, and `P` with the other lines *held fixed* at the best ratio |
-| Per criterion | The exact probability of each criterion by itself at the best ratio |
+| Per criterion | The exact probability of each criterion by itself at the best ratio; weighted, its weight beside it, and `any of them` is P(any) rather than the weighted headline |
 
 **The three modes.** `--mode` says which run this is, overriding the template's own:
 
@@ -331,6 +354,10 @@ EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- optimize examples/m
 `--hand 5` and `--hand 6` are the older spellings of the two single modes, and `--blend 3:2` is
 the average with weights of its own — going first 60% of the time and second 40%. One of the
 three at a time.
+
+**Weighting.** `--weighted` and `--unweighted` override the template's own switch, so the same
+file gives both answers one command apart; the report then heads its columns `weight` and
+`P(success)` rather than `P`.
 
 An average is resolved at a hand of 6 and ranked on the two hands' common denominator, in exact
 integers. Its report shows **five numbers**: the average, and each hand's own probability and

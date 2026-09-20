@@ -26,7 +26,7 @@ import {
   smallProblems,
   smallRangedProblems,
 } from '../../helpers/gen-problem';
-import { referenceNumerator } from '../../helpers/matcher-oracle';
+import { referenceNumerator, referenceWeightedNumerator } from '../../helpers/matcher-oracle';
 import { type Rng, seededRng } from '../../helpers/prng';
 import { problemFromMatrix } from '../../helpers/problem-from-matrix';
 
@@ -51,6 +51,13 @@ function problemOf(
 const A = 0b010;
 const B = 0b100;
 
+/**
+ * An UNWEIGHTED score: the weighted numerator and the plain success count are
+ * one and the same number when no criterion carries a weight, which is the
+ * whole of what makes a template without weighting behave exactly as it did.
+ */
+const plain = (num: number, den: number) => ({ num, den, successNum: num });
+
 /** In BigInt, for the exact-mean checks: no float is ever the thing compared. */
 function lcmOf(a: bigint, b: bigint): bigint {
   let [x, y] = [a, b];
@@ -74,15 +81,14 @@ const MOTIVATING_AT_MAX = [23, 3, 3, 3, 8];
 describe('createScorer', () => {
   // S1 — closed-form anchors: exact equality, never a tolerance.
   it('scores three copies in forty, five drawn, as exactly 222,111 / 658,008', () => {
-    expect(createScorer(ONE_CLASS, 5).score([37, 3])).toEqual({ num: 222111, den: 658008 });
+    expect(createScorer(ONE_CLASS, 5).score([37, 3])).toEqual(plain(222111, 658008));
   });
 
   it('scores the same deck at a hand of six as 1 - C(37,6)/C(40,6)', () => {
     expect(choose(40, 6)).toBe(3838380);
-    expect(createScorer(ONE_CLASS, 6).score([37, 3])).toEqual({
-      num: 3838380 - choose(37, 6),
-      den: 3838380,
-    });
+    expect(createScorer(ONE_CLASS, 6).score([37, 3])).toEqual(
+      plain(3838380 - choose(37, 6), 3838380),
+    );
   });
 
   it('scores "at least 2 of 6" as the sum of its hypergeometric terms', () => {
@@ -90,15 +96,12 @@ describe('createScorer', () => {
     let num = 0;
     for (let drawn = 2; drawn <= 5; drawn++) num += choose(6, drawn) * choose(34, 5 - drawn);
     expect(num).toBe(15 * 5984 + 20 * 561 + 15 * 34 + 6);
-    expect(createScorer(problem, 5).score([34, 6])).toEqual({ num, den: 658008 });
+    expect(createScorer(problem, 5).score([34, 6])).toEqual(plain(num, 658008));
   });
 
   it('scores "exactly one", written with a limit, as one hypergeometric term', () => {
     const problem = problemOf(40, 2, [{ slots: [A], limits: [{ mask: A, n: 1 }] }]);
-    expect(createScorer(problem, 5).score([34, 6])).toEqual({
-      num: 6 * choose(34, 4),
-      den: 658008,
-    });
+    expect(createScorer(problem, 5).score([34, 6])).toEqual(plain(6 * choose(34, 4), 658008));
   });
 
   it('scores two classes that share a slot by inclusion and exclusion', () => {
@@ -107,17 +110,11 @@ describe('createScorer', () => {
     const twoOfEither = choose(40, 5) - choose(33, 5) - 7 * choose(33, 4);
     let allB = 0;
     for (let drawn = 2; drawn <= 4; drawn++) allB += choose(4, drawn) * choose(33, 5 - drawn);
-    expect(createScorer(problem, 5).score([33, 3, 4])).toEqual({
-      num: twoOfEither - allB,
-      den: 658008,
-    });
+    expect(createScorer(problem, 5).score([33, 3, 4])).toEqual(plain(twoOfEither - allB, 658008));
   });
 
   it('scores the motivating example at its maximum counts as exactly 46,185 / 658,008', () => {
-    expect(createScorer(MOTIVATING, 5).score(MOTIVATING_AT_MAX)).toEqual({
-      num: 46185,
-      den: 658008,
-    });
+    expect(createScorer(MOTIVATING, 5).score(MOTIVATING_AT_MAX)).toEqual(plain(46185, 658008));
     // The oracle agrees with the figure the TDD derives three other ways.
     expect(referenceNumerator(MOTIVATING, MOTIVATING_AT_MAX, 5)).toBe(46185);
   });
@@ -125,10 +122,9 @@ describe('createScorer', () => {
   it('scores any number of decks from one success set', () => {
     const scorer = createScorer(ONE_CLASS, 5);
     for (let copies = 0; copies <= 40; copies++)
-      expect(scorer.score([40 - copies, copies])).toEqual({
-        num: 658008 - choose(40 - copies, 5),
-        den: 658008,
-      });
+      expect(scorer.score([40 - copies, copies])).toEqual(
+        plain(658008 - choose(40 - copies, 5), 658008),
+      );
     // And again, in another order: no state is carried from deck to deck.
     expect(scorer.score([37, 3]).num).toBe(222111);
     expect(scorer.score([40, 0]).num).toBe(0);
@@ -152,26 +148,21 @@ describe('createScorer', () => {
   });
 
   it('scores 0 without criteria, and den with a criterion every hand meets', () => {
-    expect(createScorer(problemOf(40, 3, []), 5).score([30, 5, 5])).toEqual({
-      num: 0,
-      den: 658008,
-    });
+    expect(createScorer(problemOf(40, 3, []), 5).score([30, 5, 5])).toEqual(plain(0, 658008));
     expect(
       createScorer(problemOf(40, 3, [{ slots: [], limits: [] }]), 5).score([30, 5, 5]),
-    ).toEqual({ num: 658008, den: 658008 });
+    ).toEqual(plain(658008, 658008));
   });
 
   it('scores a deck with an EMPTY blank class, and the blank class alone', () => {
     const problem = problemOf(40, 3, [{ slots: [A], limits: [{ mask: B, n: 4 }] }]);
     // No blank cards: at least one A and not five Bs is everything but the all-B hands.
-    expect(createScorer(problem, 5).score([0, 10, 30])).toEqual({
-      num: 658008 - choose(30, 5),
-      den: 658008,
-    });
-    expect(createScorer(problemOf(40, 1, [{ slots: [], limits: [] }]), 5).score([40])).toEqual({
-      num: 658008,
-      den: 658008,
-    });
+    expect(createScorer(problem, 5).score([0, 10, 30])).toEqual(
+      plain(658008 - choose(30, 5), 658008),
+    );
+    expect(createScorer(problemOf(40, 1, [{ slots: [], limits: [] }]), 5).score([40])).toEqual(
+      plain(658008, 658008),
+    );
     expect(createScorer(problemOf(40, 1, []), 5).score([40]).num).toBe(0);
   });
 
@@ -220,8 +211,8 @@ describe('createBlendScorer', () => {
     const blend = createBlendScorer({ ...ONE_CLASS, handSizes: FIRST_OR_SECOND });
     const score = blend.score([37, 3]);
     expect(score.parts).toEqual([
-      { H: 5, weight: 1, num: 222111, den: 658008 },
-      { H: 6, weight: 1, num: 3838380 - choose(37, 6), den: 3838380 },
+      { H: 5, weight: 1, ...plain(222111, 658008) },
+      { H: 6, weight: 1, ...plain(3838380 - choose(37, 6), 3838380) },
     ]);
     expect(blend.scorers.map((scorer) => scorer.H)).toEqual([5, 6]);
   });
@@ -244,7 +235,7 @@ describe('createBlendScorer', () => {
 
   it('is a plain score when there is one hand size', () => {
     const score = createBlendScorer(MOTIVATING).score(MOTIVATING_AT_MAX);
-    expect(score.parts).toEqual([{ H: 5, weight: 1, num: 46185, den: 658008 }]);
+    expect(score.parts).toEqual([{ H: 5, weight: 1, ...plain(46185, 658008) }]);
     expect(score.pDisplay).toBeCloseTo(0.0702, 4);
   });
 
@@ -339,8 +330,8 @@ describe('createBlendScorer', () => {
       // going second only for a B, and a hand of six sees more cards.
       const parts = createBlendScorer(TWO_WAYS).score([34, 3, 3]).parts;
       expect(parts).toEqual([
-        { H: 5, weight: 1, num: 658008 - choose(37, 5), den: 658008 },
-        { H: 6, weight: 1, num: 3838380 - choose(37, 6), den: 3838380 },
+        { H: 5, weight: 1, ...plain(658008 - choose(37, 5), 658008) },
+        { H: 6, weight: 1, ...plain(3838380 - choose(37, 6), 3838380) },
       ]);
     });
 
@@ -373,7 +364,7 @@ describe('createBlendScorer', () => {
         handSizes: [TWO_WAYS.handSizes[0]!, { H: 6, weight: 1, criteria: [] }],
       };
       const score = createBlendScorer(lonely).score([34, 3, 3]);
-      expect(score.parts[1]).toEqual({ H: 6, weight: 1, num: 0, den: 3838380 });
+      expect(score.parts[1]).toEqual({ H: 6, weight: 1, ...plain(0, 3838380) });
       expect(score.pDisplay).toBeCloseTo((658008 - choose(37, 5)) / 658008 / 2, 12);
     });
 
@@ -399,7 +390,7 @@ describe('scoreBlend', () => {
     const problem = { ...MOTIVATING, handSizes: FIRST_OR_SECOND };
     const score = scoreBlend(problem, MOTIVATING_AT_MAX);
     expect(score).toEqual(createBlendScorer(problem).score(MOTIVATING_AT_MAX));
-    expect(score.parts[0]).toEqual({ H: 5, weight: 1, num: 46185, den: 658008 });
+    expect(score.parts[0]).toEqual({ H: 5, weight: 1, ...plain(46185, 658008) });
     expect(score.parts[1]!.num).toBe(referenceNumerator(problem, MOTIVATING_AT_MAX, 6));
     expect(score.parts[1]!.den).toBe(3838380);
   });
@@ -411,8 +402,7 @@ function blendOf(nums: readonly [number, number], weights = [1, 1], deckSize = 4
     parts: [5, 6].map((H, at) => ({
       H,
       weight: weights[at]!,
-      num: nums[at]!,
-      den: choose(deckSize, H),
+      ...plain(nums[at]!, choose(deckSize, H)),
     })),
     pDisplay: Number.NaN,
   };
@@ -420,7 +410,7 @@ function blendOf(nums: readonly [number, number], weights = [1, 1], deckSize = 4
 
 describe('compareScores', () => {
   const single = (num: number, den = 658008): BlendScore => ({
-    parts: [{ H: 5, weight: 1, num, den }],
+    parts: [{ H: 5, weight: 1, ...plain(num, den) }],
     pDisplay: Number.NaN,
   });
 
@@ -1104,7 +1094,7 @@ describe('properties of the exact score', () => {
     const totals = [31, ...new Array<number>(29).fill(1)];
     const scorer = createScorer(easy, 6);
     expect(scorer.den).toBe(50063860);
-    expect(scorer.score(totals)).toEqual({ num: 50063860 - choose(31, 6), den: 50063860 });
+    expect(scorer.score(totals)).toEqual(plain(50063860 - choose(31, 6), 50063860));
     // The thirtieth class twice over, and `no` anything else: both its copies and four blanks.
     const top = 2 ** 29;
     const hard = problemOf(
@@ -1117,5 +1107,234 @@ describe('properties of the exact score', () => {
     const { num, den } = createScorer(hard, 6).score(deck);
     expect(num).toBe(choose(30, 4));
     expect(Number.isSafeInteger(num) && Number.isSafeInteger(den)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S7 — weighted criteria (PRD §5.6). The score becomes the EXPECTED WEIGHT per
+// hand: a hand is worth the highest weight among the criteria it meets, and
+// the numerator is `Σ w · ways` over the same success set, the same walk and
+// the same sample space. The oracle sums the same thing in BigInt over every
+// composition, judging each by brute-force assignment.
+// ---------------------------------------------------------------------------
+
+/**
+ * Three copies of A worth 3, six copies of B worth 1, in forty cards, five
+ * drawn. Worked out by hand, and the numbers are all closed forms:
+ *
+ *     hands with an A            658,008 − C(37,5) = 222,111   → worth 3
+ *     hands with a B but no A    C(37,5) − C(31,5) = 265,986   → worth 1
+ *     Σ w · ways                 3 · 222,111 + 265,986 = 932,319
+ *     P(either)                  658,008 − C(31,5) = 488,097
+ *
+ * The LIGHTER criterion is deliberately the likelier one (six copies against
+ * three), so summing the two instead of taking the larger would give
+ * 3 · 222,111 + 488,097 = 1,046,085 — a different number, visibly.
+ */
+const WEIGHTED_AB = problemOf(40, 3, [
+  { slots: [A], limits: [], weight: 3 },
+  { slots: [B], limits: [], weight: 1 },
+]);
+/** Blank 31, A 3, B 6. */
+const WEIGHTED_AB_DECK = [31, 3, 6];
+
+describe('createScorer with weighted criteria', () => {
+  it('scores the expected weight per hand, worked out by hand', () => {
+    expect(choose(37, 5)).toBe(435897);
+    expect(choose(31, 5)).toBe(169911);
+    const scorer = createScorer(WEIGHTED_AB, 5);
+    expect(scorer.maxWeight).toBe(3);
+    expect(scorer.score(WEIGHTED_AB_DECK)).toEqual({
+      num: 3 * 222111 + 265986,
+      den: 658008,
+      successNum: 488097,
+    });
+    expect(scorer.score(WEIGHTED_AB_DECK).num).toBe(932319);
+  });
+
+  it('gives the HIGHEST weight to a hand meeting both, never the sum', () => {
+    // Summing would reach 1,046,085; every hand holding an A and a B is the gap.
+    const summed = 3 * 222111 + (658008 - choose(34, 5));
+    expect(summed).toBe(1046085);
+    expect(createScorer(WEIGHTED_AB, 5).numerator(WEIGHTED_AB_DECK)).toBeLessThan(summed);
+    expect(summed - 932319).toBe(113766);
+    // …which is exactly the hands holding both, counted the other way round.
+    const both = 658008 - choose(37, 5) - choose(34, 5) + choose(31, 5);
+    expect(both).toBe(113766);
+  });
+
+  it('is the plain probability again when every weight is 1, explicitly or by default', () => {
+    const unweighted = createScorer(
+      problemOf(40, 3, [
+        { slots: [A], limits: [] },
+        { slots: [B], limits: [] },
+      ]),
+      5,
+    );
+    const ones = createScorer(
+      problemOf(40, 3, [
+        { slots: [A], limits: [], weight: 1 },
+        { slots: [B], limits: [], weight: 1 },
+      ]),
+      5,
+    );
+    expect(ones.score(WEIGHTED_AB_DECK)).toEqual(unweighted.score(WEIGHTED_AB_DECK));
+    expect(ones.score(WEIGHTED_AB_DECK)).toEqual(plain(488097, 658008));
+    expect(ones.maxWeight).toBe(1);
+  });
+
+  it('scales the whole score when every criterion carries the SAME weight', () => {
+    const doubled = createScorer(
+      problemOf(40, 3, [
+        { slots: [A], limits: [], weight: 2 },
+        { slots: [B], limits: [], weight: 2 },
+      ]),
+      5,
+    );
+    expect(doubled.score(WEIGHTED_AB_DECK)).toEqual({
+      num: 2 * 488097,
+      den: 658008,
+      successNum: 488097,
+    });
+  });
+
+  it('never changes a numerator between the two storages', () => {
+    const kept = createScorer(WEIGHTED_AB, 5, { storage: 'successes' });
+    const complement = createScorer(WEIGHTED_AB, 5, { storage: 'complement' });
+    expect(kept.complemented).toBe(false);
+    expect(complement.complemented).toBe(true);
+    expect(complement.score(WEIGHTED_AB_DECK)).toEqual(kept.score(WEIGHTED_AB_DECK));
+  });
+
+  it('agrees with the BigInt oracle over generated problems, both storages', () => {
+    let nonDegenerate = 0;
+    let spread = 0;
+    for (let seed = 0; seed < 120; seed++) {
+      const rng = seededRng(99_000 + seed);
+      const { problem, H, totals } = genClassProblem(seededRng(98_000 + seed), CLASS_PROBLEMS);
+      const weighted: Problem = {
+        ...problem,
+        criteria: problem.criteria.map((criterion) => ({ ...criterion, weight: rng.int(1, 9) })),
+      };
+      const expected = referenceWeightedNumerator(weighted, totals, H);
+      const context = () => ({ seed, problem: weighted, totals, H });
+      for (const storage of ['successes', 'complement', 'auto'] as const) {
+        const scorer = createScorer(weighted, H, { storage });
+        const { num, den, successNum } = scorer.score(totals);
+        same(BigInt(num), expected, () => ({ ...context(), storage }));
+        expect(Number.isSafeInteger(num)).toBe(true);
+        same(num, scorer.numerator(totals), () => ({ ...context(), storage }));
+        same(successNum, referenceNumerator(weighted, totals, H), () => ({
+          ...context(),
+          storage,
+        }));
+        expect(num).toBeGreaterThanOrEqual(successNum);
+        expect(num).toBeLessThanOrEqual(scorer.maxWeight * den);
+      }
+      const weights = new Set(weighted.criteria.map(({ weight }) => weight));
+      if (weights.size > 1) spread++;
+      const { num, den } = createScorer(weighted, H).score(totals);
+      if (num > 0 && num < den) nonDegenerate++;
+    }
+    expect(spread).toBeGreaterThanOrEqual(60);
+    expect(nonDegenerate).toBeGreaterThanOrEqual(20);
+  });
+});
+
+describe('the exactness bound on a weight', () => {
+  /** The largest weight a deck of 40 and a hand of five leave below 2^53. */
+  const LARGEST = Math.floor(Number.MAX_SAFE_INTEGER / 658008);
+
+  it('is `floor((2^53 - 1) / C(N, H))`, and the boundary is where it throws', () => {
+    expect(LARGEST).toBe(13_688_586_240);
+    const at = problemOf(40, 2, [{ slots: [A], limits: [], weight: LARGEST }]);
+    expect(createScorer(at, 5).score([37, 3]).num).toBe(LARGEST * 222111);
+    expect(Number.isSafeInteger(LARGEST * 222111)).toBe(true);
+    const over = problemOf(40, 2, [{ slots: [A], limits: [], weight: LARGEST + 1 }]);
+    expect(() => createScorer(over, 5)).toThrow(/past 2\^53/);
+    expect(() => createScorer(over, 5)).toThrow(
+      /largest weight this deck and hand allow is 13688586240/,
+    );
+  });
+
+  it('is measured against the hand the deck is scored at, not the largest there is', () => {
+    // C(40,6) is bigger than C(40,5), so a blend refuses what a hand of five allows.
+    const weight = LARGEST;
+    expect(() => createScorer(problemOf(40, 2, [{ slots: [A], limits: [], weight }]), 6)).toThrow(
+      /hand of 6/,
+    );
+    expect(() =>
+      createBlendScorer(problemOf(40, 2, [{ slots: [A], limits: [], weight }], FIRST_OR_SECOND)),
+    ).toThrow(/hand of 6/);
+  });
+
+  it('refuses a weight that is not a positive whole number, rather than rounding it', () => {
+    for (const weight of [0, -1, 1.5, Number.NaN, 2 ** 53]) {
+      expect(() => createScorer(problemOf(40, 2, [{ slots: [A], limits: [], weight }]), 5)).toThrow(
+        /a weight is a positive whole number/,
+      );
+    }
+  });
+});
+
+describe('createBlendScorer with weighted criteria', () => {
+  const BLENDED = { ...WEIGHTED_AB, handSizes: FIRST_OR_SECOND };
+
+  it('carries the plain probability of every hand beside its weighted score', () => {
+    const score = createBlendScorer(BLENDED).score(WEIGHTED_AB_DECK);
+    expect(score.parts[0]).toEqual({
+      H: 5,
+      weight: 1,
+      num: 932319,
+      den: 658008,
+      successNum: 488097,
+    });
+    const six = createScorer({ ...WEIGHTED_AB, handSizes: [{ H: 6, weight: 1 }] }, 6);
+    expect(score.parts[1]).toMatchObject(six.score(WEIGHTED_AB_DECK));
+    // The display float is an EXPECTED WEIGHT, and may pass 1.
+    expect(score.pDisplay).toBeGreaterThan(1);
+  });
+
+  it('gives two keys over one denominator: the weighted rank, and the probability', () => {
+    const blend = createBlendScorer(BLENDED);
+    const score = blend.score(WEIGHTED_AB_DECK);
+    const keys = blend.keysOf(score);
+    const [five, six] = score.parts as [BlendPart, BlendPart];
+    // C(40,6) = C(40,5) · 35/6: a hand of five weighs 35, a hand of six 6.
+    expect(keys.blend).toBe(35 * five.num + 6 * six.num);
+    expect(keys.success).toBe(35 * five.successNum + 6 * six.successNum);
+    expect(blend.rankKey(WEIGHTED_AB_DECK)).toBe(keys.blend);
+    expect(blend.rankDen).toBe(2 * 6 * 3838380);
+    expect(blend.maxWeight).toBe(3);
+  });
+
+  it('ranks by the WEIGHTED numerator, so compareScores and rankKey still agree', () => {
+    const blend = createBlendScorer(BLENDED);
+    const decks: number[][] = [];
+    for (let a = 0; a <= 6; a++) for (let b = 0; b <= 6; b++) decks.push([40 - a - b, a, b]);
+    const keys = decks.map((deck) => blend.rankKey(deck));
+    const scores = decks.map((deck) => blend.score(deck));
+    decks.forEach((_, i) => {
+      expect(Number.isSafeInteger(keys[i])).toBe(true);
+      decks.forEach((_, j) => {
+        same(Math.sign(keys[i]! - keys[j]!), compareScores(scores[i]!, scores[j]!), () => ({
+          a: decks[i],
+          b: decks[j],
+        }));
+      });
+    });
+  });
+
+  it('throws from rankKey when the criterion weights would take a key past 2^53', () => {
+    // Each part's numerator is up to `maxWeight · den`, which the blend's own
+    // common denominator then multiplies: the bound is the product of all three.
+    const heavy = {
+      ...problemOf(40, 2, [{ slots: [A], limits: [], weight: 1_000_000_000 }]),
+      handSizes: FIRST_OR_SECOND,
+    };
+    const blend = createBlendScorer(heavy);
+    expect(blend.score([37, 3]).parts[0]!.num).toBe(1_000_000_000 * 222111);
+    expect(() => blend.rankKey([37, 3])).toThrow(/exact/);
+    expect(() => blend.keysOf(blend.score([37, 3]))).toThrow(/exact/);
   });
 });

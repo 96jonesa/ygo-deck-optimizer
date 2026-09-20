@@ -82,6 +82,13 @@ function csvRow(cells: readonly (string | number)[]): string {
  *
  * `rawRatios` says how many concrete line ratios the row stands for, so a row
  * is not read as the only deck that scores it.
+ *
+ * `numerator` is what the run RANKED by — the weighted score where the criteria
+ * are weighted (PRD §5.6), the probability where they are not — and
+ * `successNumerator` is always P(at least one criterion), over the same
+ * denominator. The column is there either way, equal to `numerator` in an
+ * unweighted run, so a script that reads this file does not have to know which
+ * kind of run produced it.
  */
 export function resultCsv(result: RunResult): string {
   const rankOf = new Map<number, number>();
@@ -92,6 +99,7 @@ export function resultCsv(result: RunResult): string {
     'rank',
     'numerator',
     'denominator',
+    'successNumerator',
     'rawRatios',
     ...result.lines.map((line) => line.label),
   ];
@@ -100,6 +108,7 @@ export function resultCsv(result: RunResult): string {
       rankOf.get(vector.blend.num) ?? at + 1,
       vector.blend.num,
       vector.blend.den,
+      vector.success.num,
       String(vector.rawRatios),
       ...(result.rankedRatios[at]?.example ?? result.lines.map(() => '')),
     ]),

@@ -21,6 +21,7 @@ import { type Count, countToNumber, toCount } from '../util/count';
 import {
   type CompileInput,
   compileProblem,
+  criterionWeights,
   type DroppedReason,
   groupLookupOf,
   groupMembersOf,
@@ -224,6 +225,12 @@ export interface CriterionAnalysis {
    * read there, never worked out from the template a second time.
    */
   when: CriterionWhen;
+  /**
+   * What meeting it is worth, defaulted (`weightOf`) — 1 whenever the template
+   * does not weight its criteria, so the editor shows the number that is
+   * actually in force rather than one that is being ignored.
+   */
+  weight: number;
   /** Whether the template's MODE judges it at all: false for a going-second criterion in a going-first run. */
   counted: boolean;
   parsed: ParsedText;
@@ -330,6 +337,13 @@ export interface Analysis {
   handSize: number;
   /** What the run ranks by (`modeOf`): going first, going second, or their average. */
   mode: RunMode;
+  /**
+   * Whether the run's score is a WEIGHTED score — the expected weight per hand
+   * — rather than a probability (PRD §5.6). The template's own switch, read
+   * here and nowhere else, so that every readout says the same thing about the
+   * same run.
+   */
+  weighted: boolean;
   lines: LineAnalysis[];
   remainder: RemainderAnalysis;
   groups: GroupAnalysis[];
@@ -465,6 +479,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
   const { deckSize } = template;
   const handSize = template.hand.size;
   const mode = modeOf(template);
+  const weighted = template.weighted === true;
   const parts = partsOfMode(mode);
   const members = groupMembersOf(template.groups);
   const descCtx: DescContext = {
@@ -740,12 +755,14 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
   const column = (desc: Description): Column => columns[columnAt(desc)]!;
 
   const parsedCriteria: (ParsedCriterion | null)[] = [];
-  const criteria = template.criteria.map((criterion): CriterionAnalysis => {
+  const weights = criterionWeights(template);
+  const criteria = template.criteria.map((criterion, at): CriterionAnalysis => {
     const when = whenOf(criterion);
     const out: CriterionAnalysis = {
       id: criterion.id,
       text: criterion.text,
       when,
+      weight: weights[at]!,
       counted: parts.some((part) => countsFor(when, part)),
       parsed: { ok: true, canonical: '' },
       alternatives: [],
@@ -1076,8 +1093,15 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
           max: row.isRemainder ? remainder.max : ranges[row.at]!.max,
         })),
         matrix: rows.map((_, i) => columns.map((col) => col.fills[i]!)),
-        // `compile`'s own, not a copy of it: the bounds cross this boundary once.
-        flat: indexFlat(all.flat, (desc) => columnAt(desc)),
+        // `compile`'s own, not a copy of it: the bounds — and now the weights —
+        // cross this boundary once. An alternative several criteria produced is
+        // worth the highest of theirs, the rule `resolveTemplate` applies.
+        flat: indexFlat(
+          all.flat,
+          (desc) => columnAt(desc),
+          (at) => all.sources[at]!.reduce((most, who) => Math.max(most, weights[who]!), 0),
+        ),
+        weighted,
       };
       // The same rule `handSizesForMode` states, over the analysis's own
       // indices: each part is judged against the alternatives ITS criteria
@@ -1152,6 +1176,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     deckSize,
     handSize,
     mode,
+    weighted,
     lines,
     remainder: {
       id: REMAINDER_ID,
@@ -1207,6 +1232,7 @@ export function analyze(
       deckSize: template.deckSize,
       handSize: template.hand.size,
       mode: modeOf(template),
+      weighted: template.weighted === true,
       lines: [],
       remainder: {
         id: REMAINDER_ID,

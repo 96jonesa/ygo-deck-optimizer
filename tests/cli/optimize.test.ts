@@ -514,3 +514,125 @@ describe('runOptimize', () => {
     });
   });
 });
+
+/**
+ * Weighting from the harness (PRD §5.6). The switch lives in the TEMPLATE, and
+ * the two flags override it — which is what makes "the same template, two
+ * different best decks" one command apart.
+ */
+describe('optimize and weighted criteria', () => {
+  /**
+   * Two lines competing for twenty deck slots, and two criteria wanting
+   * different amounts of them: `2x level 4 monster` is the payoff and needs two
+   * cards, `1x spell` is the fallback and needs one. Under the probability the
+   * fallback wins; weighted three to one, the payoff does.
+   */
+  const COMPETING = {
+    version: 1,
+    deckSize: 40,
+    mode: 'first',
+    hand: { size: 5 },
+    weighted: true,
+    groups: [],
+    lines: [
+      { id: 'combo', text: 'level 4 monster', min: 0, max: 20 },
+      { id: 'backup', text: 'spell', min: 0, max: 20 },
+    ],
+    remainder: { min: 20, max: null },
+    criteria: [
+      { id: 'c1', name: 'full combo', text: '2x level 4 monster', when: 'both', weight: 3 },
+      { id: 'c2', name: 'a starter', text: '1x spell', when: 'both', weight: 1 },
+    ],
+  };
+  const file = write('competing.json', JSON.stringify(COMPETING));
+
+  /** The `line copies` rows of the best-ratio section. */
+  const copies = (stdout: string) => {
+    const block = stdout.split('\n\n').find((part) => part.startsWith('Best ratio'))!;
+    return Object.fromEntries(
+      block
+        .split('\n')
+        .slice(block.split('\n').findIndex((row) => row.includes('copies')) + 1)
+        .map((row) => row.trim().split(/\s+/))
+        .filter((cells) => cells.length >= 2 && /^\d+$/.test(cells[1]!))
+        .map(([id, count]) => [id, Number(count)]),
+    );
+  };
+
+  it('finds a different best deck weighted than unweighted, and says which it reported', async () => {
+    const weighted = await run([file, '--workdir', WORKDIR, '--force', '--top', '1']);
+    const plain = await run([file, '--workdir', WORKDIR, '--force', '--top', '1', '--unweighted']);
+    expect([weighted.code, plain.code]).toEqual([EXIT_OK, EXIT_OK]);
+
+    expect(copies(weighted.stdout)).toEqual({ combo: 20, backup: 0, '(remainder)': 20 });
+    expect(copies(plain.stdout)).toEqual({ combo: 0, backup: 20, '(remainder)': 20 });
+
+    // Hands of five from forty holding two of twenty: 658,008 − 15,504 − 20·4,845.
+    const twoOfTwenty = 658_008 - 15_504 - 20 * 4845;
+    const oneOfTwenty = 658_008 - 15_504;
+    expect(weighted.stdout).toContain(
+      `expected weight per hand = ${(3 * twoOfTwenty).toLocaleString('en-US')} / 658,008 = 2.4875`,
+    );
+    expect(weighted.stdout).toContain(
+      `P(success) = ${twoOfTwenty.toLocaleString('en-US')} / 658,008 = 82.9175%`,
+    );
+    expect(plain.stdout).toContain(
+      `P(success) = ${oneOfTwenty.toLocaleString('en-US')} / 658,008 = 97.6438%`,
+    );
+    // The unweighted run says nothing about weights anywhere.
+    expect(plain.stdout).not.toContain('expected weight');
+  });
+
+  it('heads the ranked table with the weight, and keeps the probability beside it', async () => {
+    const { stdout } = await run([file, '--workdir', WORKDIR, '--force', '--top', '2']);
+    const rows = section(stdout, 'Ranked');
+    expect(rows[0]).toMatch(/weight/);
+    expect(rows[0]).toMatch(/P\(success\)/);
+  });
+
+  it('shows each criterion’s weight beside its own probability, and totals the probability', async () => {
+    const { stdout } = await run([file, '--workdir', WORKDIR, '--force', '--top', '1']);
+    const rows = section(stdout, 'Per criterion');
+    expect(rows.join('\n')).toMatch(/c1 \(full combo\)\s+×3\s+82\.9175%/);
+    expect(rows.join('\n')).toMatch(/c2 \(a starter\)\s+×1\s+0\.0000%/);
+    // `any of them` is P(any), not the weighted headline: it is of the same kind
+    // as the rows above it.
+    expect(rows.at(-1)).toMatch(/any of them\s+82\.9175%/);
+  });
+
+  it('turns weighting ON for a template that does not ask for it', async () => {
+    const off = write('competing-off.json', JSON.stringify({ ...COMPETING, weighted: false }));
+    const { stdout } = await run([off, '--workdir', WORKDIR, '--force', '--top', '1']);
+    expect(stdout).not.toContain('expected weight');
+    const { stdout: on } = await run([
+      off,
+      '--workdir',
+      WORKDIR,
+      '--force',
+      '--top',
+      '1',
+      '--weighted',
+    ]);
+    expect(on).toContain('expected weight per hand');
+    expect(copies(on)).toEqual({ combo: 20, backup: 0, '(remainder)': 20 });
+  });
+
+  it('refuses both flags at once', () => {
+    const argv = ['t.json', '--workdir', WORKDIR, '--weighted', '--unweighted'];
+    expect(parseOptimizeArgs(argv, {})).toEqual({
+      ok: false,
+      message: '--weighted and --unweighted say opposite things; give one',
+    });
+  });
+
+  it('leaves the template’s own switch alone when neither flag is given', () => {
+    const argsFor = (...flags: string[]) => {
+      const parsed = parseOptimizeArgs(['t.json', '--workdir', WORKDIR, ...flags], {});
+      if (!parsed.ok || 'help' in parsed) throw new Error('expected args');
+      return parsed.value;
+    };
+    expect(argsFor().weighted).toBeUndefined();
+    expect(argsFor('--weighted').weighted).toBe(true);
+    expect(argsFor('--unweighted').weighted).toBe(false);
+  });
+});

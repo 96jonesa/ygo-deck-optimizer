@@ -518,12 +518,14 @@ describe('TemplateService', () => {
           id: 'c1',
           name: 'A, B and any monster',
           parts: [true],
+          weight: 1,
           alternatives: resolved.resolved.criteria[0]?.alternatives,
         },
         {
           id: 'c2',
           name: 'A, B and a low-Level monster',
           parts: [true],
+          weight: 1,
           alternatives: resolved.resolved.criteria[1]?.alternatives,
         },
       ]);

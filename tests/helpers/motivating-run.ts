@@ -37,6 +37,25 @@ export function motivatingIn(
   };
 }
 
+/**
+ * The motivating example with its criteria WEIGHTED (PRD §5.6), by criterion id
+ * — the switch on, and anything unnamed left worth 1.
+ */
+export function motivatingWeighted(
+  weights: Readonly<Record<string, number>>,
+  mode: RunMode = 'first',
+): Template {
+  const template = motivatingIn(mode);
+  return {
+    ...template,
+    weighted: true,
+    criteria: template.criteria.map((criterion) => {
+      const weight = weights[criterion.id];
+      return weight === undefined ? criterion : { ...criterion, weight };
+    }),
+  };
+}
+
 /** The motivating example, compiled against the fixture cards: what main would send the worker. */
 export function motivatingRequest(
   SQL: SqlJsStatic,
@@ -52,10 +71,11 @@ export function motivatingRequest(
     handSizes: handSizesForMode(resolved.resolved, mode),
   });
   if (!compiled.ok) throw new Error(compiled.errors.join('\n'));
-  const criteria = resolved.resolved.criteria.map(({ id, name, when, alternatives }) => ({
+  const criteria = resolved.resolved.criteria.map(({ id, name, when, weight, alternatives }) => ({
     id,
     ...(name === undefined ? {} : { name }),
     alternatives,
+    weight,
     parts: parts.map((part) => countsFor(when, part)),
   }));
   return { type: 'run', runId, compiled, criteria, options, cancelFlag: cancelFlag() };

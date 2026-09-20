@@ -59,6 +59,21 @@ export function whenOf(criterion: Pick<TemplateCriterion, 'when'>): CriterionWhe
 }
 
 /**
+ * The largest weight a criterion may carry (PRD §5.6). The engine's real bound
+ * is `floor((2^53 - 1) / C(N, H))` — 179,914,198 for the largest deck and hand
+ * there is, and more for every other — and `checkWeightBound` enforces it
+ * exactly. This is the EDITOR's bound, far below it: weights are a ranking of
+ * outcomes, a hundred to one is already an extreme, and a field that accepts
+ * nine digits is a field that accepts a typo.
+ */
+export const CRITERION_WEIGHT_MAX = 1000;
+
+/** A criterion's weight; one that says nothing is worth 1 (PRD §5.6). */
+export function weightOf(criterion: Pick<TemplateCriterion, 'weight'>): number {
+  return criterion.weight ?? 1;
+}
+
+/**
  * The mode a template runs in. `mode` is what it says when it says anything;
  * a file written before modes existed says it with its hand size alone, and a
  * hand of five has always meant going first.
@@ -100,6 +115,17 @@ export interface TemplateCriterion {
   expr?: Expr;
   /** Which hand it is judged for; absent is `both` (`whenOf`). */
   when?: CriterionWhen;
+  /**
+   * What a hand meeting it is worth when the template weights its criteria
+   * (`Template.weighted`); absent is 1 (`weightOf`), and it is READ ONLY when
+   * weighting is on — a weight left on a template whose switch is off changes
+   * nothing, which is what lets the switch be turned off and on again without
+   * losing what was set.
+   *
+   * A positive whole number at most `CRITERION_WEIGHT_MAX`: the score is a sum
+   * of weights, and exactness (TDD §10.3) rests on that sum being an integer.
+   */
+  weight?: number;
 }
 
 /** The unspecified cards; `max: null` is unbounded. */
@@ -138,6 +164,19 @@ export interface Template {
   hand: { size: number };
   /** Absent: read off `hand.size` (`modeOf`), which is what every v1 file does. */
   mode?: RunMode;
+  /**
+   * Whether the criteria carry WEIGHTS (PRD §5.6). Absent is false, which is
+   * every template written before weighting existed and every template that
+   * does not want it: a hand then succeeds or does not, and the score is the
+   * probability it always was.
+   *
+   * With it on, a hand is worth the highest weight among the criteria it meets
+   * and the run ranks by the expected weight per hand. It is one switch for the
+   * template rather than a property of each criterion, because it decides what
+   * the ANSWER is — a probability or an expectation — and a template cannot
+   * report half of each.
+   */
+  weighted?: boolean;
   groups: TemplateGroup[];
   lines: TemplateLine[];
   remainder: TemplateRemainder;
@@ -323,11 +362,24 @@ class Validator {
       if (parsed.ok) expr = parsed.expr;
       else for (const message of parsed.errors) this.fail(message);
     }
+    // A weight is read whatever `weighted` says — the switch decides whether it
+    // COUNTS, not whether it may be written down — so a broken one is a broken
+    // file either way, rather than a number that starts mattering later.
+    let weight: number | undefined;
+    if (value.weight !== undefined) {
+      const given = this.count(where, 'weight', value.weight);
+      if (given !== undefined && (given < 1 || given > CRITERION_WEIGHT_MAX))
+        this.fail(
+          `${where}: \`weight\` is ${given}; a criterion is worth 1 to ${CRITERION_WEIGHT_MAX}`,
+        );
+      else weight = given;
+    }
     if (id === undefined || text === undefined) return undefined;
     const out: TemplateCriterion = { id, text };
     if (typeof value.name === 'string') out.name = value.name;
     if (expr !== undefined) out.expr = expr;
     if (when !== undefined) out.when = when;
+    if (weight !== undefined) out.weight = weight;
     return out;
   }
 
@@ -459,6 +511,15 @@ export function validateTemplate(json: unknown): ValidateResult {
     }
   }
 
+  // The weighting switch (PRD §5.6). Optional on read, and false without it, so
+  // every file written before weighting existed reads as the run it always was
+  // — which is why `TEMPLATE_VERSION` is not bumped for this.
+  let weighted: boolean | undefined;
+  if (json.weighted !== undefined) {
+    if (typeof json.weighted === 'boolean') weighted = json.weighted;
+    else v.fail(`\`weighted\` must be true or false, not ${show(json.weighted)}`);
+  }
+
   const rawGroups = v.list('groups', json.groups, false);
   const groups = rawGroups.map((group, i) => v.group(labelOf('groups', i, group), group));
   v.duplicates(
@@ -497,6 +558,7 @@ export function validateTemplate(json: unknown): ValidateResult {
     criteria: criteria as TemplateCriterion[],
   };
   if (mode !== undefined) template.mode = mode;
+  if (weighted !== undefined) template.weighted = weighted;
   if (cardSnapshot !== undefined) template.cardSnapshot = cardSnapshot;
   return { ok: true, template };
 }
