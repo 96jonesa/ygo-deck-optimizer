@@ -377,6 +377,12 @@ Steps:
 
 `compileProblem` returns the `Problem` together with what a `Problem` deliberately forgets: per-class member lines with their ranges (for expanding a class vector back to line ratios, and for the sweep tables of §11.2) and `classOfLine`. Classes are ordered blank, then by first member line in template order, remainder last. A first/second blend is compiled from a template resolved at the **larger** hand; compiling for a hand larger than the one the criteria were expanded for is refused, since its six-slot alternatives are already gone.
 
+**Classes come from the union of EVERY criterion the template has, in all three modes** (PRD §5.5) — never from the mode's own criteria alone. In average mode this is forced: both parts score one deck, so a class vector has to mean the same thing to both scorers, and a partition built per part would make the average the mean of two different decks' scores. In the single modes it is a choice, and the reason is that the partition is then a property of the *template* rather than of the run, so the three modes' plateaus and sweeps are commensurable and there is one code path rather than two.
+
+The cost is real and is paid by every mode: the union refines the partition, so `MAX_CLASSES` (30, including blank) can now be reached by a template whose halves are each individually under it — 15 first-only plus 15 second-only descriptions is 16 classes per half and 31 together, which is refused. This is **not a regression**, since before tags every criterion was already in one set and that template was refused then too; what it means is that tagging criteria does not buy headroom. `analyze` reports the scored-vector count before a run, so the cost is visible rather than discovered.
+
+Each part's **success set** then comes from only its own criteria (`successSet` per hand size, §10.2), which is where the modes actually differ.
+
 ## 9. Analysis API
 
 `analyze(template, cards, groups): Analysis` is what makes the semantics visible (principle 4). It is pure, fast (no enumeration), and re-run on every edit:
@@ -516,6 +522,7 @@ Plain JSON, `version`ed, written only by the main process (§12).
 {
   "version": 1,
   "deckSize": 40,
+  "mode": "first",
   "hand": { "size": 5 },
   "groups": [
     { "id": "g1", "name": "starter", "cards": [{ "passcode": 14558127, "name": "Ash Blossom & Joyous Spring" }] }
@@ -535,6 +542,7 @@ Plain JSON, `version`ed, written only by the main process (§12).
     {
       "id": "c1",
       "name": "full combo",
+      "when": "both",
       "text": "1x [Ash Blossom & Joyous Spring]",
       "expr": { "op": "req", "n": 1, "desc": { "anyOf": [{ "t": "card", "passcode": 14558127 }] } }
     }
@@ -549,6 +557,8 @@ Plain JSON, `version`ed, written only by the main process (§12).
 - **A disagreement is flagged, never swallowed.** `lineMeaning` parses the text too. If it parses to something else, or no longer parses at all, the stored AST is what runs and a `stale-text` **warning** — not an error, since the file means something and still runs — states both readings: *"this line means the saved description `trap`; the text beside it now reads as `monster`. Editing the text replaces the saved one."* `analyze` surfaces it per line and per criterion. The comparison is of **canonical ASTs, not strings**, so `LEVEL 4 monsters` beside the AST for `level 4 monster` is not stale. Saving writes what a line *means* rather than what its text now reads as, so a stale file that is re-saved stops being stale.
 - **An edit that changes what a stored AST could mean drops it**, the same rule in every case: `withLineText` and `withCriterionText` on a text edit, and `withoutGroup` on deleting a group whose id an AST names. Without the last one, deleting a group leaves the AST referencing an id that no longer exists — reported as a `stale-text` warning plus an `unsatisfiable` error, neither of which says *you deleted the group this line uses*. Dropping the AST falls the line back to its text, whose parse error says exactly that. Only the parsed form goes; the user's text is never rewritten, which would be the renderer deciding semantics (§3).
 
+  A criterion's **`when` tag is not text and does not drop the AST.** It says *when* the criterion is asked, not what it asks, so `withCriterionWhen` keeps the stored `expr`. This is an extension of the rule as first written ("every transform that changes the text drops the AST"), and the test for it is what stops the extension being an accident.
+
   **Renaming a group is the opposite case and is deliberately left alone.** The id does not change, so the AST still names the same group and is the *faithful* half — it is the text that has gone stale, which is precisely what the warning then says. The two diagnoses side by side, on a line reading `{starter}`:
 
   | edit | what `analyze` reports |
@@ -558,6 +568,8 @@ Plain JSON, `version`ed, written only by the main process (§12).
 
   The rename still runs, and correctly, because the AST resolves by id; the delete cannot run at all, and says why in one message.
 - **`cardSnapshot`** records the fields of every named card as they were when the file was saved. Results depend on the card database *only* through named cards, so this is what makes "a template file reproduces the same numbers on another machine" (PRD §14) checkable: on load, a named card that is missing from the local database or whose fields differ produces a notice, and the user chooses local data or the snapshot.
+- **`mode` is authoritative and `hand.size` must agree with it.** `mode` says which of the three runs the file is (PRD §5.5); `hand.size` stays required and must equal `handSizeForMode(mode)` — 5 for `first`, 6 for `second` and `average` — or `validateTemplate` refuses the file naming both, rather than silently preferring one. `templateToFile` writes both out in full, and writes every criterion's `when` even when it is `both`: a field left to a default means whatever the default means next year.
+- **`TEMPLATE_VERSION` is not bumped for modes.** `mode` and `when` are both optional on read, and a file written before they existed reads as the run it always was — hand 5 → `first`, an untagged criterion → `both`. A bump would refuse files that need no migration.
 - Unknown `version` → refuse with a clear message; older versions migrate forward in `src/core/model/migrate.ts`.
 - `groups` and `remainder` may be omitted in a hand-written file and default to none and `{ min: 0, max: null }`; a line may be given as `text` alone (`"[Elemental HERO Stratos]"`), in which case it is parsed on load. A **generic** line that matches no card is accepted with a `no-match` *notice* — a line states what its cards are known to be, not which cards exist (PRD §5.1); the motivating example's Level 7 FIRE Beast-Warrior line is exactly this case. A picker `card` line whose passcode the local database lacks is a *warning* (§6.2), and a `[Name]` the database cannot resolve is a parse error, since a named card has to be identified. Until M2g the harness reads the `text` path only.
 
