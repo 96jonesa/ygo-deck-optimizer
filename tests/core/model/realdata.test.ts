@@ -111,8 +111,9 @@ describe.skipIf(!EDOPRO_WORKDIR)('importing a real decklist', () => {
  *
  * Three claims, and the third is the one worth having:
  *
- *  1. every mode enumerates the SAME class vectors, because the classes come
- *     from the union of both criteria sets whichever mode is run;
+ *  1. each mode enumerates the class vectors ITS OWN criteria call for — the
+ *     average the union of both sets, a single mode only its own — and the
+ *     narrowing moves no probability;
  *  2. the three modes pick three DIFFERENT decks, so this is a real witness
  *     and not a template where the question does not arise;
  *  3. on ONE deck — the average's own best — the average is exactly the mean
@@ -186,22 +187,32 @@ describe.skipIf(!EDOPRO_WORKDIR)(
       throw new Error(`no line at ${at}`);
     }
 
-    const modes = {
-      first: bestOf(SPLIT, 'first'),
-      second: bestOf(SPLIT, 'second'),
-      average: bestOf(SPLIT, 'average'),
+    /**
+     * The three runs, computed on FIRST USE rather than here in the describe
+     * body. `describe.skipIf` skips the tests but still executes the body, so
+     * building these eagerly turned a skip into a suite failure wherever the
+     * real card database is absent — which is every CI run.
+     */
+    let runs: Record<RunMode, ReturnType<typeof bestOf>> | undefined;
+    const modes = (): Record<RunMode, ReturnType<typeof bestOf>> => {
+      runs ??= {
+        first: bestOf(SPLIT, 'first'),
+        second: bestOf(SPLIT, 'second'),
+        average: bestOf(SPLIT, 'average'),
+      };
+      return runs;
     };
 
     it('narrows a single mode to the classes its OWN criteria tell apart', () => {
       // The average judges all three criteria and walks 1,399 vectors; going
       // first judges two of them and walks 305 — exactly what it would have
       // walked had the going-second criterion never been written.
-      expect(modes.average.result.total).toBe(1399);
-      expect(modes.first.result.total).toBe(305);
-      expect(modes.second.result.total).toBe(440);
-      expect(modes.average.compiled.problem.classes).toHaveLength(5);
-      expect(modes.first.compiled.problem.classes).toHaveLength(4);
-      expect(modes.second.compiled.problem.classes).toHaveLength(4);
+      expect(modes().average.result.total).toBe(1399);
+      expect(modes().first.result.total).toBe(305);
+      expect(modes().second.result.total).toBe(440);
+      expect(modes().average.compiled.problem.classes).toHaveLength(5);
+      expect(modes().first.compiled.problem.classes).toHaveLength(4);
+      expect(modes().second.compiled.problem.classes).toHaveLength(4);
     });
 
     /**
@@ -217,26 +228,26 @@ describe.skipIf(!EDOPRO_WORKDIR)(
      * union partition it was hidden behind an arbitrary `breaker 11`.
      */
     it('picks a DIFFERENT best deck in each mode', () => {
-      const decks = Object.values(modes).map((run) => JSON.stringify(run.counts));
+      const decks = Object.values(modes()).map((run) => JSON.stringify(run.counts));
       expect(new Set(decks).size).toBe(3);
       // ONE deck behind each best vector (`exampleRatio`). Going second the
       // starter is just another low-Level monster, so the 17 between them
       // split any way; this is the representative, not the only answer.
-      expect(modes.first.counts).toEqual({
+      expect(modes().first.counts).toEqual({
         starter: 3,
         engine: 18,
         breaker: 11,
         trap: 8,
         remainder: 0,
       });
-      expect(modes.second.counts).toEqual({
+      expect(modes().second.counts).toEqual({
         starter: 3,
         engine: 14,
         breaker: 15,
         trap: 8,
         remainder: 0,
       });
-      expect(modes.average.counts).toEqual({
+      expect(modes().average.counts).toEqual({
         starter: 3,
         engine: 16,
         breaker: 13,
@@ -246,24 +257,24 @@ describe.skipIf(!EDOPRO_WORKDIR)(
     });
 
     it('answers a single mode with the ratio RANGE its criteria cannot tell apart', () => {
-      expect(modes.first.best.rawRatios).toBe(6);
-      expect(modes.second.best.rawRatios).toBe(4);
+      expect(modes().first.best.rawRatios).toBe(6);
+      expect(modes().second.best.rawRatios).toBe(4);
       // The average tells everything apart, so its best is one deck exactly.
-      expect(modes.average.best.rawRatios).toBe(1);
+      expect(modes().average.best.rawRatios).toBe(1);
     });
 
     it('reports each mode’s best as the exact fraction of its own hand', () => {
-      expect(modes.first.best.score.parts).toEqual([
+      expect(modes().first.best.score.parts).toEqual([
         { H: 5, weight: 1, num: 527_097, den: 658_008 },
       ]);
-      expect(modes.second.best.score.parts).toEqual([
+      expect(modes().second.best.score.parts).toEqual([
         { H: 6, weight: 1, num: 3_632_237, den: 3_838_380 },
       ]);
-      expect(modes.average.best.score.parts).toEqual([
+      expect(modes().average.best.score.parts).toEqual([
         { H: 5, weight: 1, num: 518_046, den: 658_008 },
         { H: 6, weight: 1, num: 3_605_820, den: 3_838_380 },
       ]);
-      expect(modes.average.best.blend).toEqual({ num: 39_766_530, den: 46_060_560 });
+      expect(modes().average.best.blend).toEqual({ num: 39_766_530, den: 46_060_560 });
     });
 
     /**
@@ -273,15 +284,15 @@ describe.skipIf(!EDOPRO_WORKDIR)(
      * in BigInt, with no float anywhere.
      */
     it('is the mean of the two single modes ON THE SAME DECK, exactly', () => {
-      const deck = pinned(modes.average.counts);
+      const deck = pinned(modes().average.counts);
       const first = bestOf(deck, 'first').best;
       const second = bestOf(deck, 'second').best;
-      expect(first.score.parts[0]).toEqual(modes.average.best.score.parts[0]);
-      expect(second.score.parts[0]).toEqual(modes.average.best.score.parts[1]);
+      expect(first.score.parts[0]).toEqual(modes().average.best.score.parts[0]);
+      expect(second.score.parts[0]).toEqual(modes().average.best.score.parts[1]);
 
       const a = first.score.parts[0]!;
       const b = second.score.parts[0]!;
-      const { num, den } = modes.average.best.blend;
+      const { num, den } = modes().average.best.blend;
       // (a/den_a + b/den_b) / 2 == num / den.
       expect((BigInt(a.num) * BigInt(b.den) + BigInt(b.num) * BigInt(a.den)) * BigInt(den)).toBe(
         2n * BigInt(a.den) * BigInt(b.den) * BigInt(num),
@@ -312,88 +323,93 @@ describe.skipIf(!EDOPRO_WORKDIR)(
  * splitting criteria in two must not refuse a run for criteria it never
  * evaluates.
  */
-describe('a template too wide for the average but not for either hand', () => {
-  /** Distinct cards this install really has; collected once, on first use. */
-  let pool: number[] | null = null;
-  function codesOf(n: number): number[] {
-    if (pool === null) {
-      const found: number[] = [];
-      cards.count((card) => {
-        if (found.length < 40) found.push(card.code);
-        return false;
+// Real cards, so it is opt-in like its three siblings above: it draws 30
+// distinct passcodes out of the install to build 30 named-card criteria.
+describe.skipIf(!EDOPRO_WORKDIR)(
+  'a template too wide for the average but not for either hand',
+  () => {
+    /** Distinct cards this install really has; collected once, on first use. */
+    let pool: number[] | null = null;
+    function codesOf(n: number): number[] {
+      if (pool === null) {
+        const found: number[] = [];
+        cards.count((card) => {
+          if (found.length < 40) found.push(card.code);
+          return false;
+        });
+        pool = found;
+      }
+      if (pool.length < n) throw new Error(`this install has ${pool.length} cards, not ${n}`);
+      return pool.slice(0, n);
+    }
+
+    /** `first` going-first criteria and `second` going-second ones, a card each. */
+    function split(first: number, second: number): Template {
+      const codes = codesOf(first + second);
+      return {
+        version: 1,
+        deckSize: 40,
+        hand: { size: 6 },
+        mode: 'average',
+        groups: [],
+        lines: codes.map((passcode, at) => ({
+          id: `l${at}`,
+          card: { passcode, name: `card${at}` },
+          min: 0,
+          max: 1,
+        })),
+        remainder: { min: 0, max: 40 },
+        criteria: codes.map((passcode, at) => ({
+          id: `c${at}`,
+          text: `1x #${passcode}`,
+          when: at < first ? ('first' as const) : ('second' as const),
+        })),
+      };
+    }
+
+    function compileIn(template: Template, mode: RunMode): CompileResult {
+      const inMode: Template = { ...template, mode, hand: { size: handSizeForMode(mode) } };
+      const resolved = resolveTemplate(inMode, ctx);
+      if (!resolved.ok) throw new Error(resolved.errors.join('\n'));
+      return compileProblem(resolved.resolved, {
+        handSizes: handSizesForMode(resolved.resolved, mode),
       });
-      pool = found;
     }
-    if (pool.length < n) throw new Error(`this install has ${pool.length} cards, not ${n}`);
-    return pool.slice(0, n);
-  }
 
-  /** `first` going-first criteria and `second` going-second ones, a card each. */
-  function split(first: number, second: number): Template {
-    const codes = codesOf(first + second);
-    return {
-      version: 1,
-      deckSize: 40,
-      hand: { size: 6 },
-      mode: 'average',
-      groups: [],
-      lines: codes.map((passcode, at) => ({
-        id: `l${at}`,
-        card: { passcode, name: `card${at}` },
-        min: 0,
-        max: 1,
-      })),
-      remainder: { min: 0, max: 40 },
-      criteria: codes.map((passcode, at) => ({
-        id: `c${at}`,
-        text: `1x #${passcode}`,
-        when: at < first ? ('first' as const) : ('second' as const),
-      })),
-    };
-  }
-
-  function compileIn(template: Template, mode: RunMode): CompileResult {
-    const inMode: Template = { ...template, mode, hand: { size: handSizeForMode(mode) } };
-    const resolved = resolveTemplate(inMode, ctx);
-    if (!resolved.ok) throw new Error(resolved.errors.join('\n'));
-    return compileProblem(resolved.resolved, {
-      handSizes: handSizesForMode(resolved.resolved, mode),
+    it('compiles each single mode over its own 16 classes', () => {
+      const wide = split(15, 15);
+      for (const mode of ['first', 'second'] as const) {
+        const result = compileIn(wide, mode);
+        if (!result.ok) throw new Error(`${mode} was refused: ${result.errors.join('\n')}`);
+        expect(result.problem.classes).toHaveLength(16);
+        expect(result.problem.criteria).toHaveLength(15);
+        // The other hand's fifteen lines cannot be told apart here, so they are
+        // all in the blank class together.
+        expect(result.problem.classes[0]!.lineIds).toHaveLength(16);
+      }
     });
-  }
 
-  it('compiles each single mode over its own 16 classes', () => {
-    const wide = split(15, 15);
-    for (const mode of ['first', 'second'] as const) {
-      const result = compileIn(wide, mode);
-      if (!result.ok) throw new Error(`${mode} was refused: ${result.errors.join('\n')}`);
-      expect(result.problem.classes).toHaveLength(16);
-      expect(result.problem.criteria).toHaveLength(15);
-      // The other hand's fifteen lines cannot be told apart here, so they are
-      // all in the blank class together.
-      expect(result.problem.classes[0]!.lineIds).toHaveLength(16);
-    }
-  });
+    it('refuses only the average, which really does need all 31', () => {
+      const result = compileIn(split(15, 15), 'average');
+      expect(result.ok).toBe(false);
+      expect(result.ok ? '' : result.errors[0]).toMatch(/31 classes.*at most 30/);
+    });
 
-  it('refuses only the average, which really does need all 31', () => {
-    const result = compileIn(split(15, 15), 'average');
-    expect(result.ok).toBe(false);
-    expect(result.ok ? '' : result.errors[0]).toMatch(/31 classes.*at most 30/);
-  });
+    it('would refuse every mode if the classes came from the union', () => {
+      // The state of affairs this change replaced, reproduced by handing every
+      // hand every alternative: the going-first run is refused for criteria it
+      // never evaluates.
+      const inMode: Template = { ...split(15, 15), mode: 'first', hand: { size: 5 } };
+      const resolved = resolveTemplate(inMode, ctx);
+      if (!resolved.ok) throw new Error(resolved.errors.join('\n'));
+      const asUnion = compileProblem(resolved.resolved, { handSizes: [{ H: 5, weight: 1 }] });
+      expect(asUnion.ok).toBe(false);
+      expect(asUnion.ok ? '' : asUnion.errors[0]).toMatch(/31 classes/);
+    });
 
-  it('would refuse every mode if the classes came from the union', () => {
-    // The state of affairs this change replaced, reproduced by handing every
-    // hand every alternative: the going-first run is refused for criteria it
-    // never evaluates.
-    const inMode: Template = { ...split(15, 15), mode: 'first', hand: { size: 5 } };
-    const resolved = resolveTemplate(inMode, ctx);
-    if (!resolved.ok) throw new Error(resolved.errors.join('\n'));
-    const asUnion = compileProblem(resolved.resolved, { handSizes: [{ H: 5, weight: 1 }] });
-    expect(asUnion.ok).toBe(false);
-    expect(asUnion.ok ? '' : asUnion.errors[0]).toMatch(/31 classes/);
-  });
-
-  it('is not a contrivance: 14 + 14 fits the average too, and 15 + 15 is the edge', () => {
-    expect(compileIn(split(14, 14), 'average').ok).toBe(true);
-    expect(compileIn(split(15, 15), 'average').ok).toBe(false);
-  });
-});
+    it('is not a contrivance: 14 + 14 fits the average too, and 15 + 15 is the edge', () => {
+      expect(compileIn(split(14, 14), 'average').ok).toBe(true);
+      expect(compileIn(split(15, 15), 'average').ok).toBe(false);
+    });
+  },
+);
