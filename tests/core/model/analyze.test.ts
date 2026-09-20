@@ -911,12 +911,24 @@ describe('analyze: modes and criterion tags', () => {
     expect(a.work.hands![0]!.terms).not.toBe(a.work.hands![1]!.terms);
   });
 
-  it('counts the SAME class vectors in all three modes: the classes are the union’s', () => {
-    const counts = (['first', 'second', 'average'] as const).map(
-      (mode) => analyze(tagged(mode), ctx).work.classVectors,
-    );
-    expect(new Set(counts).size).toBe(1);
-    expect(counts[0]).toBeGreaterThan(0);
+  it('counts FEWER class vectors in a single mode than in the average', () => {
+    // The classes come from the criteria the run judges, so a going-first run
+    // is the problem it would have been had the going-second criteria never
+    // been written: it does not pay to tell apart cards it cannot see.
+    const [first, second, average] = (['first', 'second', 'average'] as const).map((mode) =>
+      Number(analyze(tagged(mode), ctx).work.classVectors),
+    ) as [number, number, number];
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(average);
+    expect(second).toBeLessThan(average);
+  });
+
+  it('costs a single mode no more work than the average does', () => {
+    const work = (mode: 'first' | 'second' | 'average') => analyze(tagged(mode), ctx).work;
+    const terms = (mode: 'first' | 'second' | 'average') =>
+      work(mode).hands!.reduce((sum, hand) => sum + hand.terms, 0);
+    expect(terms('first')).toBeLessThanOrEqual(terms('average'));
+    expect(work('first').estimatedMs!).toBeLessThan(work('average').estimatedMs!);
   });
 
   it('warns when a part the run scores has no criterion of its own', () => {

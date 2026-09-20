@@ -239,10 +239,11 @@ export async function runOptimize(argv: readonly string[], io: CliIo): Promise<n
   const compiled = compileProblem(resolved.resolved, { handSizes });
   if (!compiled.ok) return fail(io, compiled.errors);
   const parts = partsOfMode(mode);
-  const criteria = resolved.resolved.criteria.map((criterion) => ({
-    ...criterion,
-    parts: parts.map((part) => countsFor(criterion.when, part)),
-  }));
+  // Only what this run judges: a criterion for the other hand is not in it.
+  const criteria = resolved.resolved.criteria.flatMap((criterion) => {
+    const mine = parts.map((part) => countsFor(criterion.when, part));
+    return mine.some(Boolean) ? [{ ...criterion, parts: mine }] : [];
+  });
 
   const lineIds = resolved.resolved.lines.filter((line) => !line.isRemainder).map((l) => l.id);
   if (args.sweep !== undefined && !lineIds.includes(args.sweep)) {

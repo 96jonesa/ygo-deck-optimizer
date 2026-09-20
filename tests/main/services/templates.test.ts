@@ -553,8 +553,14 @@ describe('TemplateService', () => {
         const { templates } = await readyServices();
         const result = templates.compileTemplate(tagged('first'));
         if (!result.ok) throw new Error(`expected a compiled template, got ${result.reason}`);
+        // Its own alternative, renumbered from zero: the going-second
+        // criterion is not in the problem at all.
         expect(result.compiled.problem.handSizes).toEqual([{ H: 5, weight: 1, criteria: [0] }]);
-        expect(result.criteria.map((criterion) => criterion.parts)).toEqual([[true], [false]]);
+        expect(result.compiled.problem.criteria).toHaveLength(1);
+        // And it is not in the breakdown either: a criterion for the other
+        // hand is not part of this run, so it is absent rather than zero.
+        expect(result.criteria.map((criterion) => criterion.id)).toEqual(['c1']);
+        expect(result.criteria.map((criterion) => criterion.parts)).toEqual([[true]]);
       });
 
       it('compiles an average as both hands, each over its own criteria', async () => {
@@ -571,14 +577,18 @@ describe('TemplateService', () => {
         ]);
       });
 
-      it('builds the same classes in all three modes: a class vector is one deck', async () => {
+      it('builds a single mode\u2019s classes from its own criteria alone', async () => {
         const { templates } = await readyServices();
-        const classes = (['first', 'second', 'average'] as const).map((mode) => {
+        const counts = (['first', 'second', 'average'] as const).map((mode) => {
           const result = templates.compileTemplate(tagged(mode));
           if (!result.ok) throw new Error(`expected a compiled template, got ${result.reason}`);
-          return JSON.stringify(result.compiled.problem.classes);
+          return result.compiled.problem.classes.length;
         });
-        expect(new Set(classes).size).toBe(1);
+        const [first, second, average] = counts as [number, number, number];
+        // The average judges both sets and has to tell everything apart; a
+        // single mode is not made to pay for the other hand's criteria.
+        expect(first).toBeLessThan(average);
+        expect(second).toBeLessThan(average);
       });
 
       it('reads a template that predates modes off its hand size', async () => {

@@ -377,11 +377,25 @@ Steps:
 
 `compileProblem` returns the `Problem` together with what a `Problem` deliberately forgets: per-class member lines with their ranges (for expanding a class vector back to line ratios, and for the sweep tables of §11.2) and `classOfLine`. Classes are ordered blank, then by first member line in template order, remainder last. A first/second blend is compiled from a template resolved at the **larger** hand; compiling for a hand larger than the one the criteria were expanded for is refused, since its six-slot alternatives are already gone.
 
-**Classes come from the union of EVERY criterion the template has, in all three modes** (PRD §5.5) — never from the mode's own criteria alone. In average mode this is forced: both parts score one deck, so a class vector has to mean the same thing to both scorers, and a partition built per part would make the average the mean of two different decks' scores. In the single modes it is a choice, and the reason is that the partition is then a property of the *template* rather than of the run, so the three modes' plateaus and sweeps are commensurable and there is one code path rather than two.
+**Classes come from the criteria the run JUDGES** (PRD §5.5) — `first | both` going first, `second | both` going second, and every criterion for an average, which is why the average's partition is the union. One rule, not a special case: a run that judges everything gets the union because everything is what it judges.
 
-The cost is real and is paid by every mode: the union refines the partition, so `MAX_CLASSES` (30, including blank) can now be reached by a template whose halves are each individually under it — 15 first-only plus 15 second-only descriptions is 16 classes per half and 31 together, which is refused. This is **not a regression**, since before tags every criterion was already in one set and that template was refused then too; what it means is that tagging criteria does not buy headroom. `analyze` reports the scored-vector count before a run, so the cost is visible rather than discovered.
+In average mode the union is *forced*, and this is the correctness argument the mode rests on: both parts score one deck, so a class vector has to mean the same thing to both scorers, and a partition built per part would make the average the mean of two different decks' scores. `partProblem` shares the very same `classes` **array object** between parts rather than a copy, and a part holds `criteria: number[]` — indices into the shared list — so a criterion compiled against different classes is unsayable rather than merely untrue.
 
-Each part's **success set** then comes from only its own criteria (`successSet` per hand size, §10.2), which is where the modes actually differ.
+For a single mode the narrower partition is **not** an optimization that trades accuracy for speed. Refining a partition cannot change a part's probability — `compile` merges two lines only when their match-matrix rows are *identical*, so a finer class's mask contains a description iff the coarser one did, and Vandermonde's identity sums the split back. Measured rather than argued: on the same templates, every mode's best probability is byte-identical before and after narrowing.
+
+| | classes | vectors | best |
+| --- | --- | --- | --- |
+| going first, whole template | 5 → **3** | 1,399 → **305** | unchanged |
+| going second, whole template | 5 → **3** | 1,399 → **440** | unchanged |
+| average | 5 | 1,399 | unchanged |
+
+What *does* change for a single mode is that answers get **wider, and honestly so**: ratios its criteria genuinely cannot tell apart are now reported as the range they are, where the union used to pin an arbitrary representative. The class vector's `exampleRatio` can therefore shift between modes at equal probability.
+
+The earlier design took the union unconditionally, on the reasoning that it was no regression since before tags every criterion was in one set anyway. That is true and beside the point: the purpose of tagging is to split the two hands, and having split them a going-first run was paying for going-second criteria it never evaluates — 4.6× the vectors above, and 65,536 per half becoming 4,294,737,643 for 8 + 8 named criteria. Worse, `MAX_CLASSES` (30, blank included) refused runs that were individually tractable. With the rule as stated, 15 + 15 descriptions is 16 classes per hand and each single mode runs, while the average still refuses because it really does need 31 — the other hand's lines simply join the **blank** class, which is what "irrelevant to this run" has always meant.
+
+One implementation note, because the obvious phrasing is subtly wrong. The rule is applied as *"drop the columns mentioned **only** by unjudged alternatives"*, not *"keep the columns the judged alternatives reference"*. The second also answers a different question — whether a column **no** alternative mentions should split classes — and so changes runs that have nothing to do with modes, including a template with no criteria at all. Stated as what to take out, a full run stays byte-identical.
+
+Each part's **success set** then comes from only its own criteria (`successSet` per hand size, §10.2), which is where the modes differ once the classes agree.
 
 ## 9. Analysis API
 

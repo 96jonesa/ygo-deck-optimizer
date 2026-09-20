@@ -373,20 +373,33 @@ done
 
 | Mode | starter | engine | breaker | trap | Best |
 | --- | --- | --- | --- | --- | --- |
-| going first | 3 | 18 | 11 | 8 | 527,097 / 658,008 = 80.1050% |
-| going second | 0 | 17 | 15 | 8 | 3,632,237 / 3,838,380 = 94.6294% |
+| going first | 3 | 18 | 6–11 | 8 | 527,097 / 658,008 = 80.1050% |
+| going second | 0–3 | 14–17 | 15 | 8 | 3,632,237 / 3,838,380 = 94.6294% |
 | average | 3 | 16 | 13 | 8 | 39,766,530 / 46,060,560 = 86.3353% |
+
+A range is a class whose lines this mode's criteria cannot tell apart — going second, the
+starter is just another low-Level monster, so any split of the 17 between them scores the same.
 
 Three modes, three ratios. The average's deck scores 518,046 / 658,008 going first and
 3,605,820 / 3,838,380 going second, and 39,766,530 / 46,060,560 is exactly their mean — the mean
 **on that deck**, not of the two modes at their own optima, which is a higher number no single
 deck reaches. `tests/core/model/realdata.test.ts` pins all of it.
 
-**The classes are the same in all three modes**: they come from the union of both criteria sets
-whichever mode is run, so one class vector means one deck — in both halves of an average, and
-across the three modes, which is what makes their answers comparable at all. The cost is real
-and worth knowing: for this template each criteria set alone would tell 4 classes apart (305 and
-440 class vectors), while the union tells 5 apart and the search covers 1,399.
+**Each mode is compiled to the criteria it judges.** Going first builds its classes from the
+criteria tagged *first* or *both* and nothing else, so it is exactly the problem it would have
+been had the going-second criteria never been written: 4 classes and 305 class vectors here,
+against the average's 5 and 1,399. The average judges every criterion, so its partition is the
+union of both sets — which it must be, for one class vector to mean one deck to both of its
+halves.
+
+Narrowing never moves a probability; it widens the *answer*. Going first, no criterion mentions
+`spell`, so the `breaker` line and the unspecified cards are one class: the best ratio comes back
+as "11 copies among breaker, (remainder) — any split" rather than pinning a number that was never
+load-bearing. Six raw ratios tie for the best going first, four going second, one on the average.
+
+It also decides what is runnable. A template with fifteen going-first criteria and fifteen
+going-second ones tells 16 classes apart in each single mode and 31 together: both single modes
+run, and only the average is refused for passing the engine's limit of 30.
 
 The Monte Carlo engine is the project's independent oracle (TDD §10.4): it draws concrete cards
 tagged with their line and assigns them to requirement slots by brute force, sharing no code

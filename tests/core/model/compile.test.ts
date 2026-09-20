@@ -1109,26 +1109,116 @@ describe('handSizesForMode', () => {
     ]);
   });
 
-  it('builds the SAME classes whatever the mode: a vector means one deck', () => {
-    const template = tagged();
-    const resolved = resolvedOf(template);
-    const compiled = (['first', 'second', 'average'] as const).map((mode) => {
+  /**
+   * Classes come from the criteria the run JUDGES. A single mode is therefore
+   * compiled to exactly the problem it would have been had the other hand's
+   * criteria never been written — which is the whole point of letting someone
+   * split the list in two.
+   */
+  describe('the classes a mode is compiled to', () => {
+    const compiledIn = (resolved: ResolvedTemplate, mode: 'first' | 'second' | 'average') => {
       const result = compileProblem(resolved, { handSizes: handSizesForMode(resolved, mode) });
       if (!result.ok) throw new Error(result.errors.join('\n'));
       return result;
+    };
+
+    it('keeps only the alternatives the run judges, renumbered from zero', () => {
+      const resolved = resolvedOf(tagged());
+      const first = compiledIn(resolved, 'first').problem;
+      expect(first.criteria).toHaveLength(2);
+      expect(first.handSizes).toEqual([{ H: 5, weight: 1, criteria: [0, 1] }]);
+      expect(compiledIn(resolved, 'second').problem.handSizes).toEqual([
+        { H: 6, weight: 1, criteria: [0, 1] },
+      ]);
+      expect(compiledIn(resolved, 'second').problem.criteria).toHaveLength(2);
+      // An average judges every criterion, so nothing is renumbered.
+      expect(compiledIn(resolved, 'average').problem.handSizes).toEqual([
+        { H: 5, weight: 1, criteria: [0, 1] },
+        { H: 6, weight: 1, criteria: [1, 2] },
+      ]);
+      expect(compiledIn(resolved, 'average').problem.criteria).toHaveLength(3);
     });
-    const classes = compiled.map((result) => JSON.stringify(result.problem.classes));
-    expect(new Set(classes).size).toBe(1);
-    expect(new Set(compiled.map((result) => result.classOfLine.join(','))).size).toBe(1);
+
+    it('is the same problem as a template that only ever had those criteria', () => {
+      const resolved = resolvedOf(tagged());
+      const alone = resolveTemplate(
+        {
+          ...tagged({ mode: 'first', hand: { size: 5 } }),
+          criteria: [
+            { id: 'c1', text: `1x #${STRATOS}`, when: 'first' },
+            { id: 'c2', text: '1x monster' },
+          ],
+        },
+        ctx,
+      );
+      if (!alone.ok) throw new Error(alone.errors.join('\n'));
+      const mine = compiledIn(resolved, 'first');
+      const theirs = compileProblem(alone.resolved, {
+        handSizes: handSizesForMode(alone.resolved, 'first'),
+      });
+      if (!theirs.ok) throw new Error(theirs.errors.join('\n'));
+      expect(mine.problem.classes).toEqual(theirs.problem.classes);
+      expect(mine.classOfLine).toEqual(theirs.classOfLine);
+      expect(mine.problem.criteria).toEqual(theirs.problem.criteria);
+    });
+
+    it('tells FEWER classes apart than the average, which judges both sets', () => {
+      const resolved = resolvedOf(tagged());
+      const classes = (['first', 'second', 'average'] as const).map(
+        (mode) => compiledIn(resolved, mode).problem.classes.length,
+      );
+      const [first, second, average] = classes as [number, number, number];
+      expect(first).toBeLessThan(average);
+      expect(second).toBeLessThan(average);
+    });
+
+    /**
+     * The safety property. Coarsening the partition to the criteria actually
+     * judged cannot move a probability — merged lines are indistinguishable to
+     * every criterion that survives — so a single mode's best is what it was
+     * when the classes came from both sets.
+     */
+    it('scores every deck exactly as the union\u2019s finer classes did', () => {
+      const resolved = resolvedOf(tagged());
+      const union = compileProblem(resolved, {
+        handSizes: [{ H: 5, weight: 1, criteria: [0, 1, 2] }],
+      });
+      const own = compiledIn(resolved, 'first');
+      if (!union.ok) throw new Error(union.errors.join('\n'));
+      // The union's problem judges c3 too, so hold BOTH to the going-first
+      // criteria and compare the numbers they give the same decks.
+      const fine = createBlendScorer({
+        ...union.problem,
+        handSizes: [{ H: 5, weight: 1, criteria: [0, 1] }],
+      });
+      const coarse = createBlendScorer(own.problem);
+      const best = (scorer: typeof fine, compiled: typeof own) => {
+        let top = -1;
+        const walk = (cls: number, left: number, totals: number[]): void => {
+          if (cls === compiled.problem.classes.length) {
+            if (left === 0) top = Math.max(top, scorer.rankKey(totals));
+            return;
+          }
+          const { min, max } = compiled.problem.classes[cls]!;
+          for (let n = min; n <= Math.min(max, left); n++) walk(cls + 1, left - n, [...totals, n]);
+        };
+        walk(0, compiled.problem.deckSize, []);
+        return top;
+      };
+      expect(best(coarse, own)).toBe(best(fine, union));
+      expect(best(coarse, own)).toBeGreaterThan(0);
+    });
   });
 
-  it('is what compileProblem validates: an index out of range is an error, not a guess', () => {
+  it('refuses a criteria index the template has no alternative for', () => {
     const resolved = resolvedOf(tagged());
     const result = compileProblem(resolved, {
       handSizes: [{ H: 6, weight: 1, criteria: [0, 99] }],
     });
     expect(result.ok).toBe(false);
-    expect(result.ok ? [] : result.errors[0]).toMatch(/not one of the problem's 3 criteria/);
+    expect(result.ok ? [] : result.errors[0]).toMatch(
+      /there is no criterion 99: the template expanded to 3 alternative/,
+    );
   });
 });
 

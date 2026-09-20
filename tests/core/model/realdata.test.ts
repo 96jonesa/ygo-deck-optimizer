@@ -192,19 +192,36 @@ describe.skipIf(!EDOPRO_WORKDIR)(
       average: bestOf(SPLIT, 'average'),
     };
 
-    it('scores the same class vectors in every mode: the classes are the union’s', () => {
-      const totals = Object.values(modes).map((run) => run.result.total);
-      expect(new Set(totals)).toEqual(new Set([1399]));
-      const classes = Object.values(modes).map((run) =>
-        JSON.stringify(run.compiled.problem.classes),
-      );
-      expect(new Set(classes).size).toBe(1);
+    it('narrows a single mode to the classes its OWN criteria tell apart', () => {
+      // The average judges all three criteria and walks 1,399 vectors; going
+      // first judges two of them and walks 305 — exactly what it would have
+      // walked had the going-second criterion never been written.
+      expect(modes.average.result.total).toBe(1399);
+      expect(modes.first.result.total).toBe(305);
+      expect(modes.second.result.total).toBe(440);
+      expect(modes.average.compiled.problem.classes).toHaveLength(5);
+      expect(modes.first.compiled.problem.classes).toHaveLength(4);
+      expect(modes.second.compiled.problem.classes).toHaveLength(4);
     });
 
+    /**
+     * What narrowing costs: nothing in the answer, something in its
+     * specificity. Coarsening to the criteria actually judged cannot move a
+     * probability — the lines it merges are ones no surviving criterion can
+     * tell apart — but a class vector then stands for more decks, and the
+     * report says so rather than naming one of them.
+     *
+     * Going first, no criterion mentions `spell`, so `breaker` merges with the
+     * unspecified cards: eleven cards that are 6–11 spells and the rest
+     * anything, all scoring the same. That is the honest answer, and under the
+     * union partition it was hidden behind an arbitrary `breaker 11`.
+     */
     it('picks a DIFFERENT best deck in each mode', () => {
-      const decks = Object.values(modes).map((run) => run.best.classTotals.join(','));
+      const decks = Object.values(modes).map((run) => JSON.stringify(run.counts));
       expect(new Set(decks).size).toBe(3);
-      // The ratios the three modes want, for the record.
+      // ONE deck behind each best vector (`exampleRatio`). Going second the
+      // starter is just another low-Level monster, so the 17 between them
+      // split any way; this is the representative, not the only answer.
       expect(modes.first.counts).toEqual({
         starter: 3,
         engine: 18,
@@ -213,8 +230,8 @@ describe.skipIf(!EDOPRO_WORKDIR)(
         remainder: 0,
       });
       expect(modes.second.counts).toEqual({
-        starter: 0,
-        engine: 17,
+        starter: 3,
+        engine: 14,
         breaker: 15,
         trap: 8,
         remainder: 0,
@@ -226,6 +243,13 @@ describe.skipIf(!EDOPRO_WORKDIR)(
         trap: 8,
         remainder: 0,
       });
+    });
+
+    it('answers a single mode with the ratio RANGE its criteria cannot tell apart', () => {
+      expect(modes.first.best.rawRatios).toBe(6);
+      expect(modes.second.best.rawRatios).toBe(4);
+      // The average tells everything apart, so its best is one deck exactly.
+      expect(modes.average.best.rawRatios).toBe(1);
     });
 
     it('reports each mode’s best as the exact fraction of its own hand', () => {
@@ -274,3 +298,102 @@ describe.skipIf(!EDOPRO_WORKDIR)(
     });
   },
 );
+
+/**
+ * The headline of the narrowing (PRD §5.5). Fifteen going-first criteria and
+ * fifteen going-second ones, each naming a card of its own: each half tells 16
+ * classes apart, and the two together tell 31 — one past `MAX_CLASSES`.
+ *
+ * Going first and going second must therefore SUCCEED, over the 16 classes
+ * their own criteria need. Only the average is refused, and rightly: it really
+ * does have to tell all 31 apart to score both hands over one deck.
+ *
+ * This is the case that made the union unconditional untenable: a feature for
+ * splitting criteria in two must not refuse a run for criteria it never
+ * evaluates.
+ */
+describe('a template too wide for the average but not for either hand', () => {
+  /** Distinct cards this install really has; collected once, on first use. */
+  let pool: number[] | null = null;
+  function codesOf(n: number): number[] {
+    if (pool === null) {
+      const found: number[] = [];
+      cards.count((card) => {
+        if (found.length < 40) found.push(card.code);
+        return false;
+      });
+      pool = found;
+    }
+    if (pool.length < n) throw new Error(`this install has ${pool.length} cards, not ${n}`);
+    return pool.slice(0, n);
+  }
+
+  /** `first` going-first criteria and `second` going-second ones, a card each. */
+  function split(first: number, second: number): Template {
+    const codes = codesOf(first + second);
+    return {
+      version: 1,
+      deckSize: 40,
+      hand: { size: 6 },
+      mode: 'average',
+      groups: [],
+      lines: codes.map((passcode, at) => ({
+        id: `l${at}`,
+        card: { passcode, name: `card${at}` },
+        min: 0,
+        max: 1,
+      })),
+      remainder: { min: 0, max: 40 },
+      criteria: codes.map((passcode, at) => ({
+        id: `c${at}`,
+        text: `1x #${passcode}`,
+        when: at < first ? ('first' as const) : ('second' as const),
+      })),
+    };
+  }
+
+  function compileIn(template: Template, mode: RunMode): CompileResult {
+    const inMode: Template = { ...template, mode, hand: { size: handSizeForMode(mode) } };
+    const resolved = resolveTemplate(inMode, ctx);
+    if (!resolved.ok) throw new Error(resolved.errors.join('\n'));
+    return compileProblem(resolved.resolved, {
+      handSizes: handSizesForMode(resolved.resolved, mode),
+    });
+  }
+
+  it('compiles each single mode over its own 16 classes', () => {
+    const wide = split(15, 15);
+    for (const mode of ['first', 'second'] as const) {
+      const result = compileIn(wide, mode);
+      if (!result.ok) throw new Error(`${mode} was refused: ${result.errors.join('\n')}`);
+      expect(result.problem.classes).toHaveLength(16);
+      expect(result.problem.criteria).toHaveLength(15);
+      // The other hand's fifteen lines cannot be told apart here, so they are
+      // all in the blank class together.
+      expect(result.problem.classes[0]!.lineIds).toHaveLength(16);
+    }
+  });
+
+  it('refuses only the average, which really does need all 31', () => {
+    const result = compileIn(split(15, 15), 'average');
+    expect(result.ok).toBe(false);
+    expect(result.ok ? '' : result.errors[0]).toMatch(/31 classes.*at most 30/);
+  });
+
+  it('would refuse every mode if the classes came from the union', () => {
+    // The state of affairs this change replaced, reproduced by handing every
+    // hand every alternative: the going-first run is refused for criteria it
+    // never evaluates.
+    const inMode: Template = { ...split(15, 15), mode: 'first', hand: { size: 5 } };
+    const resolved = resolveTemplate(inMode, ctx);
+    if (!resolved.ok) throw new Error(resolved.errors.join('\n'));
+    const asUnion = compileProblem(resolved.resolved, { handSizes: [{ H: 5, weight: 1 }] });
+    expect(asUnion.ok).toBe(false);
+    expect(asUnion.ok ? '' : asUnion.errors[0]).toMatch(/31 classes/);
+  });
+
+  it('is not a contrivance: 14 + 14 fits the average too, and 15 + 15 is the edge', () => {
+    expect(compileIn(split(14, 14), 'average').ok).toBe(true);
+    expect(compileIn(split(15, 15), 'average').ok).toBe(false);
+  });
+});

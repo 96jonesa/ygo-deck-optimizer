@@ -1080,8 +1080,10 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
         flat: indexFlat(all.flat, (desc) => columnAt(desc)),
       };
       // The same rule `handSizesForMode` states, over the analysis's own
-      // indices: the classes come from the union of every criterion, and each
-      // part is judged against the alternatives ITS criteria produced.
+      // indices: each part is judged against the alternatives ITS criteria
+      // produced, and `compileProblem` builds the classes from the union of
+      // the parts — which is every criterion the MODE judges, and not
+      // necessarily every criterion the template has.
       const handSizes: HandSize[] = parts.map((part) => ({
         H: part === 'first' ? 5 : 6,
         weight: 1,
