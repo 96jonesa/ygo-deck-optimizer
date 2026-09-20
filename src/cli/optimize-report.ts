@@ -121,7 +121,13 @@ export function value(fraction: Fraction, weighted: boolean): string {
 
 /** `going first: 41.5744% (273,563 / 658,008)` — a part's own exact answer. */
 function partText(part: BlendPart, weighted: boolean): string {
-  const head = `going ${part.H === 5 ? 'first' : 'second'}: ${value(part, weighted)} (${fraction(part)})`;
+  // With draw cards several parts share one hand size and differ only in how
+  // deep into the deck they read (PRD §5.7), so the length is what names them.
+  const whose =
+    part.prefix === undefined
+      ? `going ${part.H === 5 ? 'first' : 'second'}`
+      : `${part.prefix} cards drawn`;
+  const head = `${whose}: ${value(part, weighted)} (${fraction(part)})`;
   return weighted
     ? `${head}, P(success) ${percent(part.successNum / part.den)} (${int(part.successNum)} / ${int(part.den)})`
     : head;

@@ -137,8 +137,24 @@ export function withoutLine(template: Template, id: string): Template {
  */
 export function withLineText(template: Template, id: string, text: string): Template {
   return mapLine(template, id, (line) =>
-    isCardLine(line) ? line : { id: line.id, min: line.min, max: line.max, text },
+    isCardLine(line) ? line : { ...withoutDesc(line), text },
   );
+}
+
+/**
+ * A line with the parsed form dropped and EVERYTHING ELSE kept. Typing over the
+ * text takes the AST away and nothing more — the copy range, and what the line
+ * DRAWS (PRD §5.7), are the line's own and are not what changed.
+ *
+ * It is written this way because the criterion side of exactly this rule was
+ * once got wrong: those transforms rebuilt the criterion out of the fields they
+ * knew about, which silently reset the `when` tag of any criterion whose text
+ * was typed into. Listing the fields to keep is how that happens.
+ */
+function withoutDesc(line: TemplateLine): TemplateLine {
+  if (isCardLine(line) || line.desc === undefined) return line;
+  const { desc: _dropped, ...rest } = line;
+  return rest;
 }
 
 export function withLineRange(template: Template, id: string, { min, max }: CopyRange): Template {
@@ -438,7 +454,7 @@ export function withoutGroup(template: Template, id: string): Template {
 
   const lines = template.lines.map((line) =>
     !isCardLine(line) && line.desc !== undefined && descNamesGroup(line.desc, id)
-      ? { id: line.id, min: line.min, max: line.max, text: line.text }
+      ? withoutDesc(line)
       : line,
   );
   const criteria = template.criteria.map((criterion) =>

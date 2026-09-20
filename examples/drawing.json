@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "deckSize": 40,
+  "hand": {
+    "size": 5
+  },
+  "mode": "first",
+  "weighted": false,
+  "groups": [],
+  "lines": [
+    {
+      "id": "pot",
+      "text": "[Pot of Extravagance]",
+      "min": 0,
+      "max": 3,
+      "draw": {
+        "n": 2,
+        "oncePerTurn": true
+      }
+    },
+    {
+      "id": "upstart",
+      "text": "[Upstart Goblin]",
+      "min": 0,
+      "max": 3,
+      "draw": {
+        "n": 1
+      }
+    },
+    {
+      "id": "starter",
+      "text": "[Sage with Eyes of Blue]",
+      "min": 1,
+      "max": 3
+    },
+    {
+      "id": "extender",
+      "text": "[The White Stone of Ancients]",
+      "min": 1,
+      "max": 3
+    },
+    {
+      "id": "handtrap",
+      "text": "[Ash Blossom & Joyous Spring]",
+      "min": 3,
+      "max": 3
+    },
+    {
+      "id": "monsters",
+      "text": "level 4 or lower monster",
+      "min": 6,
+      "max": 12
+    },
+    {
+      "id": "traps",
+      "text": "trap",
+      "min": 3,
+      "max": 8
+    }
+  ],
+  "remainder": {
+    "min": 0,
+    "max": null
+  },
+  "criteria": [
+    {
+      "id": "good-already",
+      "name": "a starter and no dead hand trap \u2014 stop here rather than dig into one",
+      "text": "1x [Sage with Eyes of Blue] and no [Ash Blossom & Joyous Spring]",
+      "when": "both",
+      "stop": true
+    },
+    {
+      "id": "worth-digging",
+      "name": "the full combo, worth digging for",
+      "text": "1x [Sage with Eyes of Blue] and 1x [The White Stone of Ancients]",
+      "when": "both"
+    }
+  ]
+}

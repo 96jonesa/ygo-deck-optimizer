@@ -127,6 +127,42 @@ describe.skipIf(!EDOPRO_WORKDIR)('M1 exit: optimize against a real install (orac
     ]);
   });
 
+  /**
+   * The draw-card example (PRD §5.7) end to end, against the real database: a
+   * template whose hand is a PREFIX of the deck, with one criterion the player
+   * would STOP for and one worth digging past it.
+   */
+  it('answers the drawing example: one exact fraction per hand size, summing to the headline', async () => {
+    const drawing = path.resolve(import.meta.dirname, '../../examples/drawing.json');
+    const { result } = await optimizeJson(drawing);
+    expect(result).toMatchObject({ status: 'done', done: 144, total: 144 });
+    const { score, blend } = result.best;
+    // Six lengths: five cards opened on, then what 3 once-per-turn draw-2s and
+    // 3 draw-1s can reach — 5, 6, 7, 8, 9, 10.
+    expect(score.parts.map((part: { prefix: number }) => part.prefix)).toEqual([5, 6, 7, 8, 9, 10]);
+    const summed = score.parts.reduce(
+      (sum: number, part: { num: number; den: number }) => sum + part.num / part.den,
+      0,
+    );
+    expect(summed).toBeCloseTo(blend.num / blend.den, 12);
+    expect(score.pDisplay).toBeCloseTo(blend.num / blend.den, 12);
+
+    // Marking the first criterion "stop here" is worth 1.44 percentage points:
+    // it keeps the hands that already work instead of drawing into a hand trap
+    // that breaks the limit. That is the whole case for the flag, in one number.
+    expect(blend.num / blend.den).toBeCloseTo(0.319477, 6);
+
+    // More copies of a draw card is better here, and the sweep says so.
+    for (const id of ['pot', 'upstart']) {
+      const sweep = result.sweeps.find((own: { lineId: string }) => own.lineId === id);
+      const nums = sweep.cells.map(
+        (cell: { best: { blend: { num: number } } }) => cell.best.blend.num,
+      );
+      expect(nums).toEqual([...nums].sort((a: number, b: number) => a - b));
+      expect(sweep.argmax).toEqual([3]);
+    }
+  });
+
   it('answers the brick example: the odds fall with every further copy of the brick', async () => {
     const brick = path.resolve(import.meta.dirname, '../../examples/brick.json');
     const { result, sweepFixed } = await optimizeJson(brick, '--sweep', 'brick');

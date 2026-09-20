@@ -1,7 +1,7 @@
 import {
   type CompiledCriterion,
   type CompiledRequirement,
-  MAX_HAND_SIZE,
+  MAX_HAND,
   maxCriterionWeight,
   type Problem,
   type SixthCard,
@@ -111,8 +111,11 @@ function capsOf(reqs: readonly CompiledRequirement[]): Map<number, number> {
 
 function compileCriterion({ slots, limits, reqs }: SixthCard): HallCriterion {
   const needOf = new Map<number, number>();
-  // More slots than any hand holds is never met; its 2^slots subsets are never built.
-  if (slots.length <= MAX_HAND_SIZE) {
+  // More slots than any hand holds is never met; its 2^slots subsets are never
+  // built. The bound is the largest hand DRAW CARDS can build and not the
+  // opening hand — `meets` refuses a criterion with more slots than the cards
+  // it is given, so a hand of eight has to be able to meet a request for seven.
+  if (slots.length <= MAX_HAND) {
     const unionOf = new Int32Array(1 << slots.length);
     const sizeOf = new Uint8Array(1 << slots.length);
     for (let subset = 1; subset < 1 << slots.length; subset++) {

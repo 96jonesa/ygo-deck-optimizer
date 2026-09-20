@@ -6,7 +6,10 @@ import { MAX_RANGES, MAX_SIXTH_SLOTS } from './ast';
 export const MAX_FLAT_CRITERIA = 256;
 
 export interface ExpandOptions {
-  /** The largest hand a criterion will be held against (6 when going second). */
+  /**
+   * The largest hand a criterion will be held against: 6 going second, and the
+   * hand DRAW CARDS can build where there are any (`largestHand`).
+   */
   maxHandSize: number;
 }
 

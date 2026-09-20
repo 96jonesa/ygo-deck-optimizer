@@ -2,9 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { MAX_RANGES } from '../../../src/core/criteria/ast';
 import {
   checkWeightBound,
+  copiesUsed,
+  type DrawSpec,
+  drawClassesOf,
+  drawsOf,
+  largestHand,
+  longestPrefix,
   MAX_CLASSES,
   MAX_DECK_SIZE,
+  MAX_HAND,
   MAX_HAND_SIZE,
+  MAX_PREFIX,
   outcomesOf,
   type Problem,
   partProblem,
@@ -478,6 +486,200 @@ describe('validateProblem', () => {
       expect(() => validateProblem(withCriteria([1, 1]))).toThrow(
         'hand size 5: criterion 1 appears twice',
       );
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Draw cards (PRD §5.7)
+// ---------------------------------------------------------------------------
+
+/** A problem whose class 1 draws, with everything else as `valid()` has it. */
+function drawing(draw: DrawSpec, over: Partial<Problem> = {}): Problem {
+  const base = valid();
+  return {
+    ...base,
+    classes: base.classes.map((info, cls) => (cls === 1 ? { ...info, draw } : info)),
+    ...over,
+  };
+}
+
+describe('drawClassesOf', () => {
+  it('is empty for a problem without draw cards', () => {
+    expect(drawClassesOf(valid().classes)).toEqual([]);
+  });
+
+  it('carries the class index and its `max`, which is what bounds the copies', () => {
+    expect(drawClassesOf(drawing({ n: 2 }).classes)).toEqual([{ cls: 1, max: 3, n: 2 }]);
+    expect(drawClassesOf(drawing({ n: 2, oncePerTurn: true }).classes)).toEqual([
+      { cls: 1, max: 3, n: 2, oncePerTurn: true },
+    ]);
+  });
+});
+
+describe('copiesUsed', () => {
+  it('is every copy of an ordinary draw card', () => {
+    expect(copiesUsed(0, { n: 2 })).toBe(0);
+    expect(copiesUsed(3, { n: 2 })).toBe(3);
+  });
+
+  it('is at most one of a once-per-turn card, however many are held', () => {
+    expect(copiesUsed(0, { n: 2, oncePerTurn: true })).toBe(0);
+    expect(copiesUsed(1, { n: 2, oncePerTurn: true })).toBe(1);
+    expect(copiesUsed(3, { n: 2, oncePerTurn: true })).toBe(1);
+  });
+});
+
+describe('drawsOf', () => {
+  const draws = drawClassesOf(drawing({ n: 2 }).classes);
+
+  it('is what the draw cards a prefix holds ask for', () => {
+    expect(drawsOf([0, 0, 0], draws)).toBe(0);
+    expect(drawsOf([3, 2, 0], draws)).toBe(4);
+  });
+});
+
+/**
+ * THE TWO SIZE BOUNDS, and they are different numbers: the PREFIX drives what a
+ * score costs, the HAND drives what a criterion may ask. Reading one where the
+ * other belongs is the mistake this pins.
+ */
+describe('longestPrefix and largestHand', () => {
+  const of = (n: number, copies: number, oncePerTurn?: true) =>
+    drawClassesOf([
+      { lineIds: ['blank'], min: 0, max: 40 },
+      {
+        lineIds: ['draws'],
+        min: 0,
+        max: copies,
+        draw: oncePerTurn === undefined ? { n } : { n, oncePerTurn },
+      },
+    ]);
+
+  it.each([
+    ['3x Pot of Greed (draws 2)', 2, 3, undefined, 11, 8],
+    ['3x Upstart Goblin (draws 1)', 1, 3, undefined, 8, 5],
+    ['3x a once-per-turn draw-2', 2, 3, true, 7, 6],
+    ['3x a draw-3', 3, 3, undefined, 14, 11],
+  ] as const)(
+    '%s: the prefix and the hand are different numbers',
+    (_label, n, copies, once, prefix, hand) => {
+      const draws = of(n, copies, once);
+      expect(longestPrefix(5, draws)).toBe(prefix);
+      expect(largestHand(5, draws)).toBe(hand);
+    },
+  );
+
+  it('is the hand size itself when nothing draws', () => {
+    expect(longestPrefix(5, [])).toBe(5);
+    expect(largestHand(5, [])).toBe(5);
+  });
+
+  it('adds up over several draw classes', () => {
+    const draws = drawClassesOf([
+      { lineIds: ['blank'], min: 0, max: 40 },
+      { lineIds: ['pot'], min: 0, max: 3, draw: { n: 2 } },
+      { lineIds: ['upstart'], min: 0, max: 3, draw: { n: 1 } },
+    ]);
+    expect(longestPrefix(5, draws)).toBe(14);
+    expect(largestHand(5, draws)).toBe(8);
+  });
+});
+
+describe('validateProblem', () => {
+  describe('draw cards', () => {
+    it('accepts a class that draws', () => {
+      expect(() => validateProblem(drawing({ n: 2 }))).not.toThrow();
+      expect(() => validateProblem(drawing({ n: 1, oncePerTurn: true }))).not.toThrow();
+    });
+
+    it('refuses a draw card that draws nothing', () => {
+      expect(() => validateProblem(drawing({ n: 0 }))).toThrow(/positive whole number/);
+      expect(() => validateProblem(drawing({ n: -1 }))).toThrow(/positive whole number/);
+      expect(() => validateProblem(drawing({ n: 1.5 }))).toThrow(/positive whole number/);
+    });
+
+    it('refuses the BLANK class drawing: its cards are the ones nothing can see', () => {
+      const problem = valid();
+      problem.classes[0] = { ...problem.classes[0]!, draw: { n: 2 } };
+      expect(() => validateProblem(problem)).toThrow(/blank class cannot draw/);
+    });
+
+    /**
+     * DECK-OUT IS REFUSED, not modelled. The model would drop that mass rather
+     * than mis-count it, and refusing is what buys the standing invariant that
+     * the reachable prefixes carry probability exactly 1.
+     */
+    it('refuses draw cards that could ask for more cards than the deck holds', () => {
+      const problem = drawing({ n: 2 });
+      problem.deckSize = 8;
+      problem.classes[0] = { lineIds: ['remainder'], min: 0, max: 8 };
+      expect(() => validateProblem(problem)).toThrow(/the deck would run out/);
+    });
+
+    it('refuses a prefix past MAX_PREFIX, which is about build time and not exactness', () => {
+      const deep = drawing({ n: 4 });
+      deep.classes[1] = { ...deep.classes[1]!, max: 3 };
+      // 5 + 4 × 3 = 17.
+      expect(() => validateProblem(deep)).toThrow(
+        new RegExp(`reach 17 cards deep.*at most ${MAX_PREFIX}`),
+      );
+    });
+
+    it('refuses a hand past MAX_HAND, which is the matcher’s subset tables', () => {
+      const wide = drawing({ n: 6 });
+      wide.classes[1] = { ...wide.classes[1]!, max: 2 };
+      // Prefix 5 + 12 = 17 would be refused first, so shrink the copies: one
+      // copy of a draw-9 reaches a prefix of 14 and a hand of 13.
+      const one = drawing({ n: 9 });
+      one.classes[1] = { ...one.classes[1]!, max: 1 };
+      expect(() => validateProblem(one)).toThrow(
+        new RegExp(`build a hand of up to 13 cards.*at most ${MAX_HAND}`),
+      );
+      expect(() => validateProblem(wide)).toThrow(/cards deep/);
+    });
+
+    /**
+     * `then` and draw cards cannot be judged together. The going-second
+     * machinery reads a set of `H` cards as `H` equally likely (opening, drawn)
+     * pairs, and a draw card has to land among the first `H` to resolve at all —
+     * so the last position is biased towards them and the reading is false.
+     */
+    it('refuses the going-second split together with draw cards', () => {
+      const split = drawing(
+        { n: 2 },
+        {
+          handSizes: [{ H: 5, weight: 1, drawn: true }],
+          criteria: [{ slots: [0b010], limits: [], sixth: { slots: [0b100], limits: [] } }],
+        },
+      );
+      expect(() => validateProblem(split)).toThrow(
+        /`then` and draw cards cannot be judged together/,
+      );
+    });
+
+    it('refuses a hand that draws its last card separately, split criterion or not', () => {
+      const drawn = drawing({ n: 2 }, { handSizes: [{ H: 5, weight: 1, drawn: true }] });
+      expect(() => validateProblem(drawn)).toThrow(/two different sample spaces/);
+    });
+
+    /**
+     * The exactness bound is over the PREFIX and not the hand: a score sums over
+     * the ℓ-card prefixes, so `C(N, ℓ)` is what a numerator is bounded by, and
+     * `C(N, ℓ)` is very much larger than `C(N, H)`.
+     */
+    it('bounds a criterion weight by C(N, prefix), not by C(N, hand)', () => {
+      const heavy = drawing(
+        { n: 2 },
+        {
+          criteria: [{ slots: [0b010], limits: [], weight: 10_000_000 }],
+        },
+      );
+      expect(() => validateProblem(heavy)).toThrow(/at a prefix of 11/);
+      // The same weight at the same hand, with the draw cards inert, is fine.
+      const inert = valid();
+      inert.criteria = [{ slots: [0b010], limits: [], weight: 1_000_000 }];
+      expect(() => validateProblem(inert)).not.toThrow();
     });
   });
 });

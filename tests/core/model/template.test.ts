@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   CRITERION_WEIGHT_MAX,
   countsFor,
+  DRAW_CARDS_MAX,
   handSizeForMode,
   modeOf,
   partsOfMode,
   splitNeedsSecond,
+  stopsFor,
   TEMPLATE_VERSION,
   validateTemplate,
   weightOf,
@@ -560,5 +562,123 @@ describe('criterion weights', () => {
     // `checkWeightBound`; this one is about a field that must not accept a typo.
     expect(CRITERION_WEIGHT_MAX).toBe(1000);
     expect(CRITERION_WEIGHT_MAX).toBeLessThan(Number.MAX_SAFE_INTEGER / 50_063_860);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Draw cards (PRD §5.7)
+// ---------------------------------------------------------------------------
+
+describe('stopsFor', () => {
+  it('is false for a criterion that says nothing: the box is checked by default', () => {
+    expect(stopsFor({})).toBe(false);
+    expect(stopsFor({ stop: false })).toBe(false);
+  });
+
+  it('is true only where the criterion says so', () => {
+    expect(stopsFor({ stop: true })).toBe(true);
+  });
+});
+
+describe('validateTemplate', () => {
+  describe("a line's `draw`", () => {
+    const drawn = (draw: unknown) =>
+      withLine({
+        id: 'l1',
+        text: 'spell',
+        min: 0,
+        max: 3,
+        ...(draw === undefined ? {} : { draw }),
+      });
+    const lineOf = (json: Record<string, unknown>) => {
+      const result = validateTemplate(json);
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      return result.template.lines[0]!;
+    };
+
+    it('is absent on a line that does not draw, which is every line written before this', () => {
+      expect(lineOf(drawn(undefined))).not.toHaveProperty('draw');
+    });
+
+    it('is kept on a description line and on a picker line alike', () => {
+      expect(lineOf(drawn({ n: 2 }))).toHaveProperty('draw', { n: 2 });
+      const picked = withLine({
+        id: 'l1',
+        card: { passcode: 55144522, name: 'Pot of Greed' },
+        min: 0,
+        max: 3,
+        draw: { n: 2 },
+      });
+      expect(lineOf(picked)).toHaveProperty('draw', { n: 2 });
+    });
+
+    it('drops `oncePerTurn: false` rather than store the default twice over', () => {
+      expect(lineOf(drawn({ n: 2, oncePerTurn: false }))).toHaveProperty('draw', { n: 2 });
+      expect(lineOf(drawn({ n: 2, oncePerTurn: true }))).toHaveProperty('draw', {
+        n: 2,
+        oncePerTurn: true,
+      });
+    });
+
+    it('refuses a draw of nothing, and one past what the editor allows', () => {
+      expect(errorsOf(drawn({ n: 0 }))).toEqual([
+        `lines[0] ("l1"): \`draw.n\` is 0; a draw card draws 1 to ${DRAW_CARDS_MAX} cards — a card that draws none is not one`,
+      ]);
+      expect(errorsOf(drawn({ n: DRAW_CARDS_MAX + 1 }))).toHaveLength(1);
+      expect(errorsOf(drawn({ n: DRAW_CARDS_MAX }))).toEqual([]);
+    });
+
+    it('refuses a `draw` that is not an object, and an `n` that is not a count', () => {
+      expect(errorsOf(drawn(2))).toEqual([
+        'lines[0] ("l1"): `draw` must be { n, oncePerTurn }, not 2',
+      ]);
+      expect(errorsOf(drawn({ n: 'two' }))).toHaveLength(1);
+      expect(errorsOf(drawn({}))).toHaveLength(1);
+      expect(errorsOf(drawn({ n: 2, oncePerTurn: 'yes' }))).toEqual([
+        'lines[0] ("l1"): `draw.oncePerTurn` must be true or false, not "yes"',
+      ]);
+    });
+  });
+
+  describe("a criterion's `stop`", () => {
+    const criterionOf = (json: Record<string, unknown>) => {
+      const result = validateTemplate(json);
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      return result.template.criteria[0]!;
+    };
+    const toggled = (stop: unknown) =>
+      withField('criteria', [
+        { id: 'c1', text: '1x monster', ...(stop === undefined ? {} : { stop }) },
+      ]);
+
+    it('is absent where the file says nothing: the default is read, not stored', () => {
+      expect(criterionOf(toggled(undefined))).not.toHaveProperty('stop');
+    });
+
+    it('is kept either way round where the file says something', () => {
+      expect(criterionOf(toggled(false)).stop).toBe(false);
+      expect(criterionOf(toggled(true)).stop).toBe(true);
+    });
+
+    it('refuses anything but a boolean', () => {
+      expect(errorsOf(toggled('no'))).toEqual([
+        'criteria[0] ("c1"): `stop` must be true or false, not "no"',
+      ]);
+    });
+  });
+
+  /**
+   * `draw` and `stop` are OPTIONAL, so every file written before them reads
+   * as the template it always was — which is the argument that lets a feature
+   * land without a `TEMPLATE_VERSION` bump, the same one `weighted` used.
+   */
+  it('reads a file written before draw cards existed, unchanged and at the same version', () => {
+    const result = validateTemplate(valid());
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.template.version).toBe(TEMPLATE_VERSION);
+      expect(result.template.lines.every((own) => !('draw' in own))).toBe(true);
+      expect(result.template.criteria.every((own) => !('stop' in own))).toBe(true);
+    }
   });
 });

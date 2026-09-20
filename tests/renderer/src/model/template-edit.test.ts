@@ -1119,3 +1119,68 @@ describe('a criterion keeps everything but its parsed form', () => {
     });
   });
 });
+
+/**
+ * THE SILENT REBUILD, on the editor side. A transform that lists the fields it
+ * knows about drops the ones it does not — which is how `withCriterionText`
+ * once reset the `when` tag of any criterion whose text was typed into. `draw`
+ * (PRD §5.7) is the newest field a line carries, and it is not text.
+ */
+describe('a line’s `draw` survives the edits that are not about it', () => {
+  const drawn = (): Template => {
+    const base = three();
+    return {
+      ...base,
+      lines: base.lines.map((line, at) =>
+        at === 0 ? { ...line, draw: { n: 2, oncePerTurn: true as const } } : line,
+      ),
+    };
+  };
+  const drawOf = (template: Template, id: string) =>
+    template.lines.find((line) => line.id === id) as { draw?: unknown };
+
+  it('survives typing over the text, which only takes the parsed form away', () => {
+    const edited = withLineText(drawn(), 'line1', 'quick-play spell');
+    expect(drawOf(edited, 'line1').draw).toEqual({ n: 2, oncePerTurn: true });
+    expect(edited.lines[0]).not.toHaveProperty('desc');
+  });
+
+  it('survives a change of copy range', () => {
+    const edited = withLineRange(drawn(), 'line1', { min: 1, max: 2 });
+    expect(drawOf(edited, 'line1').draw).toEqual({ n: 2, oncePerTurn: true });
+  });
+
+  it('survives dropping a group the line’s description named', () => {
+    const used = withLineText(withGroup(drawn(), 'starter'), 'line1', '{starter}');
+    const after = withoutGroup(used, 'g1');
+    expect(drawOf(after, 'line1').draw).toEqual({ n: 2, oncePerTurn: true });
+    expect(textOf(after, 'line1')).toBe('{starter}');
+  });
+
+  it('survives being moved', () => {
+    const moved = withMovedLine(drawn(), 'line1', 1);
+    expect(drawOf(moved, 'line1').draw).toEqual({ n: 2, oncePerTurn: true });
+  });
+});
+
+describe('a criterion’s `stop` survives the edits that are not about it', () => {
+  const toggled = (): Template => {
+    const base = withCriterion(three());
+    return {
+      ...base,
+      criteria: base.criteria.map((criterion) => ({ ...criterion, stop: true as const })),
+    };
+  };
+  const stopOfId = (template: Template, id: string) =>
+    template.criteria.find((criterion) => criterion.id === id)?.stop;
+
+  it('survives typing over the text', () => {
+    const id = toggled().criteria[0]!.id;
+    expect(stopOfId(withCriterionText(toggled(), id, '2x monster'), id)).toBe(true);
+  });
+
+  it('survives naming it', () => {
+    const id = toggled().criteria[0]!.id;
+    expect(stopOfId(withCriterionName(toggled(), id, 'opening'), id)).toBe(true);
+  });
+});

@@ -15,7 +15,9 @@ import {
   type ClassInfo,
   type CompiledCriterion,
   type CompiledRequirement,
+  type DrawSpec,
   type HandSize,
+  largestHand,
   MAX_CLASSES,
   type Problem,
   type SixthCard,
@@ -29,6 +31,7 @@ import {
   partsOfMode,
   type RunMode,
   splitNeedsSecond,
+  stopsFor,
   type Template,
   type TemplateGroup,
   weightOf,
@@ -56,6 +59,8 @@ export interface ResolvedLine {
   min: number;
   /** `null` is unbounded, which only the remainder can be. */
   max: number | null;
+  /** Set when the line's cards DRAW (PRD §5.7). */
+  draw?: DrawSpec;
 }
 
 /** A distinct description of some requirement or limit: one column of the match matrix. */
@@ -96,6 +101,8 @@ export interface ResolvedFlat extends ResolvedSide {
    * alternative is judged over the whole hand, as every alternative was before.
    */
   sixth?: ResolvedSide;
+  /** An alternative the player would STOP for: met by the opening, nothing is drawn (PRD §5.7). */
+  stop?: true;
   /**
    * What a hand meeting this alternative is WORTH (PRD §5.6). Absent is 1, and
    * is what every alternative of a template that does not weight its criteria
@@ -121,6 +128,8 @@ export interface ResolvedCriterion {
    * criteria and gives this one a weight of its own (`weightOf`).
    */
   weight: number;
+  /** Whether the player would STOP for it, defaulted (`stopsFor`). */
+  stop: boolean;
   /** Canonical text of `expr`. */
   canonical: string;
   /** This criterion's own expansion, for the reader; `flat` is what is judged. */
@@ -134,7 +143,15 @@ export interface ResolvedCriterion {
  */
 export interface ResolvedTemplate {
   deckSize: number;
+  /** The OPENING hand: 5 going first, 6 going second. */
   handSize: number;
+  /**
+   * The largest hand the criteria were expanded for: `handSize` without draw
+   * cards, and the hand they can build with them (`largestHand`). It is what
+   * `compileProblem` holds the run to, and what a dropped alternative was
+   * dropped against.
+   */
+  judgedHand: number;
   /** The template's lines in order, then the remainder. */
   lines: ResolvedLine[];
   descriptions: ResolvedDescription[];
@@ -178,6 +195,13 @@ export function indexFlat(
   columnOf: ColumnOf,
   /** What alternative `at` is worth; the default leaves every one unweighted. */
   weightOf: (at: number) => number | undefined = () => undefined,
+  /**
+   * Whether alternative `at` is one the player would STOP for (PRD §5.7). Like
+   * `weightOf` it comes from the CRITERIA an alternative was produced by — the
+   * OR of theirs, where the weight is the maximum: a hand meeting the
+   * alternative meets each of them, so one of them stopping is enough.
+   */
+  stopOf: (at: number) => boolean = () => false,
 ): ResolvedFlat[] {
   const side = ({ reqs, limits }: Pick<FlatCriterion, 'reqs' | 'limits'>): ResolvedSide => ({
     reqs: reqs.map(({ n, max, desc }) => {
@@ -192,6 +216,9 @@ export function indexFlat(
     // class has to tell apart every description any criterion mentions,
     // wherever in the criterion it stands.
     if (sixth !== undefined) indexed.sixth = side(sixth);
+    // Whether the player would stop for it travels with it, for the reason its
+    // bounds do: a second copy of this rule is how it goes missing.
+    if (stopOf(at)) indexed.stop = true;
     const weight = weightOf(at);
     // Left out when it is 1, so an unweighted template is byte for byte what it was.
     if (weight !== undefined && weight !== 1) indexed.weight = weight;
@@ -301,6 +328,9 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
       count,
       min: line.min,
       max: line.max,
+      // What a line DRAWS travels with it into the classes, where it is part of
+      // the class key: a draw line is never merged into the blank class.
+      ...(line.draw === undefined ? {} : { draw: line.draw }),
     });
   }
   lines.push({
@@ -315,6 +345,20 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
   });
 
   const handSize = template.hand.size;
+  // The largest hand a criterion will be held against. Draw cards make it
+  // larger than the hand size, and a criterion asking for more than the opening
+  // holds is then perfectly satisfiable — so it is this, and not `handSize`,
+  // that decides what `expand` drops and what a ceiling can bind against.
+  //
+  // Read off the LINES rather than off the classes, which do not exist yet: the
+  // two agree, since once-per-turn lines never merge and the rest contribute
+  // `(n − 1) · max` whether their maxima are summed before or after.
+  const judgedHand = largestHand(
+    handSize,
+    template.lines.flatMap(({ draw, max }, at) =>
+      draw === undefined ? [] : [{ cls: at, max, ...draw }],
+    ),
+  );
   const weights = criterionWeights(template);
   const weighted = template.weighted === true;
   const parsedCriteria: {
@@ -324,6 +368,7 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
     expr: Expr;
     when: CriterionWhen;
     weight: number;
+    stop: boolean;
   }[] = [];
   // Parsing may drop a criterion, so the weights are carried on the entries
   // that survive rather than looked up by position afterwards.
@@ -339,10 +384,11 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
     if (meant.expr.op === 'split' && when !== 'second')
       errors.push(`criterion ${JSON.stringify(id)}: ${splitNeedsSecond(when)}`);
     const weight = weights[at]!;
+    const stop = stopsFor(criterion);
     parsedCriteria.push(
       name === undefined
-        ? { id, text, expr: meant.expr, when, weight }
-        : { id, name, text, expr: meant.expr, when, weight },
+        ? { id, text, expr: meant.expr, when, weight, stop }
+        : { id, name, text, expr: meant.expr, when, weight, stop },
     );
   });
 
@@ -368,11 +414,17 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
     descriptions[at]![role] = true;
     return at;
   };
-  const indexed = (flat: readonly FlatCriterion[]) => indexFlat(flat, column);
+  const indexed = (flat: readonly FlatCriterion[], stop: boolean) =>
+    indexFlat(
+      flat,
+      column,
+      () => undefined,
+      () => stop,
+    );
 
   const criteria: ResolvedCriterion[] = [];
   for (const criterion of parsedCriteria) {
-    const expanded = expand(criterion.expr, { maxHandSize: handSize });
+    const expanded = expand(criterion.expr, { maxHandSize: judgedHand });
     if (!expanded.ok) {
       errors.push(`criterion ${JSON.stringify(criterion.id)}: ${expanded.message}`);
       continue;
@@ -380,7 +432,7 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
     criteria.push({
       ...criterion,
       canonical: printCriterion(criterion.expr, descCtx),
-      alternatives: indexed(expanded.flat),
+      alternatives: indexed(expanded.flat, criterion.stop),
       dropped: expanded.dropped,
     });
   }
@@ -388,13 +440,17 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
 
   const all = expandAll(
     parsedCriteria.map((criterion) => criterion.expr),
-    { maxHandSize: handSize },
+    { maxHandSize: judgedHand },
   );
   if (!all.ok) return { ok: false, errors: [all.message] };
   // An alternative several criteria produced is worth the HIGHEST of their
-  // weights: a hand meeting it meets each of them at once.
-  const flat = indexFlat(all.flat, column, (at) =>
-    all.sources[at]!.reduce((most, who) => Math.max(most, parsedCriteria[who]!.weight), 0),
+  // weights, and is stopped for if ANY of them stops: a hand meeting it meets
+  // each of them at once.
+  const flat = indexFlat(
+    all.flat,
+    column,
+    (at) => all.sources[at]!.reduce((most, who) => Math.max(most, parsedCriteria[who]!.weight), 0),
+    (at) => all.sources[at]!.some((who) => parsedCriteria[who]!.stop),
   );
 
   const impliesCtx = { cards: ctx.cards, groups: members };
@@ -409,7 +465,7 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
 
   if (all.dropped > 0)
     warnings.push(
-      `${all.dropped} alternative(s) need more than the ${handSize} cards of a hand and can never be met`,
+      `${all.dropped} alternative(s) need more than the ${judgedHand} cards of a hand and can never be met`,
     );
   if (flat.length === 0) warnings.push('no criterion can ever be met: every hand fails');
   for (const description of descriptions)
@@ -421,6 +477,7 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
     resolved: {
       deckSize: template.deckSize,
       handSize,
+      judgedHand,
       lines,
       descriptions,
       matrix,
@@ -476,13 +533,30 @@ export function handSizesForMode(
 /** What `compileProblem` reads of a resolved template; `ResolvedTemplate` satisfies it. */
 export interface CompileInput {
   deckSize: number;
-  /** The hand size the criteria were expanded for: larger alternatives are already gone. */
+  /**
+   * The largest HAND the criteria were expanded for: larger alternatives are
+   * already gone. Without draw cards that is the hand size; with them it is the
+   * hand the draw cards can build (`largestHand`), which is larger.
+   */
   handSize: number;
   /** The template's lines in order, then the remainder — the only line whose `max` may be `null`. */
-  lines: readonly { id: string; isRemainder: boolean; min: number; max: number | null }[];
+  lines: readonly {
+    id: string;
+    isRemainder: boolean;
+    min: number;
+    max: number | null;
+    /** Set when the line's cards DRAW (PRD §5.7). */
+    draw?: DrawSpec;
+  }[];
   /** `matrix[line][description]`, one row per entry of `lines`. */
   matrix: readonly (readonly boolean[])[];
   flat: readonly FlatAlternative[];
+  /**
+   * The largest hand the criteria were expanded for, where draw cards make it
+   * larger than `handSize`; absent is `handSize`, which is every template
+   * without them.
+   */
+  judgedHand?: number;
   /**
    * Whether this run's score is a WEIGHTED score rather than a probability
    * (PRD §5.6). Carried through compilation because the answer has to say which
@@ -500,6 +574,8 @@ export interface FlatAlternative {
   weight?: number;
   /** The sixth card's own part; absent is a criterion judged over the whole hand. */
   sixth?: { reqs: readonly ResolvedRange[]; limits: readonly ResolvedCounted[] };
+  /** An alternative the player would STOP for (PRD §5.7). */
+  stop?: true;
 }
 
 /** A member line of a class: its index in `CompileInput.lines`, and its range with `max: null` clamped. */
@@ -519,6 +595,8 @@ export interface CompiledClassInfo {
   max: number;
   /** The match matrix row its lines share: the descriptions (columns) they fill or count against. */
   fills: number[];
+  /** What its cards DRAW (PRD §5.7); every line of the class says the same thing. */
+  draw?: DrawSpec;
 }
 
 /**
@@ -580,7 +658,7 @@ interface CompiledAlternative {
  * - a limit becomes a mask, dropped on the same two grounds.
  */
 export function compileCriterion(
-  { reqs, limits, weight, sixth }: FlatAlternative,
+  { reqs, limits, weight, sixth, stop }: FlatAlternative,
   maskOf: (desc: number) => number,
   largestHand: number,
 ): CompiledAlternative {
@@ -632,6 +710,9 @@ export function compileCriterion(
   // Left out at 1 for the same reason: the weigher then answers exactly what
   // the matcher answered, and the success set carries the 1s it always did.
   if (weight !== undefined && weight !== 1) criterion.weight = weight;
+  // Left out unless the player would stop for it, which is the default and
+  // every criterion written before draw cards.
+  if (stop === true) criterion.stop = true;
   return { criterion, droppedLimits, droppedCeilings };
 }
 
@@ -742,11 +823,6 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
   const seen = columnsOf((at) => mine.has(at));
   const dead = new Set([...columnsOf((at) => !mine.has(at))].filter((desc) => !seen.has(desc)));
 
-  const largestHand = Math.max(...handSizes.map(({ H }) => H));
-  if (largestHand > input.handSize)
-    errors.push(
-      `a hand of ${largestHand} cannot be judged: the criteria were expanded for a hand of ${input.handSize}, and larger alternatives are already dropped — resolve the template at the largest hand size`,
-    );
   for (const { id, min, max } of lines) {
     const isCount = (value: number) => Number.isInteger(value) && value >= 0;
     if (!isCount(min) || (max !== null && (!isCount(max) || min > max)))
@@ -759,17 +835,29 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
   const blank: CompiledClassInfo = { lines: [], min: 0, max: 0, fills: [] };
   const classes = [blank];
   const classOfRow = new Map<string, number>();
-  const classOfLine = lines.map(({ id, min, max }, line) => {
+  const classOfLine = lines.map(({ id, min, max, draw }, line) => {
     const row = matrix[line]!;
     // A description only the other hand's criteria mention distinguishes
     // nothing this run can see (`dead`), so it splits no class here.
     const fills = row.flatMap((fill, desc) => (fill && !dead.has(desc) ? [desc] : []));
-    const key = fills.join(',');
-    let cls = fills.length === 0 ? 0 : classOfRow.get(key);
+    // WHAT A LINE DRAWS tells it apart as surely as what it matches, and it
+    // must enter the key as well as block the shortcut below: a `3x [Pot of
+    // Greed]` no criterion mentions has an all-false row, and a blank class of
+    // cards that DRAW would quietly report today's number for tomorrow's deck.
+    //
+    // ONCE-PER-TURN is a property of the CARD, so such a line joins no other:
+    // two different cards each get their own once, and merging them into one
+    // class would let one of the two stand for both.
+    const drawKey =
+      draw === undefined
+        ? ''
+        : `|draws ${draw.n}${draw.oncePerTurn === true ? ` once per turn as ${id}` : ''}`;
+    const key = `${fills.join(',')}${drawKey}`;
+    let cls = fills.length === 0 && draw === undefined ? 0 : classOfRow.get(key);
     if (cls === undefined) {
       cls = classes.length;
       classOfRow.set(key, cls);
-      classes.push({ lines: [], min: 0, max: 0, fills });
+      classes.push({ lines: [], min: 0, max: 0, fills, ...(draw === undefined ? {} : { draw }) });
     }
     const member = { id, line, min, max: max ?? Math.max(deckSize, min) };
     const into = classes[cls]!;
@@ -783,6 +871,23 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
       ok: false,
       errors: [
         `the criteria tell ${classes.length} classes of card apart, the blank class included; the engine scores at most ${MAX_CLASSES} — merge lines, or drop requirements that split them`,
+      ],
+    };
+
+  // The ROOM a criterion is judged in: the largest hand any part of this run
+  // can hold, which draw cards make larger than the hand size. It is what
+  // decides whether a ceiling or a limit can ever bind, and — through
+  // `input.handSize` — whether the criteria were expanded wide enough to judge.
+  const draws = classes.flatMap(({ draw, max }, cls) =>
+    draw === undefined ? [] : [{ cls, max, ...draw }],
+  );
+  const room = Math.max(...handSizes.map(({ H }) => largestHand(H, draws)));
+  const judgedHand = input.judgedHand ?? input.handSize;
+  if (room > judgedHand)
+    return {
+      ok: false,
+      errors: [
+        `a hand of ${room} cannot be judged: the criteria were expanded for a hand of ${judgedHand}, and larger alternatives are already dropped — resolve the template at the largest hand it can hold`,
       ],
     };
 
@@ -806,7 +911,7 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
   const weighted = input.weighted === true;
   const criteria = judged.map((at, criterion) => {
     const alternative = weighted ? flat[at]! : { ...flat[at]!, weight: 1 };
-    const compiled = compileCriterion(alternative, maskOf, largestHand);
+    const compiled = compileCriterion(alternative, maskOf, room);
     for (const dropped of compiled.droppedLimits) droppedLimits.push({ criterion, ...dropped });
     for (const dropped of compiled.droppedCeilings) droppedCeilings.push({ criterion, ...dropped });
     return compiled.criterion;
@@ -827,10 +932,11 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
       return out;
     }),
     classes: classes.map(
-      ({ lines: members, min, max }): ClassInfo => ({
+      ({ lines: members, min, max, draw }): ClassInfo => ({
         lineIds: members.map((member) => member.id),
         min,
         max,
+        ...(draw === undefined ? {} : { draw }),
       }),
     ),
     criteria,

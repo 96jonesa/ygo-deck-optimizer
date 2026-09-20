@@ -1,3 +1,4 @@
+import type { DrawSpec } from '../model/problem';
 import { createPrng, type Prng } from '../util/prng';
 import { createProgressReporter, type OnProgress } from '../util/progress';
 
@@ -28,6 +29,12 @@ export interface MatchProblem {
   matrix: readonly (readonly boolean[])[];
   /** A hand succeeds if it meets ANY of these. */
   flat: readonly MatchFlat[];
+  /**
+   * Parallel to `matrix`: what each line DRAWS (PRD §5.7), where it does.
+   * Absent, or all absent, is every template without draw cards and the oracle
+   * then deals a hand of `handSize` exactly as it always did.
+   */
+  lines?: readonly { draw?: DrawSpec }[];
 }
 
 /** One flat alternative, with the sixth card's own part when it is split. */
@@ -40,6 +47,13 @@ export interface MatchFlat {
    * about the last one, which is the card `drawHand` drew last.
    */
   sixth?: { reqs: readonly MatchRange[]; limits: readonly MatchCounted[] };
+  /**
+   * An alternative the player would STOP for: met by the opening hand, no draw
+   * card is activated (PRD §5.7). It decides the WINDOW and not which
+   * alternatives are eligible — whichever window is chosen, all of them are
+   * judged in it.
+   */
+  stop?: true;
 }
 
 export interface EstimateOptions {
@@ -110,12 +124,62 @@ export function buildDeck(problem: MatchProblem, counts: readonly number[]): num
  * receives a uniform pick from positions `i` and later, itself included.
  */
 export function drawHand(cards: Int32Array | number[], handSize: number, rng: Prng): void {
-  for (let i = 0; i < handSize; i++) {
+  dealTo(cards, 0, handSize, rng);
+}
+
+/** `drawHand` continued: positions `from` up to `to`, so a prefix can grow a card at a time. */
+function dealTo(cards: Int32Array | number[], from: number, to: number, rng: Prng): void {
+  for (let i = from; i < to; i++) {
     const j = i + rng.nextInt(cards.length - i);
     const picked = cards[j]!;
     cards[j] = cards[i]!;
     cards[i] = picked;
   }
+}
+
+export interface PlayedOut {
+  /** The cards the player is left holding, as line indices; empty when the deck ran out. */
+  hand: number[];
+  deckedOut: boolean;
+}
+
+/**
+ * Deal `handSize` cards and then keep RESOLVING draw cards until none is left
+ * that may be used (PRD §5.7). A resolved copy leaves the hand and is replaced
+ * by `draw.n` cards off the top, drawn one at a time — so the prefix grows
+ * exactly as the process says and nothing solves for its length.
+ *
+ * `cards` is permuted in place, as `drawHand` permutes it.
+ */
+export function playOut(
+  cards: Int32Array | number[],
+  handSize: number,
+  draw: readonly (DrawSpec | undefined)[],
+  rng: Prng,
+): PlayedOut {
+  const hand: number[] = [];
+  let top = 0;
+  const takeOne = (): boolean => {
+    if (top >= cards.length) return false;
+    dealTo(cards, top, top + 1, rng);
+    hand.push(cards[top++]!);
+    return true;
+  };
+  for (let i = 0; i < handSize; i++) if (!takeOne()) return { hand: [], deckedOut: true };
+  const usedOnce = new Set<number>();
+  for (;;) {
+    const at = hand.findIndex((line) => {
+      const spec = draw[line];
+      return spec !== undefined && !(spec.oncePerTurn === true && usedOnce.has(line));
+    });
+    if (at < 0) break;
+    const line = hand[at]!;
+    const spec = draw[line]!;
+    if (spec.oncePerTurn === true) usedOnce.add(line);
+    hand.splice(at, 1);
+    for (let i = 0; i < spec.n; i++) if (!takeOne()) return { hand: [], deckedOut: true };
+  }
+  return { hand, deckedOut: false };
 }
 
 /** A criterion as the judge holds it: requirements with both bounds, and its limits. */
@@ -151,6 +215,8 @@ interface JudgedCriterion {
  */
 export function createJudge(
   problem: MatchProblem,
+  /** The alternatives to judge by; the default is all of them. */
+  only: readonly MatchFlat[] = problem.flat,
 ): (hand: ArrayLike<number>, size?: number) => boolean {
   const columns = problem.matrix[0]?.length ?? 0;
   /** `matches[description][line]`, so a requirement reads one row. */
@@ -170,7 +236,7 @@ export function createJudge(
       limits,
     };
   };
-  const criteria = problem.flat.map((alternative) => ({
+  const criteria = only.map((alternative) => ({
     /** The whole hand, or — when it is split — the cards opened on. */
     opening: judged(alternative),
     sixth: alternative.sixth === undefined ? null : judged(alternative.sixth),
@@ -255,7 +321,8 @@ export function estimate(
 
   const deck = Int32Array.from(buildDeck(problem, counts));
   const cards = new Int32Array(deck.length);
-  const judge = createJudge(problem);
+  const draw = problem.lines?.map((line) => line.draw) ?? [];
+  const draws = draw.some((spec) => spec !== undefined);
   const rng = createPrng(opts.seed);
   const progress = createProgressReporter(
     samples,
@@ -263,13 +330,39 @@ export function estimate(
     opts.now ? { now: opts.now } : {},
   );
 
+  // Without draw cards a hand is `handSize` cards off the top and the whole
+  // sample is one call, exactly as it always was.
+  const judge = createJudge(problem);
+  const stopping = problem.flat.filter(({ stop }) => stop === true);
+  const wouldStop = createJudge(problem, stopping);
+  /**
+   * With draw cards a sample is a PLAY-OUT with ONE decision in it, taken
+   * before anything is drawn: if a `stop` alternative is met by the opening the
+   * player stops there, and otherwise every draw card resolves and the hand
+   * that is left is judged — by EVERY alternative, `stop` ones included, since
+   * the flag decides the window rather than which alternatives may be read.
+   *
+   * A stop is a success outright: the alternative that stopped the draws is one
+   * of the ones success is judged by. A deck-out cannot happen in a template the
+   * engine will score — it refuses one whose draw cards can ask for more cards
+   * than the deck holds — and is counted as a miss rather than silently dropped.
+   */
+  const hit = (): boolean => {
+    if (!draws) {
+      drawHand(cards, handSize, rng);
+      return judge(cards, handSize);
+    }
+    const played = playOut(cards, handSize, draw, rng);
+    if (stopping.length > 0 && wouldStop(cards, handSize)) return true;
+    return !played.deckedOut && judge(played.hand, played.hand.length);
+  };
+
   let hits = 0;
   for (let done = 0; done < samples; ) {
     const end = Math.min(samples, done + CHUNK);
     for (; done < end; done++) {
       cards.set(deck);
-      drawHand(cards, handSize, rng);
-      if (judge(cards, handSize)) hits++;
+      if (hit()) hits++;
     }
     if (done < samples) progress.tick(done);
   }

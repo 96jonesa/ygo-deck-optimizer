@@ -13,7 +13,7 @@ import {
   type ResolvedTemplate,
   resolveTemplate,
 } from '../../../src/core/model/compile';
-import { MAX_CLASSES, validateProblem } from '../../../src/core/model/problem';
+import { type DrawSpec, MAX_CLASSES, validateProblem } from '../../../src/core/model/problem';
 import type { Template, TemplateLine } from '../../../src/core/model/template';
 import { handSucceeds } from '../../../src/core/prob/matcher';
 import { createBlendScorer, createScorer } from '../../../src/core/prob/scorer';
@@ -1786,5 +1786,220 @@ describe('the sixth card through resolve and compile', () => {
     expect(errorsOf(secondTemplate(['1x monster then 2x trap']))[0]).toContain(
       'the sixth card is one card',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Draw cards through resolve and compile (PRD §5.7)
+// ---------------------------------------------------------------------------
+
+describe('draw cards through resolve and compile', () => {
+  const drawLine = (id: string, text: string, draw: DrawSpec, min = 0, max = 3): TemplateLine => ({
+    id,
+    text,
+    min,
+    max,
+    draw,
+  });
+
+  describe('classes', () => {
+    /**
+     * `compile` sends any all-false line to the BLANK class by a shortcut on
+     * the row alone. A `3x [Pot of Greed]` no criterion mentions has exactly
+     * that row — and a blank class of cards that DRAW would make its draws
+     * vanish, so the run would report today's number for tomorrow's deck. The
+     * shortcut has to know about drawing, and this is the test that says so.
+     */
+    it('never puts a DRAW line in the blank class, however little any criterion says about it', () => {
+      const template = templateOf(
+        [line('starter', 'monster'), drawLine('pot', 'spell', { n: 2 })],
+        ['1x monster'],
+      );
+      const c = compiled(resolved(template));
+      // The remainder joins the blank class as it always does; the draw line
+      // gets a class of its own, which is the whole point.
+      expect(membersOf(c)[0]).toEqual([REMAINDER_ID]);
+      const pot = c.classes.find((cls) => cls.lines.some((member) => member.id === 'pot'));
+      expect(pot?.draw).toEqual({ n: 2 });
+      expect(c.problem.classes.some(({ draw }) => draw !== undefined)).toBe(true);
+    });
+
+    it('carries what a class draws onto the problem it compiles to', () => {
+      const template = templateOf(
+        [drawLine('pot', 'spell', { n: 2, oncePerTurn: true }), line('starter', 'monster')],
+        ['1x monster'],
+      );
+      const c = compiled(resolved(template));
+      const at = c.classOfLine[0]!;
+      expect(c.problem.classes[at]!.draw).toEqual({ n: 2, oncePerTurn: true });
+    });
+
+    it('merges two ordinary draw lines that draw the same and match the same', () => {
+      const template = templateOf(
+        [drawLine('pot', 'spell', { n: 2 }, 0, 1), drawLine('other', 'spell', { n: 2 }, 0, 1)],
+        ['1x monster'],
+      );
+      const c = compiled(resolved(template));
+      expect(membersOf(c)).toContainEqual(['pot', 'other']);
+    });
+
+    it('keeps two draw lines apart when they draw different numbers', () => {
+      const template = templateOf(
+        [drawLine('pot', 'spell', { n: 2 }), drawLine('upstart', 'spell', { n: 1 })],
+        ['1x monster'],
+      );
+      expect(membersOf(compiled(resolved(template)))).toContainEqual(['pot']);
+      expect(membersOf(compiled(resolved(template)))).toContainEqual(['upstart']);
+    });
+
+    /**
+     * ONCE-PER-TURN is a property of the CARD. Two once-per-turn lines are two
+     * different cards, each with its own once, and one class holding both would
+     * let a single copy stand for the pair.
+     */
+    it('never merges two once-per-turn lines, even when they are alike in every other way', () => {
+      const spec: DrawSpec = { n: 2, oncePerTurn: true };
+      const template = templateOf(
+        [drawLine('one', 'spell', spec, 0, 1), drawLine('two', 'spell', spec, 0, 1)],
+        ['1x monster'],
+      );
+      const c = compiled(resolved(template));
+      expect(membersOf(c)).toContainEqual(['one']);
+      expect(membersOf(c)).toContainEqual(['two']);
+    });
+  });
+
+  describe('the largest hand', () => {
+    it('is what the criteria are expanded for, so an alternative bigger than the opening survives', () => {
+      // Three copies of a draw-2 reach a hand of eight, and `6x monster` is
+      // then perfectly satisfiable where a hand of five could never meet it.
+      const template = templateOf(
+        [drawLine('pot', 'spell', { n: 2 }), line('starter', 'monster', 0, 20)],
+        ['6x monster'],
+      );
+      const r = resolved(template);
+      expect(r.handSize).toBe(5);
+      expect(r.judgedHand).toBe(8);
+      expect(r.flat).toHaveLength(1);
+      expect(compiled(r).problem.criteria[0]!.slots).toHaveLength(6);
+    });
+
+    it('is the hand size itself without draw cards, so nothing about those templates moves', () => {
+      const r = resolved(templateOf([line('starter', 'monster')], ['6x monster']));
+      expect(r.judgedHand).toBe(5);
+      expect(r.flat).toHaveLength(0);
+    });
+
+    it('is what a ceiling can bind against: one at the largest hand never binds', () => {
+      const template = templateOf(
+        [drawLine('pot', 'spell', { n: 2 }), line('starter', 'monster', 0, 20)],
+        ['1-8x monster'],
+      );
+      const c = compiled(resolved(template));
+      expect(c.droppedCeilings.map(({ max, reason }) => [max, reason])).toEqual([
+        [8, 'never-binds'],
+      ]);
+    });
+
+    it('refuses to compile criteria expanded for a smaller hand than the draws can build', () => {
+      const r = resolved(templateOf([line('starter', 'monster')], ['1x monster']));
+      const narrow = compileProblem({
+        ...r,
+        judgedHand: 5,
+        lines: r.lines.map((own) =>
+          own.id === 'starter' ? { ...own, draw: { n: 2 } as DrawSpec } : own,
+        ),
+      });
+      expect(narrow.ok).toBe(false);
+      if (!narrow.ok) expect(narrow.errors[0]).toMatch(/cannot be judged/);
+    });
+  });
+
+  describe('the stop flag', () => {
+    const withToggle = (stop: boolean) =>
+      templateOf([drawLine('pot', 'spell', { n: 2 }), line('starter', 'monster')], ['1x monster'], {
+        criteria: [{ id: 'c1', text: '1x monster', stop }],
+      });
+
+    it('is left off the compiled criterion when the player would not stop, which is the default', () => {
+      const c = compiled(resolved(withToggle(false)));
+      expect(c.problem.criteria[0]).not.toHaveProperty('stop');
+      expect(resolved(withToggle(false)).criteria[0]!.stop).toBe(false);
+    });
+
+    it('reaches the compiled criterion when the player would stop', () => {
+      const c = compiled(resolved(withToggle(true)));
+      expect(c.problem.criteria[0]!.stop).toBe(true);
+      expect(resolved(withToggle(true)).criteria[0]!.stop).toBe(true);
+    });
+
+    /**
+     * It does not change what an alternative ASKS, so two criteria of the same
+     * text are still ONE alternative — stopped for if EITHER of them stops,
+     * exactly as such an alternative is worth the HIGHEST of their weights.
+     */
+    it('merges two criteria of the same text, and the merged one stops if either does', () => {
+      const template = templateOf(
+        [drawLine('pot', 'spell', { n: 2 }), line('starter', 'monster')],
+        [],
+        {
+          criteria: [
+            { id: 'draws-past', text: '1x monster' },
+            { id: 'stops', text: '1x monster', stop: true },
+          ],
+        },
+      );
+      const r = resolved(template);
+      expect(r.flat).toHaveLength(1);
+      expect(r.flat[0]!.stop).toBe(true);
+      expect(r.flatSources).toEqual([[0, 1]]);
+      expect(compiled(r).problem.criteria[0]!.stop).toBe(true);
+    });
+
+    it('leaves the merged alternative alone when neither criterion stops', () => {
+      const template = templateOf(
+        [drawLine('pot', 'spell', { n: 2 }), line('starter', 'monster')],
+        [],
+        {
+          criteria: [
+            { id: 'a', text: '1x monster' },
+            { id: 'b', text: '1x monster' },
+          ],
+        },
+      );
+      const r = resolved(template);
+      expect(r.flat).toHaveLength(1);
+      expect(r.flat[0]).not.toHaveProperty('stop');
+    });
+  });
+
+  it('refuses `then` and draw cards together, where the model would otherwise be silently wrong', () => {
+    const template = templateOf(
+      [drawLine('pot', 'spell', { n: 2 }), line('starter', 'monster')],
+      [],
+      {
+        hand: { size: 6 },
+        mode: 'second',
+        criteria: [{ id: 'c1', text: 'then 1x monster', when: 'second' }],
+      },
+    );
+    const result = compileProblem(resolved(template), { handSizes: [{ H: 6, weight: 1 }] });
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.errors[0]).toMatch(/`then` and draw cards cannot be judged together/);
+  });
+
+  it('scores a template with draw cards end to end', () => {
+    const template = templateOf(
+      [drawLine('pot', 'spell', { n: 2 }), line('starter', 'monster', 0, 20)],
+      ['1x monster'],
+    );
+    const c = compiled(resolved(template));
+    const totals = c.problem.classes.map(({ min }) => min);
+    totals[0] = c.problem.deckSize - totals.reduce((sum, count) => sum + count, 0);
+    const score = createBlendScorer(c.problem).score(totals);
+    expect(score.parts.map((part) => part.prefix)).toEqual([5, 7, 9, 11]);
+    expect(score.pDisplay).toBeGreaterThanOrEqual(0);
+    expect(score.pDisplay).toBeLessThanOrEqual(1);
   });
 });

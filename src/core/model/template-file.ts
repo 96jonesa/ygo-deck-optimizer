@@ -6,6 +6,7 @@ import {
   type CardSnapshot,
   handSizeForMode,
   modeOf,
+  stopsFor,
   type Template,
   type TemplateCriterion,
   type TemplateLine,
@@ -85,13 +86,16 @@ export function templateToFile(template: Template, ctx: DescContext): TemplateFi
 
   const lines = template.lines.map((line): TemplateLine => {
     if ('card' in line) return line;
+    // Everything but the parsed form is the line's own and is kept: `draw` says
+    // what the line's cards DO, which is not what the text says they are, and a
+    // rebuild that listed the fields it knew about would silently drop it.
+    const { desc: _parsed, ...kept } = line;
     const meant = lineMeaning(line, ctx);
-    if (meant.ok)
-      return { id: line.id, min: line.min, max: line.max, text: line.text, desc: meant.desc };
+    if (meant.ok) return { ...kept, desc: meant.desc };
     warnings.push(
       `line ${JSON.stringify(line.id)} does not parse (${meant.message}); it is saved as text alone`,
     );
-    return { id: line.id, min: line.min, max: line.max, text: line.text };
+    return kept;
   });
 
   const criteria = template.criteria.map((criterion): TemplateCriterion => {
@@ -110,6 +114,12 @@ export function templateToFile(template: Template, ctx: DescContext): TemplateFi
     // and it is kept even when `weighted` is off, so that turning the switch
     // off and on again gives back what was set.
     if (weightOf(criterion) !== 1) out.weight = weightOf(criterion);
+    // And the stop flag likewise, only where it says something: not stopping is
+    // the identity — it is what every criterion of a template without draw
+    // cards means, whichever way the box is ticked — so writing it out would
+    // put `"stop": false` on every criterion of every file already saved, for
+    // no reader's benefit.
+    if (stopsFor(criterion)) out.stop = true;
     if (meant.ok) out.expr = meant.expr;
     else
       warnings.push(

@@ -8,6 +8,7 @@ import {
   drawHand,
   estimate,
   type MatchProblem,
+  playOut,
   wilson95,
 } from '../../../src/core/prob/montecarlo';
 import { createPrng } from '../../../src/core/util/prng';
@@ -632,5 +633,139 @@ describe('the overlap case of PRD §5.4', () => {
     expect(judge([A, B, SPELL, SPELL])).toBe(false);
     // The remainder is a card of unstated kind: not a monster either.
     expect(judge([A, B, 3, 3, 3])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Draw cards (PRD §5.7)
+// ---------------------------------------------------------------------------
+
+describe('playOut', () => {
+  /** A deck of concrete line indices, dealt by a PRNG that is told what to pick. */
+  const fixed = (picks: readonly number[]) => {
+    let at = 0;
+    return { next: () => 0, nextInt: () => picks[at++] ?? 0 };
+  };
+
+  it('is the opening hand when nothing draws', () => {
+    const cards = [0, 1, 2, 3, 4, 5];
+    const { hand, deckedOut } = playOut(cards, 2, [], fixed([0, 0]));
+    expect(hand).toEqual([0, 1]);
+    expect(deckedOut).toBe(false);
+  });
+
+  /**
+   * The resolved copy LEAVES the hand and is replaced by `n` fresh cards, and
+   * those can draw in turn. Nothing solves for the prefix length: it is what the
+   * play-out happened to reach.
+   */
+  it('replaces a resolved draw card with the cards it draws, and lets those draw too', () => {
+    // Line 1 draws 2. Deck: [1, 1, 0, 0, 0, 0]; pick the top card every time.
+    const cards = [1, 1, 0, 0, 0, 0];
+    const { hand } = playOut(cards, 1, [undefined, { n: 2 }], fixed([0, 0, 0, 0, 0, 0]));
+    // Draw the first 1, it resolves into positions 1 and 2 — another 1 and a 0 —
+    // and that one resolves into 3 and 4. Five cards seen, three left in hand.
+    expect(hand).toEqual([0, 0, 0]);
+  });
+
+  it('leaves the further copies of a once-per-turn card in the hand', () => {
+    const cards = [1, 1, 0, 0, 0, 0];
+    const draw = [undefined, { n: 2, oncePerTurn: true as const }];
+    const { hand } = playOut(cards, 1, draw, fixed([0, 0, 0, 0, 0, 0]));
+    // One copy resolves and draws two: the second copy and a blank, and the
+    // second copy stays put.
+    expect(hand).toEqual([1, 0]);
+  });
+
+  it('says so when the deck runs out rather than answer with a short hand', () => {
+    const cards = [1, 0];
+    const { hand, deckedOut } = playOut(cards, 1, [undefined, { n: 2 }], fixed([0, 0]));
+    expect(deckedOut).toBe(true);
+    expect(hand).toEqual([]);
+  });
+});
+
+describe('estimate with draw cards', () => {
+  /** Two lines: `draws` (line 0, a draw-2) and `starter` (line 1); the remainder is line 2. */
+  const problem: MatchProblem = {
+    deckSize: 12,
+    matrix: [[false], [true], [false]],
+    flat: [{ reqs: [{ n: 1, desc: 0 }], limits: [] }],
+    lines: [{ draw: { n: 2 } }, {}, {}],
+  };
+
+  it('beats the same deck with the draw line inert: more cards, more chances', () => {
+    const counts = [3, 3];
+    const inert: MatchProblem = { ...problem, lines: undefined };
+    const drawn = estimate(problem, counts, { handSize: 2, samples: 200_000, seed: 5 });
+    const still = estimate(inert, counts, { handSize: 2, samples: 200_000, seed: 5 });
+    expect(drawn.p).toBeGreaterThan(still.p + 10 * drawn.stderr);
+  });
+
+  it('is the number it always was when no line draws', () => {
+    const counts = [3, 3];
+    const inert: MatchProblem = { ...problem, lines: [{}, {}, {}] };
+    const absent: MatchProblem = { ...problem, lines: undefined };
+    expect(estimate(inert, counts, { handSize: 2, samples: 20_000, seed: 9 }).hits).toBe(
+      estimate(absent, counts, { handSize: 2, samples: 20_000, seed: 9 }).hits,
+    );
+  });
+
+  /**
+   * A `stop` alternative met by the OPENING stops the draws, and the opening is
+   * where the draw cards still sit: one asking for the draw line itself can only
+   * ever be met there, since every copy resolves and leaves once the player
+   * commits.
+   */
+  it('checks the stop alternatives on the opening hand, where the draw card is still a card', () => {
+    const asksForTheDrawCard: MatchProblem = {
+      deckSize: 12,
+      matrix: [[true], [false], [false]],
+      flat: [{ reqs: [{ n: 1, desc: 0 }], limits: [] }],
+      lines: [{ draw: { n: 2 } }, {}, {}],
+    };
+    const counts = [3, 3];
+    // Left alone, it is only ever read after the draws — where the draw cards
+    // are gone, so no hand can hold one.
+    const drawsPast = estimate(asksForTheDrawCard, counts, {
+      handSize: 2,
+      samples: 50_000,
+      seed: 3,
+    });
+    expect(drawsPast.hits).toBe(0);
+    // Marked `stop`, it is checked on the opening first and often met there.
+    const stops: MatchProblem = {
+      ...asksForTheDrawCard,
+      flat: [{ ...asksForTheDrawCard.flat[0]!, stop: true }],
+    };
+    expect(estimate(stops, counts, { handSize: 2, samples: 50_000, seed: 3 }).p).toBeGreaterThan(
+      0.4,
+    );
+  });
+
+  /**
+   * And the draw branch judges EVERY alternative, `stop` ones included: the flag
+   * decides the window rather than which alternatives may be read. A `stop`
+   * alternative the opening misses is still met after the draws.
+   */
+  it('judges a stop alternative after the draws too, when the opening did not meet it', () => {
+    const asksForTheStarter: MatchProblem = {
+      deckSize: 12,
+      matrix: [[false], [true], [false]],
+      flat: [{ reqs: [{ n: 1, desc: 0 }], limits: [], stop: true }],
+      lines: [{ draw: { n: 2 } }, {}, {}],
+    };
+    const counts = [3, 3];
+    const withDraws = estimate(asksForTheStarter, counts, {
+      handSize: 2,
+      samples: 200_000,
+      seed: 8,
+    });
+    const inert = estimate({ ...asksForTheStarter, lines: undefined }, counts, {
+      handSize: 2,
+      samples: 200_000,
+      seed: 8,
+    });
+    expect(withDraws.p).toBeGreaterThan(inert.p + 10 * withDraws.stderr);
   });
 });

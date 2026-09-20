@@ -170,7 +170,13 @@ export function partLines(score: BlendScore, weighted = false): ScoreLine[] {
   return score.parts.map((part) => {
     const success = { num: part.successNum, den: part.den };
     return {
-      label: `going ${part.H === 5 ? 'first' : 'second'}${even ? '' : ` × ${part.weight}`}`,
+      // Draw cards give one hand size several parts, one per prefix length
+      // (PRD §5.7): the length is then what tells them apart, and the share is
+      // the hand size's, so it is not repeated on each of them.
+      label:
+        part.prefix === undefined
+          ? `going ${part.H === 5 ? 'first' : 'second'}${even ? '' : ` × ${part.weight}`}`
+          : `${part.prefix} cards drawn`,
       hand: part.H,
       value: scoreText(part, weighted),
       exact: exactText(part),

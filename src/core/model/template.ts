@@ -2,6 +2,7 @@ import type { Expr } from '../criteria/ast';
 import { validateExpr } from '../criteria/validate';
 import type { Description } from '../desc/ast';
 import { validateDescription } from '../desc/validate';
+import type { DrawSpec } from './problem';
 
 /** The only template file version this build reads (TDD §14). */
 export const TEMPLATE_VERSION = 1;
@@ -12,6 +13,15 @@ export const DECK_SIZE_MAX = 60;
 export const HAND_SIZES = [5, 6] as const;
 /** The game's copy limit, which a line that names one card cannot exceed (PRD §5.1). */
 export const NAMED_CARD_MAX = 3;
+
+/**
+ * The most cards one draw card may draw (PRD §5.7). The engine's own bounds are
+ * `MAX_PREFIX` and `MAX_HAND`, which depend on the copies held as well and are
+ * what actually refuse a template; this is the EDITOR's bound, and it is here so
+ * that a mistyped `20` is caught where it is typed. Pot of Greed draws two and
+ * Pot of Prosperity looks at six, so six is already past everything printed.
+ */
+export const DRAW_CARDS_MAX = 6;
 
 /**
  * The two halves of a game (PRD §5.5): going FIRST is a hand of five, going
@@ -97,6 +107,19 @@ export function weightOf(criterion: Pick<TemplateCriterion, 'weight'>): number {
 }
 
 /**
+ * Whether the player would STOP for this criterion (PRD §5.7): if the opening
+ * hand already meets it, no draw card is activated at all. One that says nothing
+ * would not — the checkbox is checked by default, and checked means "I am
+ * willing to lose this by drawing".
+ *
+ * It decides the STOP, and not which criteria are eligible: whichever window
+ * the stop decision lands on, every criterion is judged in it.
+ */
+export function stopsFor(criterion: Pick<TemplateCriterion, 'stop'>): boolean {
+  return criterion.stop ?? false;
+}
+
+/**
  * The mode a template runs in. `mode` is what it says when it says anything;
  * a file written before modes existed says it with its hand size alone, and a
  * hand of five has always meant going first.
@@ -121,6 +144,17 @@ interface LineRange {
   id: string;
   min: number;
   max: number;
+  /**
+   * Set when the line's cards DRAW (PRD §5.7): each copy that resolves leaves
+   * the hand and is replaced by `n` cards off the top, and cards so drawn draw
+   * in turn. Absent is every line written before draw cards, and every line
+   * that is not one — which is why `TEMPLATE_VERSION` is not bumped for this.
+   *
+   * `oncePerTurn` is a property of the CARD: only the first copy resolves and
+   * the rest sit in hand. Two once-per-turn lines therefore never merge into
+   * one class, each naming its own card and each getting its own once.
+   */
+  draw?: DrawSpec;
 }
 
 /**
@@ -149,6 +183,21 @@ export interface TemplateCriterion {
    * of weights, and exactness (TDD §10.3) rests on that sum being an integer.
    */
   weight?: number;
+  /**
+   * Whether the player would STOP for this criterion (PRD §5.7): `true` and an
+   * opening hand that already meets it activates no draw card. Absent is false
+   * (`stopsFor`) — the checkbox is checked, which means "I am willing to lose
+   * this by drawing".
+   *
+   * It is the STOP DECISION and not an eligibility list. Whichever window the
+   * decision lands on, every criterion is judged in it: a `stop` criterion is
+   * still judged after the draws when some other criterion failed to stop them,
+   * and a criterion left alone still counts towards the weight in a hand that
+   * stopped. Marking one is what protects a hand that already works from being
+   * drawn out of — the only escape hatch the model offers, since every draw card
+   * otherwise resolves.
+   */
+  stop?: boolean;
 }
 
 /** The unspecified cards; `max: null` is unbounded. */
@@ -322,6 +371,30 @@ class Validator {
     return { id, name, cards: cards as TemplateCard[] };
   }
 
+  /** A line's `draw` (PRD §5.7): `{ n, oncePerTurn? }`, or nothing at all. */
+  draw(where: string, value: unknown): DrawSpec | undefined {
+    if (value === undefined) return undefined;
+    if (!isObject(value)) {
+      this.fail(`${where}: \`draw\` must be { n, oncePerTurn }, not ${show(value)}`);
+      return undefined;
+    }
+    const n = this.count(where, 'draw.n', value.n);
+    if (n !== undefined && (n < 1 || n > DRAW_CARDS_MAX))
+      this.fail(
+        `${where}: \`draw.n\` is ${n}; a draw card draws 1 to ${DRAW_CARDS_MAX} cards — a card that draws none is not one`,
+      );
+    let oncePerTurn: true | undefined;
+    if (value.oncePerTurn !== undefined) {
+      if (typeof value.oncePerTurn !== 'boolean')
+        this.fail(
+          `${where}: \`draw.oncePerTurn\` must be true or false, not ${show(value.oncePerTurn)}`,
+        );
+      else if (value.oncePerTurn) oncePerTurn = true;
+    }
+    if (n === undefined || n < 1 || n > DRAW_CARDS_MAX) return undefined;
+    return oncePerTurn === undefined ? { n } : { n, oncePerTurn };
+  }
+
   line(where: string, value: unknown): TemplateLine | undefined {
     if (!isObject(value)) return this.fail(`${where}: must be an object, not ${show(value)}`);
     const id = this.text(where, 'id', value.id);
@@ -329,6 +402,8 @@ class Validator {
     const max = this.count(where, 'max', value.max);
     if (min !== undefined && max !== undefined && min > max)
       this.fail(`${where}: \`min\` ${min} is greater than \`max\` ${max}`);
+    const draw = this.draw(where, value.draw);
+    const drawn = draw === undefined ? {} : { draw };
 
     const hasCard = value.card !== undefined;
     const hasText = value.text !== undefined;
@@ -347,7 +422,7 @@ class Validator {
         );
       if (id === undefined || min === undefined || max === undefined || card === undefined)
         return undefined;
-      return { id, min, max, card };
+      return { id, min, max, ...drawn, card };
     }
     const text = this.draftText(where, 'text', value.text);
     // The stored AST is AUTHORITATIVE (TDD §14), so it is checked here rather
@@ -361,7 +436,9 @@ class Validator {
     }
     if (id === undefined || min === undefined || max === undefined || text === undefined)
       return undefined;
-    return desc === undefined ? { id, min, max, text } : { id, min, max, text, desc };
+    return desc === undefined
+      ? { id, min, max, ...drawn, text }
+      : { id, min, max, ...drawn, text, desc };
   }
 
   criterion(where: string, value: unknown): TemplateCriterion | undefined {
@@ -397,12 +474,21 @@ class Validator {
         );
       else weight = given;
     }
+    // Read whether or not the template holds draw cards, for the reason a
+    // weight is: draw cards decide whether it COUNTS, not whether it may be
+    // written down.
+    let stop: boolean | undefined;
+    if (value.stop !== undefined) {
+      if (typeof value.stop === 'boolean') stop = value.stop;
+      else this.fail(`${where}: \`stop\` must be true or false, not ${show(value.stop)}`);
+    }
     if (id === undefined || text === undefined) return undefined;
     const out: TemplateCriterion = { id, text };
     if (typeof value.name === 'string') out.name = value.name;
     if (expr !== undefined) out.expr = expr;
     if (when !== undefined) out.when = when;
     if (weight !== undefined) out.weight = weight;
+    if (stop !== undefined) out.stop = stop;
     return out;
   }
 

@@ -1,5 +1,6 @@
 import { maxCriterionWeight, type Problem, partProblem, validateProblem } from '../model/problem';
 import { binomialTable } from './binomial';
+import { drawSet, hasDrawCards } from './draw-set';
 import { type SuccessSetOptions, successSet } from './success-set';
 
 /**
@@ -49,10 +50,18 @@ export interface Score extends Fraction {
 export interface Scorer {
   H: number;
   /**
+   * The PREFIX of the deck this part scores, when the problem holds draw cards
+   * (PRD §5.7): the hand is then a prefix of the shuffled deck, and a problem
+   * has one part per length the draw cards can reach. Absent is every problem
+   * without them, whose one part IS the hand of `H`.
+   */
+  prefix?: number;
+  /**
    * The outcomes this hand holds: `outcomes · C(N, H)`, the same for every
    * deck. With the sixth card drawn separately a SET of `H` cards is `H`
    * ordered (opening, drawn) pairs, so both sides of the fraction are `H`
-   * times what they were and the value it means is unchanged.
+   * times what they were and the value it means is unchanged. With DRAW CARDS
+   * it is what the prefix's ordering factors are put over instead.
    */
   den: number;
   /** `outcomesOf` the hand: `H` when the sixth card is drawn separately, else 1. */
@@ -60,6 +69,12 @@ export interface Scorer {
   /** Products summed per score — the stored side of the success set: what a score costs. */
   terms: number;
   complemented: boolean;
+  /**
+   * Rational groups combined per score — with draw cards, the ordering factors
+   * applied outside the float64 sums; 1 without them. It is a real per-deck
+   * cost that a term count cannot show, so `analyze` reports it.
+   */
+  groups: number;
   /** The largest weight any criterion carries; 1 when none is weighted. */
   maxWeight: number;
   /** The numerator alone: the optimizer ranks by it, and allocates nothing. */
@@ -71,7 +86,28 @@ export interface Scorer {
 const TABLE = binomialTable();
 const STRIDE = TABLE.maxR + 1;
 
+/**
+ * Every part of one hand size: ONE without draw cards, and one per prefix
+ * length the draw cards can reach with them (PRD §5.7). It is what
+ * `createBlendScorer` builds a blend out of, and the only place the two routes
+ * are told apart.
+ *
+ * Every problem with a draw class takes the prefix route, whatever its criteria
+ * say about stopping: a template whose every criterion would stop still DRAWS
+ * when the opening meets none of them, so there is no template with draw cards
+ * whose answer the plain success set can give.
+ */
+export function createScorers(problem: Problem, H: number, opts: SuccessSetOptions = {}): Scorer[] {
+  return hasDrawCards(problem)
+    ? createDrawScorers(problem, H, opts)
+    : [createScorer(problem, H, opts)];
+}
+
 export function createScorer(problem: Problem, H: number, opts: SuccessSetOptions = {}): Scorer {
+  if (hasDrawCards(problem))
+    throw new RangeError(
+      'this problem holds draw cards, so a hand is a prefix of the deck and has more than one length — score it through `createScorers`',
+    );
   const {
     compositions,
     count,
@@ -193,13 +229,191 @@ export function createScorer(problem: Problem, H: number, opts: SuccessSetOption
     };
   };
 
-  return { H, den, outcomes, terms: count, complemented, maxWeight, numerator, score };
+  return { H, den, outcomes, terms: count, complemented, groups: 1, maxWeight, numerator, score };
+}
+
+/**
+ * One scorer per prefix length (PRD §5.7). Each is an exact fraction of its
+ * own, and the hand's score is their sum — which is why a draw template's
+ * blend has a part per length rather than one per hand size.
+ *
+ * The inner loop is the one it always was, with one thing around it: the rows
+ * are grouped by their ORDERING FACTOR, each group summed as a plain integer,
+ * and the factors applied to the group sums. Both the largest group sum and the
+ * largest numerator the combination can reach are checked when the set is built
+ * (`drawSet`), so nothing here can round.
+ */
+function createDrawScorers(problem: Problem, H: number, opts: SuccessSetOptions): Scorer[] {
+  const set = drawSet(problem, H, opts);
+  const { deckSize, classes } = problem;
+  const classCount = classes.length;
+  const { maxWeight, width } = set;
+  /** The longest prefix any part reads, which is how wide one class's row of `ways` is. */
+  const longest = set.parts.reduce((most, part) => Math.max(most, part.prefix), H);
+  const stride = longest + 1;
+
+  /**
+   * `ways[c * stride + held]` is C(n_c, held), SHARED by every part of this
+   * hand size: the parts are scored one after another on the same deck, so
+   * filling this once per deck rather than once per part is most of what a
+   * draw score costs outside the sums themselves.
+   */
+  const ways = new Float64Array(classCount * stride);
+  const ready = new Float64Array(classCount).fill(-1);
+
+  /**
+   * Fills `ways`, and refuses class totals the set was not built for. The
+   * enumeration PRUNES each class by its `max` — sound, since `C(n_c, v_c)` is
+   * 0 above it — so a deck that breaks a class range would be scored against
+   * rows that were never stored, and silently too low.
+   */
+  const prepare = (n: ArrayLike<number>): void => {
+    if (n.length !== classCount)
+      throw new RangeError(
+        `expected a total for each of the ${classCount} classes, got ${n.length}`,
+      );
+    let cards = 0;
+    let same = true;
+    for (let cls = 0; cls < classCount; cls++) {
+      const total = n[cls]!;
+      if (!Number.isInteger(total) || total < 0 || total > deckSize)
+        throw new RangeError(
+          `class ${cls}: a total is a whole number from 0 to ${deckSize}, not ${total}`,
+        );
+      if (total > classes[cls]!.max)
+        throw new RangeError(
+          `class ${cls}: ${total} cards is outside its range of ${classes[cls]!.min}–${classes[cls]!.max}, and a draw template is enumerated within those ranges`,
+        );
+      cards += total;
+      if (ready[cls] !== total) same = false;
+    }
+    if (cards !== deckSize)
+      throw new RangeError(
+        `the class totals hold ${cards} cards, not the deck size of ${deckSize}`,
+      );
+    if (same) return;
+    for (let cls = 0; cls < classCount; cls++) {
+      const total = n[cls]!;
+      ready[cls] = total;
+      // Straight off the exact table: `held` never exceeds `MAX_PREFIX`, which
+      // is what the table's columns were sized for.
+      for (let held = 0; held <= longest; held++)
+        ways[cls * stride + held] = TABLE.values[total * STRIDE + held]!;
+    }
+  };
+
+  return set.parts.map((part): Scorer => {
+    const { prefix, den, multipliers } = part;
+    const rows = part.terms;
+    /** Row bounds per group, then factor bounds per row: two flat walks, no nesting. */
+    const groupAt = new Uint32Array(part.groups.length + 1);
+    const rowAt = new Uint32Array(rows + 1);
+    const factors = new Uint16Array(rows * prefix);
+    const values = new Float64Array(rows);
+    const plains = new Float64Array(rows);
+    let row = 0;
+    let filled = 0;
+    part.groups.forEach((group, at) => {
+      for (let own = 0; own < group.count; own++) {
+        let blank = prefix;
+        for (let cls = 1; cls < classCount; cls++) {
+          const held = group.compositions[own * width + cls - 1]!;
+          if (held > 0) factors[filled++] = cls * stride + held;
+          blank -= held;
+        }
+        if (blank > 0) factors[filled++] = blank;
+        values[row] = group.values[own]!;
+        plains[row] = group.plains[own]!;
+        rowAt[++row] = filled;
+      }
+      groupAt[at + 1] = row;
+    });
+    /**
+     * Every row worth the same — every unweighted template judged after its
+     * draws, where a row is worth 1 — so the unit multiplies the whole group
+     * sum instead of every term of it, and the inner loop is the one the plain
+     * scorer runs.
+     */
+    const unit = rows === 0 ? 1 : values[0]!;
+    const uniform = values.every((value) => value === unit);
+
+    const numerator = (n: ArrayLike<number>): number => {
+      prepare(n);
+      let sum = 0;
+      for (let group = 0; group < multipliers.length; group++) {
+        let inner = 0;
+        if (uniform) {
+          for (let at = groupAt[group]!; at < groupAt[group + 1]!; at++) {
+            let product = 1;
+            for (let factor = rowAt[at]!; factor < rowAt[at + 1]!; factor++)
+              product *= ways[factors[factor]!]!;
+            inner += product;
+          }
+          inner *= unit;
+        } else {
+          for (let at = groupAt[group]!; at < groupAt[group + 1]!; at++) {
+            let product = values[at]!;
+            for (let factor = rowAt[at]!; factor < rowAt[at + 1]!; factor++)
+              product *= ways[factors[factor]!]!;
+            inner += product;
+          }
+        }
+        sum += multipliers[group]! * inner;
+      }
+      return sum;
+    };
+
+    const score = (n: ArrayLike<number>): Score => {
+      // Unweighted, a row's plain value IS its value: one walk answers both,
+      // which is every draw template that does not weight its criteria.
+      if (maxWeight === 1) {
+        const num = numerator(n);
+        return { num, den, successNum: num };
+      }
+      prepare(n);
+      let sum = 0;
+      let plain = 0;
+      for (let group = 0; group < multipliers.length; group++) {
+        let inner = 0;
+        let innerPlain = 0;
+        for (let at = groupAt[group]!; at < groupAt[group + 1]!; at++) {
+          let product = 1;
+          for (let factor = rowAt[at]!; factor < rowAt[at + 1]!; factor++)
+            product *= ways[factors[factor]!]!;
+          inner += values[at]! * product;
+          innerPlain += plains[at]! * product;
+        }
+        sum += multipliers[group]! * inner;
+        plain += multipliers[group]! * innerPlain;
+      }
+      return { num: sum, den, successNum: plain };
+    };
+
+    return {
+      H,
+      prefix,
+      den,
+      outcomes: 1,
+      terms: rows,
+      complemented: false,
+      groups: part.groups.length,
+      maxWeight,
+      numerator,
+      score,
+    };
+  });
 }
 
 export interface BlendPart extends Score {
   H: number;
   /** The hand size's share of the blend — NOT a criterion weight. */
   weight: number;
+  /**
+   * The prefix of the deck this part scores (PRD §5.7); absent without draw
+   * cards. Several parts then share one `H` and one `weight`, and only this
+   * tells them apart — which is why `compareScores` reads it.
+   */
+  prefix?: number;
 }
 
 /** A score over every hand size of the problem: one exact fraction each. */
@@ -254,7 +468,7 @@ function gcd(a: number, b: number): number {
 function exact(value: number): number {
   if (!Number.isSafeInteger(value))
     throw new RangeError(
-      'these scores cannot be ranked in exact integers: a term is past 2^53 — use smaller weights',
+      'these scores cannot be ranked in exact integers: a term is past 2^53 — use smaller criterion weights, or fewer copies of a draw card (every prefix length a draw card reaches is a fraction of its own, and they have to be put on one denominator to be compared)',
     );
   return value;
 }
@@ -268,11 +482,22 @@ function exact(value: number): number {
  */
 export function createBlendScorer(problem: Problem, opts: SuccessSetOptions = {}): BlendScorer {
   validateProblem(problem);
-  const scorers = problem.handSizes.map((hand) =>
-    createScorer(partProblem(problem, hand), hand.H, opts),
-  );
-  const weights = problem.handSizes.map(({ weight }) => weight);
-  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  const scorers: Scorer[] = [];
+  /** Each scorer's hand size, by index: with draw cards several share one. */
+  const owners: number[] = [];
+  problem.handSizes.forEach((hand, at) => {
+    for (const scorer of createScorers(partProblem(problem, hand), hand.H, opts)) {
+      scorers.push(scorer);
+      owners.push(at);
+    }
+  });
+  const weights = owners.map((at) => problem.handSizes[at]!.weight);
+  // Over the HAND SIZES, not over the parts. With draw cards a hand size has
+  // several parts — one per prefix length — whose fractions SUM to its score,
+  // so dividing by the parts' weights would report the score divided by the
+  // number of lengths. It would rank correctly and show a wrong number, which
+  // is the worst place for this to hide.
+  const totalWeight = problem.handSizes.reduce((sum, { weight }) => sum + weight, 0);
   const maxWeight = maxCriterionWeight(problem);
   // No key can exceed `maxCriterionWeight · totalWeight · common`: a part's
   // numerator is at most `maxCriterionWeight · den`, so if THAT is exact, every
@@ -305,11 +530,11 @@ export function createBlendScorer(problem: Problem, opts: SuccessSetOptions = {}
       return key;
     },
     score: (n) => {
-      const parts = scorers.map((scorer, at) => ({
-        H: scorer.H,
-        weight: weights[at]!,
-        ...scorer.score(n),
-      }));
+      const parts = scorers.map((scorer, at): BlendPart => {
+        const part: BlendPart = { H: scorer.H, weight: weights[at]!, ...scorer.score(n) };
+        if (scorer.prefix !== undefined) part.prefix = scorer.prefix;
+        return part;
+      });
       const weighted = parts.reduce((sum, { weight, num, den }) => sum + (weight * num) / den, 0);
       return { parts, pDisplay: weighted / totalWeight };
     },
@@ -339,9 +564,16 @@ export function scoreBlend(problem: Problem, n: ArrayLike<number>): BlendScore {
 export function compareScores(a: BlendScore, b: BlendScore): number {
   const sameShape =
     a.parts.length === b.parts.length &&
-    a.parts.every((part, at) => part.H === b.parts[at]!.H && part.weight === b.parts[at]!.weight);
+    a.parts.every(
+      (part, at) =>
+        part.H === b.parts[at]!.H &&
+        part.weight === b.parts[at]!.weight &&
+        part.prefix === b.parts[at]!.prefix,
+    );
   if (!sameShape)
-    throw new RangeError('only scores over the same hand sizes and weights can be compared');
+    throw new RangeError(
+      'only scores over the same hand sizes, weights and prefix lengths can be compared',
+    );
 
   let common = 1;
   for (const { den } of [...a.parts, ...b.parts]) common = exact((common / gcd(common, den)) * den);
