@@ -14,10 +14,18 @@ import {
   compileProblem,
   groupLookupOf,
   groupMembersOf,
+  handSizesForMode,
   type ResolvedTemplate,
   resolveTemplate,
 } from '../../core/model/compile';
-import { type Template, type TemplateGroup, validateTemplate } from '../../core/model/template';
+import {
+  countsFor,
+  modeOf,
+  partsOfMode,
+  type Template,
+  type TemplateGroup,
+  validateTemplate,
+} from '../../core/model/template';
 import type { BreakdownCriterion, Compiled } from '../../core/opt/optimizer';
 import { normalize } from '../../core/util/normalize';
 import type {
@@ -315,12 +323,25 @@ export class TemplateService {
     // Neither fails for a template the analysis passed; if one does, it is said, not thrown.
     const resolved = resolveTemplate(validated.template, ready);
     if (!resolved.ok) return invalid('the template does not resolve', resolved.errors);
-    const compiled = compileProblem(resolved.resolved);
+    // The mode is the whole of what the three runs differ by (PRD §5.5):
+    // which hands are scored, and which criteria each of them is judged
+    // against. The classes are the union's either way.
+    const mode = modeOf(validated.template);
+    const handSizes = handSizesForMode(resolved.resolved, mode);
+    const compiled = compileProblem(resolved.resolved, { handSizes });
     if (!compiled.ok) return invalid('the template does not compile', compiled.errors);
-    const criteria = resolved.resolved.criteria.map(
-      ({ id, name, alternatives }): BreakdownCriterion =>
-        name === undefined ? { id, alternatives } : { id, name, alternatives },
-    );
+    const parts = partsOfMode(mode);
+    // Only the criteria this run judges. One for the other hand is not scored
+    // at 0 and shown — it is not part of this run at all, and a row of zeroes
+    // beside the ones that were judged would read as a result rather than an
+    // absence. It is the criteria editor that still shows it, dimmed.
+    const criteria = resolved.resolved.criteria.flatMap(({ id, name, when, alternatives }) => {
+      const mine = parts.map((part) => countsFor(when, part));
+      if (!mine.some(Boolean)) return [];
+      const out: BreakdownCriterion = { id, alternatives, parts: mine };
+      if (name !== undefined) out.name = name;
+      return [out];
+    });
     const labels = lineLabels(validated.template, resolved.resolved);
     return {
       ok: true,

@@ -10,7 +10,7 @@ import type {
   ScoredVector,
   SweepCell,
 } from '../core/opt/optimizer';
-import type { Fraction } from '../core/prob/scorer';
+import type { BlendPart, BlendScore, Fraction } from '../core/prob/scorer';
 import { type Count, countToNumber, formatCount } from '../core/util/count';
 import {
   classesSection,
@@ -110,12 +110,19 @@ export function searchSection(run: OptimizeOutputs, partial: boolean): string {
   return ['Search — every class vector, scored exactly', table(rows)].join('\n');
 }
 
+/** `going first: 41.5744% (273,563 / 658,008)` — a part's own exact answer. */
+function partText(part: BlendPart): string {
+  return `going ${part.H === 5 ? 'first' : 'second'}: ${percent(part.num / part.den)} (${fraction(part)})`;
+}
+
+/**
+ * The score as the reader needs it. With two parts the AVERAGE is the sort
+ * key, and the two hands have DIFFERENT denominators — C(40,5) against
+ * C(40,6) — so both are printed whole: one fraction could only be one of them.
+ */
 function scoreText({ score, blend }: ScoredVector): string {
-  const hands =
-    score.parts.length === 1
-      ? ''
-      : `  (${score.parts.map((part) => `hand of ${part.H}: ${percent(part.num / part.den)}`).join(', ')})`;
-  return `${fraction(blend)} = ${percent(score.pDisplay)}${hands}`;
+  const head = `${fraction(blend)} = ${percent(score.pDisplay)}`;
+  return score.parts.length === 1 ? head : `${head}\n  ${score.parts.map(partText).join('\n  ')}`;
 }
 
 export function bestSection(compiled: Compiled, best: RankedVector): string {
@@ -148,7 +155,9 @@ export function rankedSection(compiled: Compiled, run: OptimizeOutputs, top: num
     '#',
     'P',
     'exact',
-    ...(blends ? run.handSizes.map(({ H }) => `hand of ${H}`) : []),
+    ...(blends
+      ? run.handSizes.flatMap(({ H }) => [`going ${H === 5 ? 'first' : 'second'}`, `${H} exact`])
+      : []),
     ...relevant.map(nameOf),
     'blank',
     'raw ratios',
@@ -159,7 +168,9 @@ export function rankedSection(compiled: Compiled, run: OptimizeOutputs, top: num
       String(at + 1),
       percent(entry.score.pDisplay),
       fraction(entry.blend),
-      ...(blends ? entry.score.parts.map((part) => percent(part.num / part.den)) : []),
+      ...(blends
+        ? entry.score.parts.flatMap((part) => [percent(part.num / part.den), fraction(part)])
+        : []),
       ...relevant.map((id) => copies.get(id)!),
       String(entry.classTotals[0]),
       formatCount(entry.rawRatios),
@@ -283,12 +294,16 @@ export function sweepDetailSection(
 }
 
 export function breakdownSection(rows: readonly CriterionScore[], best: RankedVector): string {
+  const blends = best.score.parts.length > 1;
+  const parts = ({ score }: { score: BlendScore }) =>
+    blends ? score.parts.flatMap((part) => [percent(part.num / part.den), fraction(part)]) : [];
   const body = rows.map((row) => [
     row.name === undefined ? row.id : `${row.id} (${row.name})`,
     percent(row.score.pDisplay),
     fraction(row.blend),
+    ...parts(row),
   ]);
-  body.push(['any of them', percent(best.score.pDisplay), fraction(best.blend)]);
+  body.push(['any of them', percent(best.score.pDisplay), fraction(best.blend), ...parts(best)]);
   return ['Per criterion — at the best ratio, each criterion by itself', table(body, [1])].join(
     '\n',
   );

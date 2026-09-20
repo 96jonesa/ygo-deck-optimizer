@@ -193,7 +193,7 @@ describe('analyze', () => {
       expect(a.work).toEqual({
         rawRatios: 4096,
         classVectors: 128,
-        hands: [{ H: 5, terms, complemented }],
+        hands: [{ H: 5, part: 'first', weight: 1, terms, complemented }],
         estimatedMs: (128 * (0.05 + 0.006 * terms)) / 1000,
         cost: DEFAULT_COST,
       });
@@ -852,6 +852,128 @@ describe('analyze', () => {
 // ---------------------------------------------------------------------------
 // Oracle A1: the counts, by DP, against plain listing of every raw ratio.
 // ---------------------------------------------------------------------------
+
+/**
+ * What the analysis says about the MODE (PRD §5.5): which run it is, which
+ * criteria that run judges, and what the two parts cost. The editor groups the
+ * criteria by `when` and dims the ones the run leaves out, and reads both
+ * facts off here — it works out neither (TDD §3).
+ */
+describe('analyze: modes and criterion tags', () => {
+  function tagged(mode: 'first' | 'second' | 'average'): Template {
+    return templateOf(
+      [card('A', STRATOS, 0, 3), card('B', ROTA, 0, 3), line('m', 'monster', 0, 20)],
+      [
+        { id: 'c1', text: `1x #${STRATOS}`, when: 'first' },
+        { id: 'c2', text: '1x monster' },
+        { id: 'c3', text: `1x #${ROTA}`, when: 'second' },
+      ],
+      { hand: { size: mode === 'first' ? 5 : 6 }, mode },
+    );
+  }
+
+  it('says which run it is, defaulting a file that predates modes off its hand', () => {
+    expect(analyze(tagged('average'), ctx).mode).toBe('average');
+    expect(analyze(motivatingTemplate(), ctx).mode).toBe('first');
+  });
+
+  it('carries every criterion’s tag, defaulted to `both`', () => {
+    const a = analyze(tagged('average'), ctx);
+    expect(a.criteria.map((criterion) => criterion.when)).toEqual(['first', 'both', 'second']);
+  });
+
+  it('says which criteria the RUN judges, and which it leaves out', () => {
+    expect(analyze(tagged('first'), ctx).criteria.map((c) => c.counted)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect(analyze(tagged('second'), ctx).criteria.map((c) => c.counted)).toEqual([
+      false,
+      true,
+      true,
+    ]);
+    expect(analyze(tagged('average'), ctx).criteria.map((c) => c.counted)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  it('costs each part over ITS OWN success set, both over the union’s classes', () => {
+    const a = analyze(tagged('average'), ctx);
+    expect(a.work.hands).toHaveLength(2);
+    expect(a.work.hands!.map(({ H, part, weight }) => ({ H, part, weight }))).toEqual([
+      { H: 5, part: 'first', weight: 1 },
+      { H: 6, part: 'second', weight: 1 },
+    ]);
+    // The two parts judge different criteria, so they sum different numbers of terms.
+    expect(a.work.hands![0]!.terms).not.toBe(a.work.hands![1]!.terms);
+  });
+
+  it('counts FEWER class vectors in a single mode than in the average', () => {
+    // The classes come from the criteria the run judges, so a going-first run
+    // is the problem it would have been had the going-second criteria never
+    // been written: it does not pay to tell apart cards it cannot see.
+    const [first, second, average] = (['first', 'second', 'average'] as const).map((mode) =>
+      Number(analyze(tagged(mode), ctx).work.classVectors),
+    ) as [number, number, number];
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(average);
+    expect(second).toBeLessThan(average);
+  });
+
+  it('costs a single mode no more work than the average does', () => {
+    const work = (mode: 'first' | 'second' | 'average') => analyze(tagged(mode), ctx).work;
+    const terms = (mode: 'first' | 'second' | 'average') =>
+      work(mode).hands!.reduce((sum, hand) => sum + hand.terms, 0);
+    expect(terms('first')).toBeLessThanOrEqual(terms('average'));
+    expect(work('first').estimatedMs!).toBeLessThan(work('average').estimatedMs!);
+  });
+
+  it('warns when a part the run scores has no criterion of its own', () => {
+    const oneSided = templateOf(
+      [card('A', STRATOS, 0, 3)],
+      [{ id: 'c1', text: `1x #${STRATOS}`, when: 'first' }],
+      { hand: { size: 6 }, mode: 'average' },
+    );
+    expect(analyze(oneSided, ctx).issues.map((issue) => issue.message)).toContain(
+      'no criterion is judged going second (a hand of 6), so that half of the average is 0',
+    );
+    // In a single mode the same gap means every hand fails, and says so.
+    const second = analyze({ ...oneSided, mode: 'second' }, ctx);
+    expect(second.issues.map((issue) => issue.message)).toContain(
+      'no criterion is judged going second (a hand of 6): every hand fails, whatever the ratio',
+    );
+    // It is a warning, not an error: the template still runs and still answers.
+    expect(second.ok).toBe(true);
+  });
+
+  it('says nothing about parts when there is no criterion at all: one warning, not three', () => {
+    const empty = templateOf([card('A', STRATOS, 0, 3)], []);
+    expect(analyze(empty, ctx).issues.filter((issue) => issue.code === 'no-criteria')).toEqual([
+      {
+        severity: 'warning',
+        code: 'no-criteria',
+        message: 'there is no criterion: every hand fails',
+      },
+    ]);
+  });
+
+  it('is an ERROR for a template whose mode and hand size disagree', () => {
+    const wrong = { ...tagged('average'), hand: { size: 5 } };
+    const a = analyze(wrong, ctx);
+    expect(a.ok).toBe(false);
+    expect(a.issues.map((issue) => issue.message)).toContain(
+      'going first and second is judged at a hand of 6, but the hand size is 5',
+    );
+  });
+
+  it('stays a plain JSON value', () => {
+    const a = analyze(tagged('average'), ctx);
+    expect(JSON.parse(JSON.stringify(a))).toStrictEqual(a);
+  });
+});
 
 describe('counting raw ratios and class vectors without listing them (oracle A1)', () => {
   const TEMPLATES = 300;

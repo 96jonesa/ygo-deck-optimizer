@@ -8,6 +8,7 @@ import type {
   TemplateLine,
 } from '../../../shared/types';
 import type { CopyRange } from './copy-range';
+import { type CriterionWhen, handSizeForMode, type RunMode } from './deck-form';
 
 // Every edit the template editor makes, as a pure function from one template
 // to the next (TDD §3: all the renderer logic worth testing is here, and the
@@ -185,6 +186,20 @@ export function withHandSize(template: Template, size: number): Template {
   return template.hand.size === size ? template : { ...template, hand: { size } };
 }
 
+/**
+ * The run mode, and the hand size that goes with it (PRD §5.5). The two are
+ * set TOGETHER, always: `mode` is what the template means and `hand.size` is
+ * the size its criteria are expanded at, and `core` refuses a template whose
+ * two disagree. Going first is a hand of five; going second and the average
+ * of the two are both judged at six, since the average must be able to score
+ * the larger hand.
+ */
+export function withMode(template: Template, mode: RunMode): Template {
+  const size = handSizeForMode(mode);
+  if (template.mode === mode && template.hand.size === size) return template;
+  return { ...template, mode, hand: { size } };
+}
+
 // --- criteria --------------------------------------------------------------
 
 /** An id no criterion of `template` has, `c1` upwards; a removal frees its number again. */
@@ -258,6 +273,18 @@ export function withCriterionName(template: Template, id: string, name: string):
     if (trimmed !== '') next.name = trimmed;
     if (criterion.expr !== undefined) next.expr = criterion.expr;
     return next;
+  });
+}
+
+/**
+ * Which hand the criterion is judged for (PRD §5.5). The stored AST is KEPT:
+ * the tag says when the criterion is asked, not what it asks, so the text and
+ * its parsed form still agree — unlike `withCriterionText`, which drops it.
+ */
+export function withCriterionWhen(template: Template, id: string, when: CriterionWhen): Template {
+  return mapCriterion(template, id, (criterion) => {
+    if ((criterion.when ?? 'both') === when) return criterion;
+    return { ...criterion, when };
   });
 }
 

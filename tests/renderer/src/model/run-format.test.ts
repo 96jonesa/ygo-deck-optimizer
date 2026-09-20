@@ -9,6 +9,7 @@ import {
   formatCount,
   formatDuration,
   fractionText,
+  partLines,
   percentText,
   progressLine,
   readyText,
@@ -16,8 +17,8 @@ import {
   startFailureLines,
   topRows,
 } from '../../../../src/renderer/src/model/run-format';
-import type { Analysis, RunStartResult, Template } from '../../../../src/shared/types';
-import { motivatingResult } from '../../../helpers/motivating-run';
+import type { Analysis, Fraction, RunStartResult, Template } from '../../../../src/shared/types';
+import { motivatingIn, motivatingResult } from '../../../helpers/motivating-run';
 
 const SQL = await initSqlJs();
 const RESULT = motivatingResult(SQL);
@@ -217,6 +218,7 @@ describe('topRows', () => {
       tiedWith: 1,
       percent: '7.0189%',
       exact: '46,185 / 658,008',
+      parts: [],
       example: [3, 3, 5, 3, 3, 7, 3, 13],
       rawRatios: '32',
     });
@@ -367,5 +369,103 @@ describe('startFailureLines', () => {
       'requirement trap: no line fills it',
       'criterion c1: can never be met',
     ]);
+  });
+});
+
+/**
+ * The five numbers of an average run (PRD §5.5): the mean, which is the sort
+ * key, and each hand's own probability and exact fraction. The two hands have
+ * DIFFERENT denominators — C(40,5) against C(40,6) — so one fraction could
+ * only ever be one of them, and showing one would be showing the wrong one.
+ *
+ * Every figure here is read off the RESULT and none is recomputed from a live
+ * analysis (TDD §3): the result below is a real search, cloned as IPC clones
+ * it, and the tests hold the text to fractions it carries.
+ */
+describe('a run over both hands', () => {
+  const AVERAGE = motivatingResult(SQL, motivatingIn('average'));
+  /** c1 going first, c2 going second: the motivating example's two criteria, split. */
+  const TAGGED = motivatingResult(SQL, motivatingIn('average', { c1: 'first', c2: 'second' }));
+
+  describe('partLines', () => {
+    it('is empty for a single-hand run: its one number is the headline already', () => {
+      expect(partLines(RESULT.best.score)).toEqual([]);
+    });
+
+    it('names each hand, with its own percentage and its own exact fraction', () => {
+      const lines = partLines(AVERAGE.best.score);
+      expect(lines).toHaveLength(2);
+      expect(lines.map((line) => line.label)).toEqual(['going first', 'going second']);
+      const [first, second] = AVERAGE.best.score.parts;
+      expect(lines[0]).toEqual({
+        label: 'going first',
+        hand: 5,
+        percent: percentText(first!),
+        exact: exactText(first!),
+      });
+      expect(lines[1]!.exact).toBe(exactText(second!));
+      // The two really are over different denominators.
+      expect(first!.den).not.toBe(second!.den);
+    });
+
+    it('says the weights when they are not even', () => {
+      const parts = AVERAGE.best.score.parts.map((part, at) => ({
+        ...part,
+        weight: at === 0 ? 3 : 2,
+      }));
+      const lines = partLines({ ...AVERAGE.best.score, parts });
+      expect(lines.map((line) => line.label)).toEqual(['going first × 3', 'going second × 2']);
+    });
+  });
+
+  describe('topRows', () => {
+    it('shows the average as the score, and both hands beside it', () => {
+      const [row] = topRows(AVERAGE, 1);
+      expect(row!.percent).toBe(percentText(AVERAGE.ranked[0]!.blend));
+      expect(row!.exact).toBe(exactText(AVERAGE.ranked[0]!.blend));
+      expect(row!.parts).toEqual(partLines(AVERAGE.ranked[0]!.score));
+      expect(row!.parts).toHaveLength(2);
+    });
+
+    it('orders by the exact rank key and never by the displayed mean', () => {
+      const rows = topRows(AVERAGE, AVERAGE.ranked.length);
+      const keys = AVERAGE.ranked.map((vector) => vector.blend.num);
+      expect(keys).toEqual([...keys].sort((a, b) => b - a));
+      // A row's rank is the first position its exact key appears at, so an
+      // exact tie stays one rank however the percentages round.
+      const firstAt = new Map<number, number>();
+      keys.forEach((key, at) => {
+        if (!firstAt.has(key)) firstAt.set(key, at);
+      });
+      expect(rows.map((row) => row.rank)).toEqual(keys.map((key) => firstAt.get(key)! + 1));
+    });
+
+    it('shows the mean as the mean: it is the parts cross-multiplied, exactly', () => {
+      for (const vector of AVERAGE.ranked.slice(0, 20)) {
+        const [a, b] = vector.score.parts as unknown as [Fraction, Fraction];
+        // (a + b) / 2 == blend, in whole numbers on both sides.
+        expect(
+          (BigInt(a.num) * BigInt(b.den) + BigInt(b.num) * BigInt(a.den)) *
+            BigInt(vector.blend.den),
+        ).toBe(2n * BigInt(a.den) * BigInt(b.den) * BigInt(vector.blend.num));
+      }
+    });
+  });
+
+  describe('runStatsText', () => {
+    it('says both hands and their weights', () => {
+      expect(runStatsText(AVERAGE)).toContain('hand of 5 × 1, hand of 6 × 1');
+    });
+  });
+
+  it('scores a tagged criterion in the parts it is tagged for, and 0 in the others', () => {
+    const byId = new Map(TAGGED.breakdown.map((row) => [row.id, row.score.parts]));
+    // c1 is going first only, so its going-second part can meet nothing at
+    // all — and the criterion's share of the average is halved, not hidden.
+    expect(byId.get('c1')!.map((part) => part.num === 0)).toEqual([false, true]);
+    expect(byId.get('c2')!.map((part) => part.num === 0)).toEqual([true, false]);
+    // Untagged, both parts count it: the same run, all three tags reached.
+    const both = motivatingResult(SQL, motivatingIn('average')).breakdown;
+    expect(both[0]!.score.parts.map((part) => part.num === 0)).toEqual([false, false]);
   });
 });

@@ -166,7 +166,19 @@ Instances are tiny (hand ≤ 6 cards, a handful of slots), so matching is exact 
 
 ### 5.5 Probability and hand size
 
-Exact multivariate hypergeometric (§4.3). Hand size $`H`$ is 5 (going first, default) or 6 (going second); a blend $`P = w P_5 + (1 - w) P_6`$ for a user-set coin-flip weight is cheap and scheduled for M3.
+Exact multivariate hypergeometric (§4.3). Hand size $`H`$ is 5 going first and 6 going second, and a run is one of **three modes** (decided by Andy, 2026-09-19):
+
+| mode | hand | criteria judged | reports |
+| --- | --- | --- | --- |
+| going first | 5 | tagged `first` or `both` | $`P_5`$ |
+| going second | 6 | tagged `second` or `both` | $`P_6`$ |
+| average | both | each half its own | $`(P_5 + P_6)/2`$ |
+
+Every criterion carries **`when`: `first`, `second` or `both`**, defaulting to `both`, so a criterion that applies either way is written once. Andy's words for the average: *"running it normally with the 5 card hand with the 5 card success criteria, and the 6 card hand with the 6 card success criteria, and taking the average (sum divided by 2)"*.
+
+**The mean is taken per candidate deck, inside the search.** It is not the mean of the two single-mode answers, which would average the scores of two different decks and name no deck at all — the point of the mode is that the best average deck is often neither. Measured on a template built to separate them: going first wants 20 monsters / 14 spells, going second wants 14 / 20, and the average picks **18 / 16**, which beats both of them on the average and is chosen by neither.
+
+Weights are a ratio of positive integers, so the 50/50 default is $`1 : 1`$ and an uneven coin flip stays exact; the engine has always supported it (`--blend 3:2`) and the app exposes the even case. In average mode the ranked table reports the average, and the probability **and exact fraction of each hand separately** — the two denominators genuinely differ, $`\binom{40}{5}`$ against $`\binom{40}{6}`$, so one figure cannot stand for both. The average is itself carried as an exact rational over their common denominator, never a rounded mean of two decimals.
 
 ### 5.6 Optimizer and output
 

@@ -21,7 +21,16 @@ import {
   validateProblem,
 } from './problem';
 import { countSums, type IntRange } from './ranges';
-import { NAMED_CARD_MAX, type Template, type TemplateGroup } from './template';
+import {
+  type CriterionWhen,
+  countsFor,
+  NAMED_CARD_MAX,
+  partsOfMode,
+  type RunMode,
+  type Template,
+  type TemplateGroup,
+  whenOf,
+} from './template';
 
 /** What resolving a template looks things up in; the real `CardIndex` and `SetnameTable` satisfy it. */
 export interface ResolveContext {
@@ -81,6 +90,8 @@ export interface ResolvedCriterion {
   name?: string;
   text: string;
   expr: Expr;
+  /** Which hand it is judged for, defaulted: `both` unless the template says otherwise. */
+  when: CriterionWhen;
   /** Canonical text of `expr`. */
   canonical: string;
   /** This criterion's own expansion, for the reader; `flat` is what is judged. */
@@ -103,6 +114,13 @@ export interface ResolvedTemplate {
   criteria: ResolvedCriterion[];
   /** Every criterion expanded together, duplicates removed: a hand succeeds if it meets any one. */
   flat: ResolvedFlat[];
+  /**
+   * Parallel to `flat`: the `criteria` each alternative came from
+   * (`expandAll`'s `sources`). It is what `handSizesForMode` selects a part's
+   * alternatives by, and so — through the union of the parts — what decides
+   * which alternatives `compileProblem` builds classes from at all.
+   */
+  flatSources: number[][];
   /** Alternatives left out of `flat` for needing more cards than the hand holds. */
   dropped: number;
   warnings: string[];
@@ -230,7 +248,13 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
   });
 
   const handSize = template.hand.size;
-  const parsedCriteria: { id: string; name?: string; text: string; expr: Expr }[] = [];
+  const parsedCriteria: {
+    id: string;
+    name?: string;
+    text: string;
+    expr: Expr;
+    when: CriterionWhen;
+  }[] = [];
   for (const criterion of template.criteria) {
     const { id, name, text } = criterion;
     const meant = criterionMeaning(criterion, descCtx);
@@ -239,8 +263,11 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
       continue;
     }
     if (meant.stale !== null) warnings.push(`criterion ${JSON.stringify(id)}: ${meant.stale}`);
+    const when = whenOf(criterion);
     parsedCriteria.push(
-      name === undefined ? { id, text, expr: meant.expr } : { id, name, text, expr: meant.expr },
+      name === undefined
+        ? { id, text, expr: meant.expr, when }
+        : { id, name, text, expr: meant.expr, when },
     );
   }
 
@@ -320,10 +347,46 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
       matrix,
       criteria,
       flat,
+      flatSources: all.sources,
       dropped: all.dropped,
       warnings,
     },
   };
+}
+
+/**
+ * The hand sizes a MODE scores, each with the flat alternatives it is judged
+ * against (PRD §5.5) — the whole of what tells the three modes apart.
+ *
+ * - `first`   — a hand of five over the criteria tagged `first` or `both`;
+ * - `second`  — a hand of six over those tagged `second` or `both`;
+ * - `average` — both, weighted 1 : 1.
+ *
+ * `weights` overrides the 1 : 1 of an average (the CLI's `--blend 3:2`).
+ *
+ * `compileProblem` reads the UNION of these lists as the criteria the run
+ * judges, and builds its classes from those alone. So a single mode is
+ * compiled to exactly the problem it would have been had the other hand's
+ * criteria never been written, and an average — which judges every criterion —
+ * to the union of both sets, where a class vector must mean one deck to both
+ * of its parts.
+ */
+export function handSizesForMode(
+  resolved: Pick<ResolvedTemplate, 'criteria' | 'flatSources'>,
+  mode: RunMode,
+  weights: readonly number[] = [],
+): HandSize[] {
+  return partsOfMode(mode).map(
+    (part, at): HandSize => ({
+      H: part === 'first' ? 5 : 6,
+      weight: weights[at] ?? 1,
+      criteria: resolved.flatSources.flatMap((sources, alternative) =>
+        sources.some((criterion) => countsFor(resolved.criteria[criterion]!.when, part))
+          ? [alternative]
+          : [],
+      ),
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +436,10 @@ export interface CompiledClassInfo {
  * `never-binds` — its `n` is at least the largest hand.
  */
 export interface DroppedLimit {
-  /** Index into `CompileInput.flat` and `Problem.criteria`. */
+  /**
+   * Index into `Problem.criteria` — the alternatives this run JUDGES, which
+   * are `CompileInput.flat`'s only when the run judges all of them.
+   */
   criterion: number;
   desc: number;
   n: number;
@@ -491,6 +557,23 @@ export interface CompileOptions {
  *    nothing, and one whose `n` is at least the largest hand size. A ceiling
  *    goes the same way, into `droppedCeilings`.
  *
+ * **Classes come from the criteria THIS RUN JUDGES** (PRD §5.5) — the union of
+ * the hand sizes' `criteria`, which for a run that names none is every
+ * alternative there is. A criterion for the other hand tells no class apart
+ * here: its alternatives are left out of `problem.criteria`, and a description
+ * only it mentions splits nothing. Going first is therefore compiled to
+ * exactly the problem it would have been had the going-second criteria never
+ * been written.
+ *
+ * One rule, not a special case: an AVERAGE judges every criterion, so its
+ * partition is the union of both sets and nothing changes for it — the
+ * renumbering is the identity and no description goes dead.
+ *
+ * It matters because the partition is what `MAX_CLASSES` counts and what the
+ * search walks. Splitting one criteria list into two must not make a
+ * going-first run slower — or refuse it outright — over criteria it never
+ * evaluates.
+ *
  * More than `MAX_CLASSES` classes, the blank class included, is an error.
  * The problem that comes back has passed `validateProblem`.
  */
@@ -498,6 +581,44 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
   const { deckSize, lines, matrix, flat } = input;
   const handSizes = opts.handSizes ?? [{ H: input.handSize, weight: 1 }];
   const errors: string[] = [];
+
+  // What this run JUDGES: the union of the parts' criteria, which for a run
+  // whose parts name none is every alternative there is — one criteria list,
+  // and every average.
+  const judged = handSizes.some((hand) => hand.criteria === undefined)
+    ? flat.map((_, at) => at)
+    : [...new Set(handSizes.flatMap((hand) => hand.criteria ?? []))].sort((a, b) => a - b);
+  const indexOf = new Map(judged.map((old, at) => [old, at]));
+  const mine = new Set(judged);
+  for (const at of judged)
+    if (flat[at] === undefined)
+      errors.push(
+        `there is no criterion ${at}: the template expanded to ${flat.length} alternative(s)`,
+      );
+  if (errors.length > 0) return { ok: false, errors };
+
+  /**
+   * Descriptions only the OTHER hand's criteria mention. They tell this run's
+   * classes nothing — no criterion it judges can see them — so two lines that
+   * differ only there are one class here.
+   *
+   * Stated as what to take OUT rather than what to keep, and deliberately: a
+   * column no alternative mentions at all is left splitting classes exactly as
+   * it always has. Dead columns are a question about match matrices, not about
+   * hands, and answering it here would change every run rather than the ones
+   * this is about.
+   */
+  const columnsOf = (which: (at: number) => boolean): Set<number> => {
+    const out = new Set<number>();
+    flat.forEach((alternative, at) => {
+      if (!which(at)) return;
+      for (const { desc } of alternative.reqs) out.add(desc);
+      for (const { desc } of alternative.limits) out.add(desc);
+    });
+    return out;
+  };
+  const seen = columnsOf((at) => mine.has(at));
+  const dead = new Set([...columnsOf((at) => !mine.has(at))].filter((desc) => !seen.has(desc)));
 
   const largestHand = Math.max(...handSizes.map(({ H }) => H));
   if (largestHand > input.handSize)
@@ -518,7 +639,9 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
   const classOfRow = new Map<string, number>();
   const classOfLine = lines.map(({ id, min, max }, line) => {
     const row = matrix[line]!;
-    const fills = row.flatMap((fill, desc) => (fill ? [desc] : []));
+    // A description only the other hand's criteria mention distinguishes
+    // nothing this run can see (`dead`), so it splits no class here.
+    const fills = row.flatMap((fill, desc) => (fill && !dead.has(desc) ? [desc] : []));
     const key = fills.join(',');
     let cls = fills.length === 0 ? 0 : classOfRow.get(key);
     if (cls === undefined) {
@@ -550,8 +673,12 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
   };
   const droppedLimits: DroppedLimit[] = [];
   const droppedCeilings: DroppedCeiling[] = [];
-  const criteria = flat.map((alternative, criterion) => {
-    const compiled = compileCriterion(alternative, maskOf, largestHand);
+  // Only what this run judges, renumbered from 0, so that `problem.criteria`
+  // holds no alternative no hand is ever held against: the parts' indices are
+  // remapped onto it below, and `criterion` in the dropped lists is an index
+  // into it too.
+  const criteria = judged.map((at, criterion) => {
+    const compiled = compileCriterion(flat[at]!, maskOf, largestHand);
     for (const dropped of compiled.droppedLimits) droppedLimits.push({ criterion, ...dropped });
     for (const dropped of compiled.droppedCeilings) droppedCeilings.push({ criterion, ...dropped });
     return compiled.criterion;
@@ -559,7 +686,11 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
 
   const problem: Problem = {
     deckSize,
-    handSizes,
+    handSizes: handSizes.map((hand) =>
+      hand.criteria === undefined
+        ? hand
+        : { ...hand, criteria: hand.criteria.map((old) => indexOf.get(old)!) },
+    ),
     classes: classes.map(
       ({ lines: members, min, max }): ClassInfo => ({
         lineIds: members.map((member) => member.id),

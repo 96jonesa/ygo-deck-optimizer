@@ -13,6 +13,60 @@ export const HAND_SIZES = [5, 6] as const;
 /** The game's copy limit, which a line that names one card cannot exceed (PRD §5.1). */
 export const NAMED_CARD_MAX = 3;
 
+/**
+ * The two halves of a game (PRD §5.5): going FIRST is a hand of five, going
+ * SECOND a hand of six. The pairing is the domain's, not a setting — the whole
+ * point of a six-card hand is that it is the one you draw on the draw.
+ */
+export type Part = 'first' | 'second';
+
+/**
+ * Which hand a criterion is judged for. ONE criteria list, each entry tagged:
+ * a criterion that applies either way is written once, as `both`, which is
+ * also what a criterion that says nothing means.
+ */
+export type CriterionWhen = Part | 'both';
+export const CRITERION_WHENS = ['first', 'second', 'both'] as const;
+
+/**
+ * What a run ranks by:
+ *
+ * - `first`   — a hand of five over the criteria tagged `first` or `both`;
+ * - `second`  — a hand of six over the criteria tagged `second` or `both`;
+ * - `average` — both of those, weighted 1 : 1, ranked by their exact mean.
+ */
+export type RunMode = Part | 'average';
+export const RUN_MODES = ['first', 'second', 'average'] as const;
+
+/** The hand a mode's LARGEST part holds: the size a template must resolve at. */
+export function handSizeForMode(mode: RunMode): 5 | 6 {
+  return mode === 'first' ? 5 : 6;
+}
+
+/** The parts a mode scores, in the order their scores are reported. */
+export function partsOfMode(mode: RunMode): Part[] {
+  return mode === 'average' ? ['first', 'second'] : [mode];
+}
+
+/** Whether a criterion tagged `when` counts for `part`. */
+export function countsFor(when: CriterionWhen, part: Part): boolean {
+  return when === 'both' || when === part;
+}
+
+/** A criterion's tag; an untagged one counts for both hands. */
+export function whenOf(criterion: Pick<TemplateCriterion, 'when'>): CriterionWhen {
+  return criterion.when ?? 'both';
+}
+
+/**
+ * The mode a template runs in. `mode` is what it says when it says anything;
+ * a file written before modes existed says it with its hand size alone, and a
+ * hand of five has always meant going first.
+ */
+export function modeOf(template: Pick<Template, 'mode' | 'hand'>): RunMode {
+  return template.mode ?? (template.hand.size === 6 ? 'second' : 'first');
+}
+
 /** A card as a template stores it: the passcode is the identity, the name is for the reader. */
 export interface TemplateCard {
   passcode: number;
@@ -44,6 +98,8 @@ export interface TemplateCriterion {
   name?: string;
   text: string;
   expr?: Expr;
+  /** Which hand it is judged for; absent is `both` (`whenOf`). */
+  when?: CriterionWhen;
 }
 
 /** The unspecified cards; `max: null` is unbounded. */
@@ -73,7 +129,15 @@ export interface CardSnapshot {
 export interface Template {
   version: typeof TEMPLATE_VERSION;
   deckSize: number;
+  /**
+   * The hand the criteria are expanded and judged at. It is the mode's largest
+   * part (`handSizeForMode`), and `validateTemplate` holds the two to that, so
+   * neither can drift: `mode` is what the template MEANS, and `hand.size` is
+   * how a file written before modes existed said the same thing.
+   */
   hand: { size: number };
+  /** Absent: read off `hand.size` (`modeOf`), which is what every v1 file does. */
+  mode?: RunMode;
   groups: TemplateGroup[];
   lines: TemplateLine[];
   remainder: TemplateRemainder;
@@ -244,6 +308,14 @@ class Validator {
     const text = this.draftText(where, 'text', value.text);
     if (value.name !== undefined && typeof value.name !== 'string')
       this.fail(`${where}: \`name\` must be text, not ${show(value.name)}`);
+    let when: CriterionWhen | undefined;
+    if (value.when !== undefined) {
+      if (CRITERION_WHENS.includes(value.when as CriterionWhen)) when = value.when as CriterionWhen;
+      else
+        this.fail(
+          `${where}: \`when\` is ${show(value.when)}; a criterion is judged going ${CRITERION_WHENS.join(', ')}`,
+        );
+    }
     // Authoritative, and so checked, exactly as a line's `desc` is.
     let expr: Expr | undefined;
     if (value.expr !== undefined) {
@@ -255,6 +327,7 @@ class Validator {
     const out: TemplateCriterion = { id, text };
     if (typeof value.name === 'string') out.name = value.name;
     if (expr !== undefined) out.expr = expr;
+    if (when !== undefined) out.when = when;
     return out;
   }
 
@@ -370,6 +443,22 @@ export function validateTemplate(json: unknown): ValidateResult {
       v.fail(`\`hand.size\` is ${handSize}; an opening hand is ${HAND_SIZES.join(' or ')} cards`);
   }
 
+  // `mode` and `hand.size` say one thing, and a file that says it two ways is
+  // refused rather than read one way and run the other.
+  let mode: RunMode | undefined;
+  if (json.mode !== undefined) {
+    if (!RUN_MODES.includes(json.mode as RunMode))
+      v.fail(`\`mode\` is ${show(json.mode)}; a run goes ${RUN_MODES.join(', ')}`);
+    else {
+      mode = json.mode as RunMode;
+      const wanted = handSizeForMode(mode);
+      if (handSize !== undefined && handSize !== wanted)
+        v.fail(
+          `\`mode\` is ${JSON.stringify(mode)}, which is judged at a hand of ${wanted}, but \`hand.size\` is ${handSize}`,
+        );
+    }
+  }
+
   const rawGroups = v.list('groups', json.groups, false);
   const groups = rawGroups.map((group, i) => v.group(labelOf('groups', i, group), group));
   v.duplicates(
@@ -407,6 +496,7 @@ export function validateTemplate(json: unknown): ValidateResult {
     remainder,
     criteria: criteria as TemplateCriterion[],
   };
+  if (mode !== undefined) template.mode = mode;
   if (cardSnapshot !== undefined) template.cardSnapshot = cardSnapshot;
   return { ok: true, template };
 }

@@ -33,7 +33,7 @@ the folder, the pre-release toggle and the plateau width.
 
 **You can write a deck template.** Add lines — a named card through the keyboard-operable
 picker, or a free-text description — and remove, reorder and edit them; set each line's copy
-range, the deck size (40–60) and the opening hand (5 or 6). Every edit is analysed (debounced,
+range, the deck size (40–60) and the run mode (below). Every edit is analysed (debounced,
 newest-wins), and each line shows what the tool understood of it, how many cards in the database
 match and a few of their names, with errors, warnings and notices marked at the line they are
 about — a description that matches nothing is a **notice**, not a failure, because a line states
@@ -55,10 +55,25 @@ picked**. So a card name two records share goes in as its passcode rather than a
 a parse error on a real install (it is both `0x66` and `0x2066`), and completion turns that dead
 end into the two rows that resolve it.
 
+**You choose which game you are optimizing for.** Three run modes, beside the deck size:
+**Going first** (a hand of 5), **Going second** (a hand of 6), and **Average**, which scores both
+and ranks by their mean, weighted evenly. Each criterion says which hand it is judged for —
+*going first*, *going second*, or *either hand*, which is what one says when it says nothing —
+so a criterion that applies both ways is written once, and the editor files the criteria under
+those three headings. Going first is the first heading plus the middle one; going second is the
+middle one plus the last. A criterion the current mode does not judge stays editable and is
+dimmed rather than hidden.
+
+Both halves score the **same deck**: the classes of card the engine tells apart come from the
+union of both criteria sets, so a ratio means one thing in both halves of an average and the
+same thing in all three modes. Where a run scores both hands, every score on screen shows five
+numbers — the average, and each hand's own probability and exact fraction — because the two
+denominators differ, C(40,5) against C(40,6), and one fraction could only ever be one of them.
+
 **You can write the success criteria, and see what they mean.** Criteria are added, removed,
-reordered, named and edited as text in the criterion language (`1x [Ash Blossom], 1x monster, at
-most 1x [Brick]`), each with the same live parse echo, marked error span and canonical printed
-form the template's lines get. A criterion with alternatives — `1x A and 1x B and (1x C or 2x
+reordered, named, tagged and edited as text in the criterion language (`1x [Ash Blossom], 1x
+monster, at most 1x [Brick]`), each with the same live parse echo, marked error span and
+canonical printed form the template's lines get. A criterion with alternatives — `1x A and 1x B and (1x C or 2x
 D)` — shows the **flat alternatives it will actually be scored as**, so nested `or` is never a
 guess, along with any alternative dropped for needing more cards than a hand holds. Criteria
 carry their own notices: one that adds nothing because another already covers it, one that can
@@ -81,7 +96,7 @@ leads — the percentage, the exact fraction it is (`46,185 / 658,008`), and the
 with a range wherever a class is free to split. Then the **ranked table**, where equal scores are
 exact ties and share one rank rather than being ordered by accident; the **plateau**, every ratio
 within δ of the best as a range of copies per line ("2 or 3 copies are equally fine"), with δ
-editable in percentage points beside it; a **copies-vs-odds chart per line** — inline SVG, the
+editable in percentage points beside it (measured on the average, over both hands); a **copies-vs-odds chart per line** — inline SVG, the
 argmax marked, gaps where a count is impossible, each scaled to its own range and labelled with
 it, and every figure printed under the chart so it can be quoted; the **per-criterion breakdown**
 at the best ratio; and the lines **no criterion can see**, said as free only where the engine says
@@ -170,7 +185,7 @@ problems at real deck sizes, and the scorer must match a count of every hand of 
 ## Template files and decks
 
 A **template file** is versioned JSON holding the lines, the groups, the criteria, the deck size
-and the opening hand. Two things in it are worth knowing.
+and the run. Three things in it are worth knowing.
 
 **The stored AST is what runs.** Every line and criterion is written with its parsed form
 (`desc` / `expr`) beside the text you typed. The text is kept for editing, and the AST is what
@@ -178,6 +193,14 @@ the engine judges — so a file survives a change to the grammar and to the inst
 names (an archetype is stored as its setcode, never as a name). If the text no longer reads as
 the AST beside it, the file still *means* what it meant and the line says so; typing over the
 text replaces the stored form.
+
+**The run travels with the template.** `mode` is `first`, `second` or `average`, and every
+criterion carries a `when` of `first`, `second` or `both` — written out in full, the default
+included, because a field left to a default means whatever the default means next year. A file
+written before modes existed has neither, and is read as the run it always was: a hand of five
+is going first, a hand of six going second, and an untagged criterion is judged either way.
+`hand.size` is the size the criteria are expanded at, which is the mode's larger hand; a file
+whose `mode` and `hand.size` disagree is refused rather than read one way and run the other.
 
 **`cardSnapshot` records every named card as it was.** Results depend on the card database only
 through the cards a template names, so the file keeps their fields. Opening it on another
@@ -210,7 +233,8 @@ npm run cli -- analyze  <template.json> --workdir <EDOPro dir> [--hand 5|6] [--j
 npm run cli -- estimate <template.json> --workdir <EDOPro dir> \
     [--samples 200000] [--seed 1] [--hand 5|6] [--ratio 3,3,5,2,0,7,3 | --at max|min]
 npm run cli -- optimize <template.json> --workdir <EDOPro dir> \
-    [--top 20] [--delta 0.5] [--sweep <lineId>] [--hand 5|6 | --blend 3:2] \
+    [--top 20] [--delta 0.5] [--sweep <lineId>] \
+    [--mode first|second|average | --hand 5|6 | --blend 3:2] \
     [--threshold 60] [--force] [--json]
 ```
 
@@ -287,10 +311,23 @@ EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- optimize examples/m
 | Sweeps | For **every** line that matters, the best `P` with the line held at each count and everything else re-optimized, the best count starred. `--sweep <lineId>` adds that line in detail: the deck behind each count, and `P` with the other lines *held fixed* at the best ratio |
 | Per criterion | The exact probability of each criterion by itself at the best ratio |
 
-`--blend 3:2` ranks by going first (5 cards) 60% of the time and second (6 cards) 40%: the
-template is resolved at a hand of 6, both hands are scored exactly, and ratios are ranked on
-their common denominator. `--json` prints the raw result — the value the app's results views
-will render — and nothing else.
+**The three modes.** `--mode` says which run this is, overriding the template's own:
+
+| `--mode` | Hand | Criteria judged |
+| --- | --- | --- |
+| `first` | 5 | those tagged `first` or `both` |
+| `second` | 6 | those tagged `second` or `both` |
+| `average` | 5 and 6 | both of the above, weighted 1 : 1 |
+
+`--hand 5` and `--hand 6` are the older spellings of the two single modes, and `--blend 3:2` is
+the average with weights of its own — going first 60% of the time and second 40%. One of the
+three at a time.
+
+An average is resolved at a hand of 6 and ranked on the two hands' common denominator, in exact
+integers. Its report shows **five numbers**: the average, and each hand's own probability and
+exact fraction — the two denominators differ, C(40,5) against C(40,6), so neither fraction is
+the other's and the mean is neither. `--json` prints the raw result — the value the app's
+results views render — and nothing else.
 
 Progress goes to stderr as for `estimate`. **The wall**: before scoring anything, the vector
 count times the calibrated cost is compared with `--threshold` (default 60 s); over it,
@@ -322,6 +359,47 @@ Sweep of `brick` — "held" keeps every other line at the best ratio, the remain
 One copy is best, and each further copy costs a quarter to half a percentage point — so the
 second copy sits inside the 0.5-point plateau and the third does not. The run scores 7,200 class
 vectors in about 10 ms (roughly 700,000 vectors a second at 161 terms a score).
+
+The third example, [`examples/first-and-second.json`](examples/first-and-second.json), is the
+one where the three modes **disagree**: a starter you combo off going first, a second breaker a
+sixth card makes reachable going second, and a body-and-trap criterion that counts either way.
+
+```sh
+for m in first second average; do
+  EDOPRO_WORKDIR=~/Applications/ProjectIgnis \
+    npm run -s cli -- optimize examples/first-and-second.json --mode $m --top 1
+done
+```
+
+| Mode | starter | engine | breaker | trap | Best |
+| --- | --- | --- | --- | --- | --- |
+| going first | 3 | 18 | 6–11 | 8 | 527,097 / 658,008 = 80.1050% |
+| going second | 0–3 | 14–17 | 15 | 8 | 3,632,237 / 3,838,380 = 94.6294% |
+| average | 3 | 16 | 13 | 8 | 39,766,530 / 46,060,560 = 86.3353% |
+
+A range is a class whose lines this mode's criteria cannot tell apart — going second, the
+starter is just another low-Level monster, so any split of the 17 between them scores the same.
+
+Three modes, three ratios. The average's deck scores 518,046 / 658,008 going first and
+3,605,820 / 3,838,380 going second, and 39,766,530 / 46,060,560 is exactly their mean — the mean
+**on that deck**, not of the two modes at their own optima, which is a higher number no single
+deck reaches. `tests/core/model/realdata.test.ts` pins all of it.
+
+**Each mode is compiled to the criteria it judges.** Going first builds its classes from the
+criteria tagged *first* or *both* and nothing else, so it is exactly the problem it would have
+been had the going-second criteria never been written: 4 classes and 305 class vectors here,
+against the average's 5 and 1,399. The average judges every criterion, so its partition is the
+union of both sets — which it must be, for one class vector to mean one deck to both of its
+halves.
+
+Narrowing never moves a probability; it widens the *answer*. Going first, no criterion mentions
+`spell`, so the `breaker` line and the unspecified cards are one class: the best ratio comes back
+as "11 copies among breaker, (remainder) — any split" rather than pinning a number that was never
+load-bearing. Six raw ratios tie for the best going first, four going second, one on the average.
+
+It also decides what is runnable. A template with fifteen going-first criteria and fifteen
+going-second ones tells 16 classes apart in each single mode and 31 together: both single modes
+run, and only the average is refused for passing the engine's limit of 30.
 
 The Monte Carlo engine is the project's independent oracle (TDD §10.4): it draws concrete cards
 tagged with their line and assigns them to requirement slots by brute force, sharing no code
@@ -403,7 +481,7 @@ BABELCDB_PATH=~/repos/deps/babelcdb/cards.cdb EDOPRO_WORKDIR=~/Applications/Proj
 | `src/renderer/` | React UI; sandboxed, talks only through `window.api`. Logic worth testing lives in pure functions under `src/renderer/src/model/` |
 | `src/shared/` | The IPC contract: channel names and `RendererApi` (`ipc.ts`), payload types (`types.ts`) |
 | `src/cli/` | Development harness (`npm run cli`), not shipped |
-| `examples/` | Example templates; `motivating.json` is the PRD's motivating example |
+| `examples/` | Example templates; `motivating.json` is the PRD's motivating example, `first-and-second.json` the one where the three run modes disagree |
 | `tests/` | Mirrors `src/` |
 | `scripts/` | `check-licenses.mjs` |
 

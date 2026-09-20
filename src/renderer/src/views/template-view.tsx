@@ -7,7 +7,13 @@ import {
   templateErrorText,
   workText,
 } from '../model/analysis-view';
-import { commitDeckSize, DECK_SIZE_MAX, DECK_SIZE_MIN, HAND_SIZES } from '../model/deck-form';
+import {
+  commitDeckSize,
+  DECK_SIZE_MAX,
+  DECK_SIZE_MIN,
+  MODE_LABELS,
+  RUN_MODES,
+} from '../model/deck-form';
 import { exampleTemplate } from '../model/example-template';
 import { EMPTY_TEMPLATE } from '../model/template-edit';
 import {
@@ -47,12 +53,14 @@ function useResolveNamedCards(): void {
   }, [ready, missing, learn]);
 }
 
-/** Deck size and hand size: the two numbers the whole template is measured against. */
+/** Deck size and run mode: the size everything is measured against, and which hands are scored. */
 function DeckControls() {
   const deckSize = useApp((state) => state.template.deckSize);
-  const handSize = useApp((state) => state.template.hand.size);
+  // The MODE is what the template means; the hand size follows from it, so
+  // nothing here reads `hand.size` (TDD §3 — the renderer decides no semantics).
+  const mode = useApp((state) => state.template.mode ?? 'first');
   const setDeckSize = useApp((state) => state.setDeckSize);
-  const setHandSize = useApp((state) => state.setHandSize);
+  const setMode = useApp((state) => state.setMode);
   const [draft, setDraft] = useField(String(deckSize));
 
   return (
@@ -78,24 +86,30 @@ function DeckControls() {
         cards ({DECK_SIZE_MIN}–{DECK_SIZE_MAX})
       </span>
       <span className="spacer" />
-      <span className="dim">Opening hand</span>
-      {/* Two toggles rather than a group: each one says in full what it sets,
-          so a screen reader needs no wrapper to make sense of a bare "5". */}
+      <span className="dim">Find the best ratio for</span>
+      {/* Three toggles rather than a group: each one says in full what it
+          sets, so a screen reader needs no wrapper to make sense of a bare
+          "Average". Choosing a mode sets the hand size too — going first is
+          five cards, the other two are judged at six — because `core` refuses
+          a template whose mode and hand size disagree. */}
       <span className="segmented">
-        {HAND_SIZES.map((size) => (
+        {RUN_MODES.map((option) => (
           <button
-            key={size}
+            key={option}
             type="button"
-            aria-pressed={handSize === size}
-            aria-label={`Opening hand of ${size} cards, going ${size === 5 ? 'first' : 'second'}`}
-            data-testid={`hand-${size}`}
-            onClick={() => setHandSize(size)}
+            aria-pressed={mode === option}
+            aria-label={`${MODE_LABELS[option].title}, ${MODE_LABELS[option].hand}: ${MODE_LABELS[option].hint}`}
+            title={MODE_LABELS[option].hint}
+            data-testid={`mode-${option}`}
+            onClick={() => setMode(option)}
           >
-            {size}
+            {MODE_LABELS[option].title}
           </button>
         ))}
       </span>
-      <span className="dim">{handSize === 5 ? 'going first' : 'going second'}</span>
+      <span className="dim" data-testid="mode-hand">
+        {MODE_LABELS[mode].hand}
+      </span>
     </div>
   );
 }

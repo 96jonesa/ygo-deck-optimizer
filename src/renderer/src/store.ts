@@ -15,6 +15,7 @@ import type {
 import { type AnalysisView, NO_ANALYSIS, reduceAnalysis } from './model/analysis-view';
 import { statusHeadline } from './model/card-status';
 import type { CopyRange } from './model/copy-range';
+import type { CriterionWhen, RunMode } from './model/deck-form';
 import type { FileStatus } from './model/files';
 import { readyText } from './model/run-format';
 import { IDLE_RUN, markCancelling, type RunView, reduceRun } from './model/run-state';
@@ -26,6 +27,7 @@ import {
   withCriterion,
   withCriterionName,
   withCriterionText,
+  withCriterionWhen,
   withDeckSize,
   withDescriptionLine,
   withGroup,
@@ -34,6 +36,7 @@ import {
   withImportedDeck,
   withLineRange,
   withLineText,
+  withMode,
   withMovedCriterion,
   withMovedLine,
   withoutCriterion,
@@ -126,6 +129,8 @@ export interface AppState {
   moveLine(id: string, by: number): void;
   setDeckSize(size: number): void;
   setHandSize(size: number): void;
+  /** Which run this is: going first, going second, or the average (PRD §5.5). */
+  setMode(mode: RunMode): void;
   /** The one-click split of PRD §6.4: a near miss's suggestion, as a line of its own. */
   addSuggestedLine(text: string): void;
   /** A `.ydk` decklist main turned into lines: they replace the template's, and nothing else moves. */
@@ -137,6 +142,8 @@ export interface AppState {
   setCriterionText(id: string, text: string): void;
   /** The criterion's own name; cleared to nothing, it goes back to being called by its id. */
   setCriterionName(id: string, name: string): void;
+  /** Which hand the criterion is judged for. */
+  setCriterionWhen(id: string, when: CriterionWhen): void;
   /** One place up (`by` -1) or down (`by` +1); a criterion at that end does not move. */
   moveCriterion(id: string, by: number): void;
   addGroup(name: string): void;
@@ -222,6 +229,7 @@ export function createAppStore(): AppStore {
       moveLine: edit(withMovedLine),
       setDeckSize: edit(withDeckSize),
       setHandSize: edit(withHandSize),
+      setMode: edit(withMode),
       addSuggestedLine: edit(withSuggestedLine),
       importDeck: edit(withImportedDeck),
       setFileStatus: (file) => set({ file }),
@@ -229,6 +237,7 @@ export function createAppStore(): AppStore {
       dropCriterion: edit(withoutCriterion),
       setCriterionText: edit(withCriterionText),
       setCriterionName: edit(withCriterionName),
+      setCriterionWhen: edit(withCriterionWhen),
       moveCriterion: edit(withMovedCriterion),
       addGroup: edit(withGroup),
       renameGroup: edit(withRenamedGroup),

@@ -1,4 +1,4 @@
-import { type Problem, validateProblem } from '../model/problem';
+import { type Problem, partProblem, validateProblem } from '../model/problem';
 import { binomialTable } from './binomial';
 import { type SuccessSetOptions, successSet } from './success-set';
 
@@ -143,10 +143,18 @@ function exact(value: number): number {
   return value;
 }
 
-/** Scorers for every hand size of `problem` (TDD §10.3: a first/second blend). */
+/**
+ * Scorers for every hand size of `problem` (TDD §10.3: a first/second blend).
+ *
+ * Each part is scored against ITS OWN criteria (`partProblem`) and all of them
+ * against the SAME classes, so that the parts of an average are two readings
+ * of one deck; `score` hands the one class-total vector to each in turn.
+ */
 export function createBlendScorer(problem: Problem, opts: SuccessSetOptions = {}): BlendScorer {
   validateProblem(problem);
-  const scorers = problem.handSizes.map(({ H }) => createScorer(problem, H, opts));
+  const scorers = problem.handSizes.map((hand) =>
+    createScorer(partProblem(problem, hand), hand.H, opts),
+  );
   const weights = problem.handSizes.map(({ weight }) => weight);
   const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
   // No key can exceed `totalWeight · common`: if that is exact, every key is.

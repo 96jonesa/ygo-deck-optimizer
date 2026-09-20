@@ -2,12 +2,15 @@ import type { Expr } from '../criteria/ast';
 import type { Description } from '../desc/ast';
 import type { CardLookup, DescContext } from '../desc/context';
 import { criterionMeaning, lineMeaning } from './meaning';
-import type {
-  CardSnapshot,
-  Template,
-  TemplateCriterion,
-  TemplateLine,
-  TemplateRemainder,
+import {
+  type CardSnapshot,
+  handSizeForMode,
+  modeOf,
+  type Template,
+  type TemplateCriterion,
+  type TemplateLine,
+  type TemplateRemainder,
+  whenOf,
 } from './template';
 
 // Writing and reading the template FILE (TDD §14), as against the `Template`
@@ -88,6 +91,10 @@ export function templateToFile(template: Template, ctx: DescContext): TemplateFi
     const meant = criterionMeaning(criterion, ctx);
     const out: TemplateCriterion = { id: criterion.id, text: criterion.text };
     if (criterion.name !== undefined) out.name = criterion.name;
+    // Written out in full, `both` included: which hand a criterion is for is
+    // the user's decision, and a file that leaves it to a default is a file
+    // whose meaning changes if the default ever does.
+    out.when = whenOf(criterion);
     if (meant.ok) out.expr = meant.expr;
     else
       warnings.push(
@@ -114,11 +121,15 @@ export function templateToFile(template: Template, ctx: DescContext): TemplateFi
   }
 
   const remainder: TemplateRemainder = { ...template.remainder };
+  const mode = modeOf(template);
   return {
     template: {
       version: template.version,
       deckSize: template.deckSize,
-      hand: { size: template.hand.size },
+      // Written out beside the hand size, and always agreeing with it, so that
+      // opening the file gives back the mode that was run (`validateTemplate`).
+      hand: { size: handSizeForMode(mode) },
+      mode,
       groups: template.groups.map((group) => ({ ...group, cards: [...group.cards] })),
       lines,
       remainder,

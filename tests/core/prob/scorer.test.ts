@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { FlatCriterion } from '../../../src/core/criteria/ast';
-import type { CompiledCriterion, Problem } from '../../../src/core/model/problem';
+import type { Expr, FlatCriterion } from '../../../src/core/criteria/ast';
+import { expandAll } from '../../../src/core/criteria/expand';
+import { type CompiledCriterion, type Problem, partProblem } from '../../../src/core/model/problem';
 import { estimate } from '../../../src/core/prob/montecarlo';
 import {
+  type BlendPart,
   type BlendScore,
   compareScores,
   createBlendScorer,
@@ -15,6 +17,7 @@ import { choose, combinations } from '../../helpers/combinatorics';
 import { satisfiesAnyFlat, satisfiesFlat, satisfiesTree } from '../../helpers/criteria-oracle';
 import { genClassProblem, genCriterion, genMask } from '../../helpers/gen-class-problem';
 import {
+  columnOf,
   deckOf,
   fillsOf,
   type Generated,
@@ -47,6 +50,13 @@ function problemOf(
 
 const A = 0b010;
 const B = 0b100;
+
+/** In BigInt, for the exact-mean checks: no float is ever the thing compared. */
+function lcmOf(a: bigint, b: bigint): bigint {
+  let [x, y] = [a, b];
+  while (y !== 0n) [x, y] = [y, x % y];
+  return (a / x) * b;
+}
 
 /** Blank and one class; success is drawing a card of it (TDD §15.1's anchor). */
 const ONE_CLASS = problemOf(40, 2, [{ slots: [A], limits: [] }]);
@@ -302,6 +312,86 @@ describe('createBlendScorer', () => {
     const parts = createBlendScorer(problem, { criterion: 1 }).score([34, 3, 3]).parts;
     expect(parts.map((part) => part.num)).toEqual([222111, 3838380 - choose(37, 6)]);
   });
+
+  /**
+   * Each hand judged by ITS OWN criteria (PRD §5.5): going first over the
+   * criteria for going first, going second over those for going second, and
+   * both over the SAME classes, so the average is an average of two readings
+   * of one deck.
+   */
+  describe('criteria per part', () => {
+    /** Draw A going first; draw B going second. Three classes: blank, A, B. */
+    const TWO_WAYS = problemOf(
+      40,
+      3,
+      [
+        { slots: [A], limits: [] },
+        { slots: [B], limits: [] },
+      ],
+      [
+        { H: 5, weight: 1, criteria: [0] },
+        { H: 6, weight: 1, criteria: [1] },
+      ],
+    );
+
+    it('scores each hand against the criteria named for it', () => {
+      // Three copies of A and three of B: going first asks only for an A,
+      // going second only for a B, and a hand of six sees more cards.
+      const parts = createBlendScorer(TWO_WAYS).score([34, 3, 3]).parts;
+      expect(parts).toEqual([
+        { H: 5, weight: 1, num: 658008 - choose(37, 5), den: 658008 },
+        { H: 6, weight: 1, num: 3838380 - choose(37, 6), den: 3838380 },
+      ]);
+    });
+
+    it('is the same as judging each part alone, at its own hand size', () => {
+      const totals = [30, 4, 6];
+      const both = createBlendScorer(TWO_WAYS).score(totals).parts;
+      const alone = (criterion: number, H: number) =>
+        createScorer({ ...TWO_WAYS, handSizes: [{ H, weight: 1 }] }, H, { criterion }).score(
+          totals,
+        );
+      expect(both[0]).toMatchObject(alone(0, 5));
+      expect(both[1]).toMatchObject(alone(1, 6));
+    });
+
+    it('ranks by the exact mean of the two, which is `rankKey` over the common denominator', () => {
+      const blend = createBlendScorer(TWO_WAYS);
+      const totals = [30, 4, 6];
+      const [first, second] = blend.score(totals).parts as unknown as [BlendPart, BlendPart];
+      // C(40,6) = C(40,5) · 35/6, so the common denominator is C(40,6) · 6.
+      expect(blend.rankKey(totals)).toBe(35 * first.num + 6 * second.num);
+      expect(blend.score(totals).pDisplay).toBeCloseTo(
+        (first.num / first.den + second.num / second.den) / 2,
+        12,
+      );
+    });
+
+    it('scores a part with NO criteria as 0, and averages the other in halved', () => {
+      const lonely = {
+        ...TWO_WAYS,
+        handSizes: [TWO_WAYS.handSizes[0]!, { H: 6, weight: 1, criteria: [] }],
+      };
+      const score = createBlendScorer(lonely).score([34, 3, 3]);
+      expect(score.parts[1]).toEqual({ H: 6, weight: 1, num: 0, den: 3838380 });
+      expect(score.pDisplay).toBeCloseTo((658008 - choose(37, 5)) / 658008 / 2, 12);
+    });
+
+    it('hands both parts the same class vector, read against the same classes', () => {
+      // A total of 3 in class 1 is three copies of A to BOTH parts: they are
+      // built from one `classes`, so a vector cannot mean two things.
+      const blend = createBlendScorer(TWO_WAYS);
+      expect(() => blend.score([34, 3])).toThrow(/3 classes/);
+      expect(() => blend.score([34, 3, 2])).toThrow(/not the deck size/);
+    });
+
+    it("refuses criteria indices that are not the problem's", () => {
+      const bad = { ...TWO_WAYS, handSizes: [{ H: 5, weight: 1, criteria: [0, 2] }] };
+      expect(() => createBlendScorer(bad)).toThrow(/not one of the problem's 2 criteria/);
+      const twice = { ...TWO_WAYS, handSizes: [{ H: 5, weight: 1, criteria: [1, 1] }] };
+      expect(() => createBlendScorer(twice)).toThrow(/criterion 1 appears twice/);
+    });
+  });
 });
 
 describe('scoreBlend', () => {
@@ -536,6 +626,145 @@ describe('exact scorer against exhaustive enumeration of small decks', () => {
       });
     });
     expect(criteria).toBeGreaterThanOrEqual(200);
+  });
+});
+
+/**
+ * The two-part blend against exhaustive enumeration (PRD §5.5). The route
+ * under test runs the whole way — criterion trees tagged one hand or the
+ * other; `expandAll`'s deduplication and its `sources`; ONE class partition,
+ * from the union of both sets; a success set per part over only its own
+ * alternatives; and the blend over both — and the oracle takes none of it: it
+ * lists every hand of the concrete deck, twice, and judges each against the
+ * ORIGINAL criterion trees of that part with `satisfiesTree`.
+ *
+ * What this really holds is that the two parts score ONE deck. The oracle
+ * deals both hand lists off the same physical deck, so a partition that meant
+ * different things to the two parts would put the answer somewhere it never
+ * goes.
+ */
+describe('a hand of five and a hand of six, each judged by its own criteria', () => {
+  interface Split {
+    g: Generated;
+    problem: Problem;
+    totals: number[];
+    deck: number[];
+    hands: [number, number];
+    /** The criterion trees of each part, as written. */
+    exprs: [Expr[], Expr[]];
+  }
+
+  /**
+   * A generated problem read as two tagged criteria sets: criterion 0 going
+   * first, criterion 1 going second, any others counting for both. The union
+   * is expanded at the LARGER hand, as a blend must be (TDD §8).
+   */
+  function split(g: Generated): Split | null {
+    const hands: [number, number] = [g.handSize, g.handSize + 1];
+    if (g.exprs.length < 2 || hands[1] > 6 || hands[1] > g.problem.deckSize) return null;
+    const mine: [Set<number>, Set<number>] = [new Set(), new Set()];
+    g.exprs.forEach((_, at) => {
+      if (at !== 1) mine[0].add(at);
+      if (at !== 0) mine[1].add(at);
+    });
+    const all = expandAll(g.exprs, { maxHandSize: hands[1] });
+    if (!all.ok) return null;
+    const flat = all.flat.map(({ reqs, limits }) => ({
+      reqs: reqs.map(({ n, max, desc }) => {
+        const at = columnOf(desc);
+        return max === undefined ? { n, desc: at } : { n, max, desc: at };
+      }),
+      limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc) })),
+    }));
+    const converted = problemFromMatrix({ ...g.problem, flat }, hands);
+    return {
+      g,
+      problem: {
+        ...converted.problem,
+        handSizes: converted.problem.handSizes.map((hand, part) => ({
+          ...hand,
+          criteria: all.sources.flatMap((owners, at) =>
+            owners.some((who) => mine[part]!.has(who)) ? [at] : [],
+          ),
+        })),
+      },
+      totals: converted.totals(g.counts),
+      deck: deckOf(g.problem, g.counts),
+      hands,
+      exprs: [
+        g.exprs.filter((_, at) => mine[0]!.has(at)),
+        g.exprs.filter((_, at) => mine[1]!.has(at)),
+      ],
+    };
+  }
+
+  const splits = smallProblems()
+    .map(split)
+    .filter((s): s is Split => s !== null);
+
+  it('generates two-part problems worth testing', () => {
+    expect(splits.length).toBeGreaterThanOrEqual(80);
+    // The parts really are judged differently: their alternative lists differ.
+    const differing = splits.filter(
+      ({ problem }) =>
+        problem.handSizes[0]!.criteria!.join(',') !== problem.handSizes[1]!.criteria!.join(','),
+    );
+    expect(differing.length).toBeGreaterThanOrEqual(80);
+    // The partition is the UNION's: some class is told apart by a description
+    // only one part's criteria ever mention.
+    const refined = splits.filter(
+      ({ problem }) => problem.classes.length > problem.handSizes[0]!.criteria!.length + 1,
+    );
+    expect(refined.length).toBeGreaterThanOrEqual(20);
+  });
+
+  it('counts each part over its own criteria, both over the same deck', () => {
+    let parts = 0;
+    let hands = 0;
+    splits.slice(0, 120).forEach((s, i) => {
+      const fills = fillsOf(s.g.problem);
+      const score = createBlendScorer(s.problem).score(s.totals);
+      s.hands.forEach((H, part) => {
+        const own = s.exprs[part]!;
+        const all = combinations(s.deck, H);
+        const successes = all.filter((hand) =>
+          own.some((expr) => satisfiesTree(expr, hand, fills)),
+        ).length;
+        same(score.parts[part]!.num, successes, () => ({ index: i, part, problem: s.g.problem }));
+        same(score.parts[part]!.den, all.length, () => ({ index: i, part }));
+        parts++;
+        hands += all.length;
+      });
+    });
+    // Pinned so the size of the check is on record; it moves only if the generator does.
+    expect({ parts, hands }).toEqual({ parts: 210, hands: 120_699 });
+  });
+
+  it('shows the mean of the two, and ranks by an integer that orders decks the same way', () => {
+    splits.slice(0, 60).forEach((s, i) => {
+      const blend = createBlendScorer(s.problem);
+      const score = blend.score(s.totals);
+      const [a, b] = score.parts as [BlendPart, BlendPart];
+      expect(score.pDisplay).toBeCloseTo((a.num / a.den + b.num / b.den) / 2, 12);
+      // `rankKey` is the mean over ONE denominator: cross-multiplied in
+      // BigInt, with no float anywhere, it is the same rational.
+      const common = lcmOf(BigInt(a.den), BigInt(b.den));
+      same(
+        BigInt(blend.rankKey(s.totals)),
+        BigInt(a.num) * (common / BigInt(a.den)) + BigInt(b.num) * (common / BigInt(b.den)),
+        () => ({ index: i }),
+      );
+    });
+  });
+
+  it('agrees with judging each part as a problem of its own', () => {
+    splits.slice(0, 120).forEach((s, i) => {
+      const together = createBlendScorer(s.problem).score(s.totals);
+      s.problem.handSizes.forEach((hand, part) => {
+        const alone = createBlendScorer(partProblem(s.problem, hand)).score(s.totals);
+        same(alone.parts[0]!.num, together.parts[part]!.num, () => ({ index: i, part }));
+      });
+    });
   });
 });
 

@@ -114,7 +114,7 @@ describe('templateToFile', () => {
     });
     const { template: file, warnings } = templateToFile(broken, ctxFor(broken));
     expect(file.lines[0]).toEqual({ id: 'l1', min: 0, max: 3, text: 'level 4 monstr' });
-    expect(file.criteria[0]).toEqual({ id: 'k1', text: '1x monstr' });
+    expect(file.criteria[0]).toEqual({ id: 'k1', text: '1x monstr', when: 'both' });
     expect(warnings).toHaveLength(2);
     expect(warnings[0]).toContain('line "l1" does not parse');
     expect(warnings[1]).toContain('criterion "k1" does not parse');
@@ -135,6 +135,52 @@ describe('templateToFile', () => {
     const { template: file } = templateToFile(stale, ctxFor(stale));
     expect(file.lines[0]).toMatchObject({
       desc: { anyOf: [{ t: 'clause', clause: { kinds: ['monster'] } }] },
+    });
+  });
+
+  /**
+   * The mode and the criteria's tags are the run itself (PRD §5.5), so a file
+   * that did not carry them would open as a different run than the one that
+   * was saved. Both are written out IN FULL — `both` included — because a
+   * field left to a default means whatever the default means next year.
+   */
+  describe('the mode and the criterion tags', () => {
+    const tagged = templateOf({
+      hand: { size: 6 },
+      mode: 'average',
+      criteria: [
+        { id: 'k1', text: '1x #14558127', when: 'first' },
+        { id: 'k2', text: '1x #89631139', when: 'second' },
+        { id: 'k3', text: '1x monster' },
+      ],
+    });
+
+    it('writes the mode, and the hand size that goes with it', () => {
+      const { template: file } = templateToFile(tagged, ctxFor(tagged));
+      expect(file.mode).toBe('average');
+      expect(file.hand).toEqual({ size: 6 });
+    });
+
+    it('writes the mode a file that predates modes MEANT, rather than nothing', () => {
+      const old = templateOf({ hand: { size: 6 }, criteria: [{ id: 'k1', text: '1x monster' }] });
+      expect(templateToFile(old, ctxFor(old)).template.mode).toBe('second');
+    });
+
+    it('writes every tag out, the default one too', () => {
+      const { template: file } = templateToFile(tagged, ctxFor(tagged));
+      expect(file.criteria.map((criterion) => criterion.when)).toEqual(['first', 'second', 'both']);
+    });
+
+    it('round trips: what is written reads back as the same template', () => {
+      const { template: file } = templateToFile(tagged, ctxFor(tagged));
+      const reread = validateTemplate(JSON.parse(JSON.stringify(file)));
+      expect(reread).toEqual({ ok: true, template: file });
+      expect(reread.ok && reread.template.mode).toBe('average');
+      expect(reread.ok && reread.template.criteria.map((c) => c.when)).toEqual([
+        'first',
+        'second',
+        'both',
+      ]);
     });
   });
 

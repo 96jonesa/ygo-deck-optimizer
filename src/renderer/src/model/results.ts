@@ -6,7 +6,14 @@ import type {
   SweepCell,
 } from '../../../shared/types';
 import { rangeLabel } from './copy-range';
-import { countsLabel, exactText, formatCount, percentText } from './run-format';
+import {
+  countsLabel,
+  exactText,
+  formatCount,
+  partLines,
+  percentText,
+  type ScoreLine,
+} from './run-format';
 import { deltaToPoints } from './settings-form';
 
 // Reading a `RunResult` for the screen (PRD §5.6): the plateau, the lines that
@@ -111,6 +118,12 @@ export interface BreakdownRow {
   label: string;
   percent: string;
   exact: string;
+  /**
+   * Each hand on its own; empty for a run of one hand. A criterion judged
+   * going second only scores 0 going first, and says so rather than being
+   * left out: its share of the average really is half of its own number.
+   */
+  parts: ScoreLine[];
 }
 
 /**
@@ -121,11 +134,12 @@ export interface BreakdownRow {
  * `id` here too, never by its position.
  */
 export function breakdownRows(result: RunResult): BreakdownRow[] {
-  return result.breakdown.map(({ id, name, blend }: CriterionScore) => ({
+  return result.breakdown.map(({ id, name, score, blend }: CriterionScore) => ({
     id,
     label: name ?? id,
     percent: percentText(blend),
     exact: exactText(blend),
+    parts: partLines(score),
   }));
 }
 
@@ -134,6 +148,8 @@ export interface CellRun {
   counts: string;
   percent: string;
   exact: string;
+  /** Each hand on its own; empty for a run of one hand. */
+  parts: ScoreLine[];
   /** This run reaches the overall best. */
   best: boolean;
 }
@@ -161,6 +177,7 @@ export function cellRuns(cells: readonly SweepCell[], bestNum: number): CellRun[
       counts: countsLabel(run.map((cell) => cell.count)),
       percent: percentText(first.best.blend),
       exact: exactText(first.best.blend),
+      parts: partLines(first.best.score),
       best: first.best.blend.num === bestNum,
     };
   });

@@ -49,6 +49,19 @@ function flatOf(expr: Expr, opts = HAND): FlatCriterion[] {
   return result.flat;
 }
 
+/**
+ * Two flat criteria that ask the same, in whatever order, share this string —
+ * written here rather than taken from `expand`, so the source oracle owes
+ * nothing to the merging it is checking.
+ */
+function identity({ reqs, limits }: FlatCriterion): string {
+  const sorted = (parts: string[]) => [...parts].sort().join(';');
+  return [
+    sorted(reqs.map(({ n, max, desc }) => `${n}-${max ?? ''}:${JSON.stringify(desc)}`)),
+    sorted(limits.map(({ n, desc }) => `${n}:${JSON.stringify(desc)}`)),
+  ].join('|');
+}
+
 /** `k` two-way choices between distinct cards, all required: 2^k alternatives of `k` slots. */
 function productOfChoices(k: number): Expr {
   return and(
@@ -65,6 +78,7 @@ describe('expand', () => {
     expect(expand(req(2, A), HAND)).toEqual({
       ok: true,
       flat: [{ reqs: [{ n: 2, desc: A }], limits: [] }],
+      sources: [[0]],
       dropped: 0,
     });
     expect(flatOf(atMost(1, A))).toEqual([{ reqs: [], limits: [{ n: 1, desc: A }] }]);
@@ -255,6 +269,7 @@ describe('expand', () => {
             limits: [],
           },
         ],
+        sources: [[0], [0]],
         dropped: 1,
       });
       expect(expand(expr, { maxHandSize: 6 })).toMatchObject({ dropped: 0 });
@@ -265,6 +280,7 @@ describe('expand', () => {
       expect(expand(and(req(3, A), req(3, A)), { maxHandSize: 5 })).toEqual({
         ok: true,
         flat: [],
+        sources: [],
         dropped: 1,
       });
     });
@@ -273,6 +289,7 @@ describe('expand', () => {
       expect(expand(and(req(3, A), req(3, B)), { maxHandSize: 5 })).toEqual({
         ok: true,
         flat: [],
+        sources: [],
         dropped: 1,
       });
     });
@@ -405,6 +422,7 @@ describe('expand', () => {
       expect(result).toEqual({
         ok: true,
         flat: [{ reqs: [{ n: 40, desc: A }], limits: [] }],
+        sources: [[0]],
         dropped: 0,
       });
     });
@@ -431,7 +449,16 @@ describe('expand', () => {
 describe('expandAll', () => {
   it('reads the list of criteria as an or at the root', () => {
     const exprs = [and(req(1, A), or(req(1, B), req(1, C))), req(2, D)];
-    expect(expandAll(exprs, HAND)).toEqual(expand(or(...exprs), HAND));
+    // The same alternatives, in the same order. Only their provenance differs:
+    // one criterion at the root there, two here — which is the whole of what
+    // `sources` is for, and the reason it is compared apart.
+    const many = expandAll(exprs, HAND);
+    const one = expand(or(...exprs), HAND);
+    if (!many.ok || !one.ok) throw new Error('both expand');
+    expect(many.flat).toEqual(one.flat);
+    expect(many.dropped).toBe(one.dropped);
+    expect(many.sources).toEqual([[0], [0], [1]]);
+    expect(one.sources).toEqual([[0], [0], [0]]);
     expect(expandAll(exprs, HAND)).toMatchObject({ ok: true, dropped: 0 });
     expect(flatOf(or(...exprs))).toHaveLength(3);
   });
@@ -443,6 +470,8 @@ describe('expandAll', () => {
     expect(result).toEqual({
       ok: true,
       flat: [{ reqs: [{ n: 1, desc: A }], limits: [] }],
+      // Criteria 0 and 2 are the same alternative; the other two are dropped.
+      sources: [[0, 2]],
       dropped: 2,
     });
   });
@@ -452,8 +481,85 @@ describe('expandAll', () => {
     expect(expandAll([productOfChoices(8), req(1, card(999))], HAND).ok).toBe(false);
   });
 
+  /**
+   * Which criteria an alternative came from, which is the only thing left to
+   * say so once duplicates are merged. A run that judges a SUBSET of the
+   * criteria — going first, going second (PRD §5.5) — picks its alternatives
+   * by these, so an alternative attributed to the wrong criterion would be
+   * judged in the wrong hand.
+   */
+  describe('sources', () => {
+    /** The oracle: expand each criterion ALONE and look its alternatives up in the union. */
+    function sourcesByHand(exprs: readonly Expr[], maxHandSize: number): number[][] {
+      const all = expandAll(exprs, { maxHandSize });
+      if (!all.ok) throw new Error(all.message);
+      const at = new Map(all.flat.map((flat, i) => [identity(flat), i]));
+      const out = all.flat.map((): number[] => []);
+      exprs.forEach((expr, criterion) => {
+        const alone = expand(expr, { maxHandSize });
+        if (!alone.ok) throw new Error(alone.message);
+        for (const flat of alone.flat) {
+          const index = at.get(identity(flat));
+          if (index !== undefined && !out[index]!.includes(criterion)) out[index]!.push(criterion);
+        }
+      });
+      return out;
+    }
+
+    it('names the one criterion an alternative came from', () => {
+      const result = expandAll([req(1, A), req(1, B)], HAND);
+      expect(result).toMatchObject({ sources: [[0], [1]] });
+    });
+
+    it('names every criterion that produced the SAME alternative, in order', () => {
+      const result = expandAll([req(1, A), req(1, B), and(req(1, A)), req(1, A)], HAND);
+      expect(result).toMatchObject({ sources: [[0, 2, 3], [1]] });
+    });
+
+    it('lists one alternative per `or` branch, all owned by the criterion that wrote it', () => {
+      expect(expandAll([or(req(1, A), req(1, B), req(1, C))], HAND)).toMatchObject({
+        sources: [[0], [0], [0]],
+      });
+    });
+
+    it('stays parallel to `flat` when alternatives are dropped', () => {
+      // Criterion 1 is dropped whole; criterion 2 keeps only its small branch.
+      const result = expandAll([req(1, A), req(6, B), or(req(6, C), req(1, A))], {
+        maxHandSize: 5,
+      });
+      expect(result).toMatchObject({ flat: [{ reqs: [{ n: 1, desc: A }] }], sources: [[0, 2]] });
+    });
+
+    it('agrees with expanding each criterion alone, over the generated criteria', () => {
+      const rng = seededRng(90_210);
+      let merged = 0;
+      for (let round = 0; round < 200; round++) {
+        const exprs = Array.from({ length: rng.int(1, 4) }, () =>
+          genExpr(rng, {
+            desc: (r) => card(r.int(0, 3)),
+            maxDepth: 2,
+            maxArgs: 3,
+            limitChance: 0.25,
+          }),
+        );
+        const result = expandAll(exprs, HAND);
+        if (!result.ok) continue;
+        expect(result.sources).toEqual(sourcesByHand(exprs, HAND.maxHandSize));
+        expect(result.sources).toHaveLength(result.flat.length);
+        for (const owners of result.sources) {
+          expect(owners.length).toBeGreaterThan(0);
+          expect([...owners].sort((a, b) => a - b)).toEqual(owners);
+          if (owners.length > 1) merged++;
+        }
+      }
+      // The interesting case — two criteria that expand to one alternative —
+      // is reached, so the oracle is not agreeing about a vacuous thing.
+      expect(merged).toBeGreaterThan(20);
+    });
+  });
+
   it('has no alternatives for no criteria', () => {
-    expect(expandAll([], HAND)).toEqual({ ok: true, flat: [], dropped: 0 });
+    expect(expandAll([], HAND)).toEqual({ ok: true, flat: [], sources: [], dropped: 0 });
   });
 });
 

@@ -117,14 +117,28 @@ describe('parseOptimizeArgs', () => {
         delta: { num: 3, den: 200 },
         sweep: 'brick',
         blend: [3, 2],
+        // `--blend` is the average with weights of its own, so it settles the
+        // mode as well: the three flags are three ways of naming one run.
+        mode: 'average',
         thresholdMs: 5000,
         force: true,
         json: true,
       },
     });
     expect(parseOptimizeArgs(['t.json', '--hand', '6'], { EDOPRO_WORKDIR: '/w' })).toMatchObject({
-      value: { hand: 6 },
+      value: { mode: 'second' },
     });
+    expect(parseOptimizeArgs(['t.json', '--hand', '5'], { EDOPRO_WORKDIR: '/w' })).toMatchObject({
+      value: { mode: 'first' },
+    });
+    expect(
+      parseOptimizeArgs(['t.json', '--mode', 'average'], { EDOPRO_WORKDIR: '/w' }),
+    ).toMatchObject({ value: { mode: 'average' } });
+    // Nothing said: no override, so the template's own mode stands.
+    const bare = parseOptimizeArgs(['t.json'], { EDOPRO_WORKDIR: '/w' });
+    expect(
+      bare.ok && 'help' in bare ? undefined : bare.ok ? bare.value.mode : null,
+    ).toBeUndefined();
   });
 
   it('answers --help before anything else', () => {
@@ -142,7 +156,15 @@ describe('parseOptimizeArgs', () => {
     expect(message(['a.json', '--blend', '3'])).toMatch(/--blend is two positive whole weights/);
     expect(message(['a.json', '--threshold', '1.5'])).toMatch(/--threshold must be a whole number/);
     expect(message(['a.json', '--hand', '7'])).toBe('--hand must be 5 or 6, not 7');
-    expect(message(['a.json', '--hand', '5', '--blend', '1:1'])).toMatch(/cannot go with --hand/);
+    expect(message(['a.json', '--mode', 'both'])).toBe(
+      '--mode must be first, second, average, not both',
+    );
+    expect(message(['a.json', '--hand', '5', '--blend', '1:1'])).toBe(
+      '--hand and --blend each say which run this is; give one',
+    );
+    expect(message(['a.json', '--mode', 'first', '--hand', '5'])).toBe(
+      '--mode and --hand each say which run this is; give one',
+    );
     expect(message(['a.json', '--samples', '5'])).toBe('unknown option --samples');
     expect(parseOptimizeArgs(['a.json'], {})).toMatchObject({ ok: false });
   });
@@ -361,11 +383,22 @@ describe('runOptimize', () => {
       const blended = `${(100 * (0.6 * first + 0.4 * second)).toFixed(4)}%`;
       expect(stdout).toMatch(
         new RegExp(
-          `^Best ratio — P\\(success\\) = [0-9,]+ / [0-9,]+ = ${blended.replace('.', '\\.')} {2}\\(hand of 5: 7\\.0189%, hand of 6: ${(100 * second).toFixed(4).replace('.', '\\.')}%\\)$`,
+          `^Best ratio — P\\(success\\) = [0-9,]+ / [0-9,]+ = ${blended.replace('.', '\\.')}$`,
           'm',
         ),
       );
-      expect(section(stdout, 'Ranked — ')[0]).toMatch(/exact +hand of 5 +hand of 6 +A /);
+      // Each hand whole: the two denominators differ, so one fraction could
+      // only ever be one of them.
+      expect(stdout).toMatch(/^ {2}going first: 7\.0189% \([0-9,]+ \/ 658,008\)$/m);
+      expect(stdout).toMatch(
+        new RegExp(
+          `^ {2}going second: ${(100 * second).toFixed(4).replace('.', '\\.')}% \\([0-9,]+ / 3,838,380\\)$`,
+          'm',
+        ),
+      );
+      expect(section(stdout, 'Ranked — ')[0]).toMatch(
+        /exact +going first +5 exact +going second +6 exact +A /,
+      );
     });
 
     it('--json prints the raw result and nothing else', async () => {

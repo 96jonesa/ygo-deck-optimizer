@@ -72,6 +72,21 @@ export interface HandSize {
    * the time — never a fraction of 1: blends are ranked in exact integers.
    */
   weight: number;
+  /**
+   * Which of `Problem.criteria` this hand is judged against — indices, not
+   * criteria — when the two hands are judged against different ones (PRD
+   * §5.5: going first over the criteria for going first). Absent: all of them,
+   * which is every problem that has one hand size and every blend of criteria
+   * that apply either way.
+   *
+   * INDICES, and not a criteria list of its own, because the two hands must
+   * score the SAME deck: a class vector means what `classes` says it means,
+   * and a criterion compiled against other classes would read the same vector
+   * as a different deck. Sharing one `criteria` list makes that unsayable
+   * rather than merely untrue — and `partProblem` is the only way a part's
+   * criteria are ever taken out of it.
+   */
+  criteria?: number[];
 }
 
 export interface Problem {
@@ -120,7 +135,7 @@ export function validateProblem(problem: Problem): void {
 
   if (handSizes.length === 0) throw new RangeError('a problem needs at least one hand size');
   const seen = new Set<number>();
-  for (const { H, weight } of handSizes) {
+  for (const { H, weight, criteria: own } of handSizes) {
     checkHandSize(H, deckSize);
     if (seen.has(H)) throw new RangeError(`hand size ${H} appears twice`);
     seen.add(H);
@@ -128,6 +143,16 @@ export function validateProblem(problem: Problem): void {
       throw new RangeError(
         `hand size ${H}: a weight is a positive whole number — a blend is a ratio such as 1 : 1 — not ${weight}`,
       );
+    if (own === undefined) continue;
+    const taken = new Set<number>();
+    for (const at of own) {
+      if (!Number.isInteger(at) || at < 0 || at >= criteria.length)
+        throw new RangeError(
+          `hand size ${H}: \`criteria\` holds ${at}, which is not one of the problem's ${criteria.length} criteria`,
+        );
+      if (taken.has(at)) throw new RangeError(`hand size ${H}: criterion ${at} appears twice`);
+      taken.add(at);
+    }
   }
 
   if (classes.length === 0)
@@ -156,6 +181,40 @@ export function validateProblem(problem: Problem): void {
     if (reqs === undefined) return;
     checkRequirements(reqs, slots, classes.length, criterion);
   });
+}
+
+/**
+ * ONE part of a blend as a problem in its own right: the same deck, **the same
+ * classes**, and only the criteria that part is judged against (TDD §10.3).
+ *
+ * The classes are the same object, not a copy of one: that is what makes the
+ * two parts of an average score the same deck. A class vector is meaningless
+ * on its own — it is `classes` that says which cards a total counts — so two
+ * parts built from two class lists would be averaging two different decks, and
+ * nothing downstream could tell. Here, `n` is handed to both scorers unchanged
+ * and both read it against the list it came from.
+ *
+ * What differs is the SUCCESS SET, and only that: each part keeps its own
+ * criteria, so a hand of five is judged by the criteria for going first and a
+ * hand of six by those for going second.
+ */
+export function partProblem(problem: Problem, hand: HandSize): Problem {
+  return {
+    deckSize: problem.deckSize,
+    handSizes: [{ H: hand.H, weight: 1 }],
+    classes: problem.classes,
+    criteria:
+      hand.criteria === undefined
+        ? problem.criteria
+        : hand.criteria.map((at) => {
+            const criterion = problem.criteria[at];
+            if (criterion === undefined)
+              throw new RangeError(
+                `hand size ${hand.H}: there is no criterion ${at} — the problem has ${problem.criteria.length}`,
+              );
+            return criterion;
+          }),
+  };
 }
 
 /** The multiset of slot masks, as a string that two equal multisets share. */

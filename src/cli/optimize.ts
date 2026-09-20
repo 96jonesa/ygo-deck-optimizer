@@ -1,6 +1,14 @@
 import { analyze } from '../core/model/analyze';
-import { compileProblem, resolveTemplate } from '../core/model/compile';
-import type { HandSize } from '../core/model/problem';
+import { compileProblem, handSizesForMode, resolveTemplate } from '../core/model/compile';
+import {
+  countsFor,
+  handSizeForMode,
+  modeOf,
+  partsOfMode,
+  RUN_MODES,
+  type RunMode,
+  type Template,
+} from '../core/model/template';
 import { calibrateCost } from '../core/opt/calibrate';
 import {
   breakdown,
@@ -45,8 +53,12 @@ and the best ratio criterion by criterion. Progress goes to stderr.
   --top <n>            rows of the ranked table to print (default 20)
   --delta <points>     the plateau's width in percentage points (default 0.5)
   --sweep <lineId>     also sweep this line in detail: re-optimized, and with the others held fixed
-  --hand <5|6>         hand size (default: the template's)
-  --blend <W5:W6>      rank by going first (5 cards) and second (6) together, e.g. 3:2 for first 60% of the time
+  --mode <first|second|average>
+                       which run: going first (5 cards, the criteria tagged
+                       first or both), going second (6 cards, second or both),
+                       or the average of the two (default: the template's)
+  --hand <5|6>         --mode first / --mode second, said the older way
+  --blend <W5:W6>      the average with uneven weights, e.g. 3:2 for going first 60% of the time
   --threshold <sec>    ask for --force when the estimated time is over this (default 60)
   --force              run however long the estimate says
   --json               print the raw result as JSON, and nothing else
@@ -61,8 +73,9 @@ export interface OptimizeArgs {
   top: number;
   delta: Rational;
   sweep?: string;
-  hand?: number;
-  /** Weights of a hand of 5 and a hand of 6, in lowest terms. */
+  /** What to rank by; absent leaves the template's own mode. */
+  mode?: RunMode;
+  /** Weights of a hand of 5 and a hand of 6, in lowest terms; only with `average`. */
   blend?: [number, number];
   thresholdMs: number;
   force: boolean;
@@ -88,6 +101,13 @@ export function deltaArg(text: string): Parsed<Rational> {
   return { ok: true, value: { num: num / shared, den: den / shared } };
 }
 
+export function modeArg(text: string | undefined): Parsed<RunMode | undefined> {
+  if (text === undefined) return { ok: true, value: undefined };
+  if (!RUN_MODES.includes(text as RunMode))
+    return { ok: false, message: `--mode must be ${RUN_MODES.join(', ')}, not ${text}` };
+  return { ok: true, value: text as RunMode };
+}
+
 export function blendArg(text: string): Parsed<[number, number]> {
   const match = /^([0-9]{1,4}):([0-9]{1,4})$/.exec(text);
   const first = Number(match?.[1]);
@@ -106,6 +126,7 @@ const VALUE_FLAGS = [
   '--top',
   '--delta',
   '--sweep',
+  '--mode',
   '--hand',
   '--blend',
   '--threshold',
@@ -137,6 +158,8 @@ export function parseOptimizeArgs(argv: readonly string[], env: CliIo['env']): P
     };
   const hand = handArg(values.get('--hand'));
   if (!hand.ok) return hand;
+  const mode = modeArg(values.get('--mode'));
+  if (!mode.ok) return mode;
 
   const value: OptimizeArgs = {
     template: template.value,
@@ -147,15 +170,28 @@ export function parseOptimizeArgs(argv: readonly string[], env: CliIo['env']): P
     force: flags.switches.has('--force'),
     json: flags.switches.has('--json'),
   };
+  // Three ways of naming the same thing, and one of them at a time: --hand is
+  // the older spelling of the two single modes, --blend the average with
+  // weights of its own. Whichever is given, the criteria's tags apply.
   const blendText = values.get('--blend');
+  const given = [
+    ['--mode', mode.value !== undefined],
+    ['--hand', hand.value !== undefined],
+    ['--blend', blendText !== undefined],
+  ].filter(([, on]) => on);
+  if (given.length > 1)
+    return {
+      ok: false,
+      message: `${given.map(([flag]) => flag).join(' and ')} each say which run this is; give one`,
+    };
   if (blendText !== undefined) {
-    if (hand.value !== undefined)
-      return { ok: false, message: '--blend ranks by both hand sizes; it cannot go with --hand' };
     const blend = blendArg(blendText);
     if (!blend.ok) return blend;
     value.blend = blend.value;
+    value.mode = 'average';
   }
-  if (hand.value !== undefined) value.hand = hand.value;
+  if (hand.value !== undefined) value.mode = hand.value === 5 ? 'first' : 'second';
+  if (mode.value !== undefined) value.mode = mode.value;
   const sweep = values.get('--sweep');
   if (sweep !== undefined) value.sweep = sweep;
   return { ok: true, value };
@@ -179,10 +215,14 @@ export async function runOptimize(argv: readonly string[], io: CliIo): Promise<n
   }
   const args = parsed.value;
 
-  // A blend is judged at both hands, so the criteria are expanded for the larger (TDD §8).
-  const read = readTemplate(args.template, args.blend === undefined ? args.hand : 6);
+  const read = readTemplate(args.template);
   if (!read.ok) return fail(io, read.errors);
-  const template = read.value;
+  // The mode is set on the TEMPLATE, not carried beside it, so that the
+  // analysis, the resolve and the compile cannot be about three different
+  // runs. An average is judged at both hands, so the criteria are expanded
+  // for the larger (TDD §8), which is what `handSizeForMode` says.
+  const mode = args.mode ?? modeOf(read.value);
+  const template: Template = { ...read.value, mode, hand: { size: handSizeForMode(mode) } };
   const install = await loadInstall(args.workdir);
   if (!install.ok) return fail(io, install.errors);
   const { cards, setnames, header } = install.value;
@@ -195,15 +235,15 @@ export async function runOptimize(argv: readonly string[], io: CliIo): Promise<n
   }
   const resolved = resolveTemplate(template, { cards, setnames });
   if (!resolved.ok) return fail(io, resolved.errors);
-  const handSizes: HandSize[] | undefined =
-    args.blend === undefined
-      ? undefined
-      : [
-          { H: 5, weight: args.blend[0] },
-          { H: 6, weight: args.blend[1] },
-        ];
-  const compiled = compileProblem(resolved.resolved, handSizes === undefined ? {} : { handSizes });
+  const handSizes = handSizesForMode(resolved.resolved, mode, args.blend ?? []);
+  const compiled = compileProblem(resolved.resolved, { handSizes });
   if (!compiled.ok) return fail(io, compiled.errors);
+  const parts = partsOfMode(mode);
+  // Only what this run judges: a criterion for the other hand is not in it.
+  const criteria = resolved.resolved.criteria.flatMap((criterion) => {
+    const mine = parts.map((part) => countsFor(criterion.when, part));
+    return mine.some(Boolean) ? [{ ...criterion, parts: mine }] : [];
+  });
 
   const lineIds = resolved.resolved.lines.filter((line) => !line.isRemainder).map((l) => l.id);
   if (args.sweep !== undefined && !lineIds.includes(args.sweep)) {
@@ -231,7 +271,7 @@ export async function runOptimize(argv: readonly string[], io: CliIo): Promise<n
     return EXIT_NEEDS_CONFIRMATION;
   }
 
-  const byCriterion = breakdown(compiled, resolved.resolved.criteria, result.best.classTotals);
+  const byCriterion = breakdown(compiled, criteria, result.best.classTotals);
   const report: OptimizeReport = {
     analysis,
     templatePath: args.template,
