@@ -1,4 +1,6 @@
+import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
+import { analyze } from '../../../../src/core/model/analyze';
 import { validateTemplate } from '../../../../src/core/model/template';
 import { EXAMPLE_TEMPLATE } from '../../../../src/renderer/src/model/example-template';
 import {
@@ -28,7 +30,10 @@ import {
   withRenamedGroup,
   withSuggestedLine,
 } from '../../../../src/renderer/src/model/template-edit';
-import type { CardHit, Template } from '../../../../src/shared/types';
+import type { CardHit, Template, TemplateCriterion } from '../../../../src/shared/types';
+import { motivatingContext } from '../../../helpers/motivating';
+
+const ctx = motivatingContext(await initSqlJs());
 
 const ASH: CardHit = {
   passcode: 14558127,
@@ -60,6 +65,42 @@ function criterionTextOf(template: Template, id: string): string | undefined {
 
 /** One empty criterion and nothing else: what the editor starts a criterion from. */
 const EMPTY_TEMPLATE_WITH_C1: Template = withCriterion(EMPTY_TEMPLATE);
+
+function descOf(template: Template, id: string): unknown {
+  const line = template.lines.find((candidate) => candidate.id === id);
+  return line !== undefined && 'desc' in line ? line.desc : undefined;
+}
+
+const GROUP_REQ: TemplateCriterion['expr'] = {
+  op: 'req',
+  n: 1,
+  desc: { anyOf: [{ t: 'group', groupId: 'g1' }] },
+};
+
+/**
+ * Two groups; `line1` and `c1` name the first of them and carry the AST a
+ * saved file would have beside their text, `line2` names neither. This is the
+ * shape only a FILE produces — the editor never adds an AST to a line — and it
+ * is the shape `withoutGroup` has to reason about.
+ */
+function groupUser(expr: TemplateCriterion['expr'] = GROUP_REQ): Template {
+  let template = withGroup(withGroup(EMPTY_TEMPLATE, 'starter'), 'brick');
+  template = withDescriptionLine(template);
+  template = withLineText(template, 'line1', '{starter}');
+  template = withDescriptionLine(template);
+  template = withLineText(template, 'line2', 'monster');
+  return {
+    ...template,
+    lines: template.lines.map((line) =>
+      line.id === 'line1'
+        ? { ...line, desc: { anyOf: [{ t: 'group' as const, groupId: 'g1' }] } }
+        : line.id === 'line2'
+          ? { ...line, desc: { anyOf: [{ t: 'clause' as const, clause: { kinds: ['monster'] } }] } }
+          : line,
+    ),
+    criteria: [{ id: 'c1', name: 'opener', text: '1x {starter}', ...(expr ? { expr } : {}) }],
+  };
+}
 
 /** A template of three description lines, to reorder and edit. */
 function three(): Template {
@@ -372,6 +413,79 @@ describe('withoutGroup', () => {
   it('leaves the template alone when the id is not there', () => {
     const one = withGroup(EMPTY_TEMPLATE, 'starter');
     expect(withoutGroup(one, 'nope')).toBe(one);
+  });
+
+  // The other half of the authoritative-AST pair (TDD §14): a stored AST may be
+  // trusted because it always came from text that still means that. Deleting
+  // the group changes what `{starter}` can mean, so the AST it produced is no
+  // longer a faithful record of the text and must not outlive it — exactly as
+  // `withLineText` drops it when the text itself changes.
+  it('drops the stored AST of a line that named the group', () => {
+    const template = groupUser();
+    expect(descOf(template, 'line1')).toBeDefined();
+    const after = withoutGroup(template, 'g1');
+    expect(descOf(after, 'line1')).toBeUndefined();
+    // The TEXT is untouched: re-parsing it is what produces the good message.
+    expect(textOf(after, 'line1')).toBe('{starter}');
+  });
+
+  it('drops the stored AST of a criterion that named the group, keeping its name', () => {
+    const after = withoutGroup(groupUser(), 'g1');
+    expect(after.criteria[0]).toEqual({ id: 'c1', name: 'opener', text: '1x {starter}' });
+  });
+
+  it('drops it from a criterion that names the group deep inside an and/or', () => {
+    const nested = groupUser({
+      op: 'or',
+      args: [
+        { op: 'req', n: 1, desc: { anyOf: [{ t: 'clause', clause: { kinds: ['trap'] } }] } },
+        {
+          op: 'and',
+          args: [{ op: 'atMost', n: 1, desc: { anyOf: [{ t: 'group', groupId: 'g1' }] } }],
+        },
+      ],
+    });
+    expect(withoutGroup(nested, 'g1').criteria[0]!.expr).toBeUndefined();
+  });
+
+  it('leaves the stored AST of a line and a criterion that did NOT name the group', () => {
+    const template = groupUser();
+    const after = withoutGroup(template, 'g2');
+    expect(descOf(after, 'line1')).toEqual(descOf(template, 'line1'));
+    expect(after.criteria[0]!.expr).toEqual(template.criteria[0]!.expr);
+    expect(descOf(after, 'line2')).toEqual(descOf(template, 'line2'));
+  });
+});
+
+/**
+ * Deleting a group out from under a description, end to end: the edit is the
+ * renderer's, the message is `analyze`'s, and the point of dropping the stored
+ * AST is which message comes out. Keeping it left the line running as a
+ * reference to a group that is gone — a stale-text warning plus "this line can
+ * hold no card", neither of which says what happened.
+ */
+describe('a group deleted out from under a description', () => {
+  function issuesOf(template: Template, line: string): string[] {
+    const found = analyze(template, ctx).lines.find((row) => row.id === line);
+    if (found === undefined) throw new Error(`no line ${line}`);
+    return found.issues.map((issue) => `${issue.severity}: ${issue.message}`);
+  }
+
+  it('gives the line the one message that names the group, and no other', () => {
+    expect(issuesOf(withoutGroup(groupUser(), 'g1'), 'line1')).toEqual([
+      'error: no group is named "starter"; groups: {brick}',
+    ]);
+  });
+
+  it('gives the criterion the same message', () => {
+    const analysis = analyze(withoutGroup(groupUser(), 'g1'), ctx);
+    expect(analysis.criteria[0]!.issues.map((issue) => issue.message)).toEqual([
+      'no group is named "starter"; groups: {brick}',
+    ]);
+  });
+
+  it('says nothing about the line that never named it', () => {
+    expect(issuesOf(withoutGroup(groupUser(), 'g1'), 'line2')).toEqual([]);
   });
 });
 

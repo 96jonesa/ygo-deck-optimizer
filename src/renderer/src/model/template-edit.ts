@@ -1,5 +1,6 @@
 import type {
   CardHit,
+  Description,
   Template,
   TemplateCard,
   TemplateCriterion,
@@ -27,6 +28,9 @@ export const EMPTY_TEMPLATE: Template = {
 /** The copy range a line starts at: anything from none to a full three. */
 const NEW_LINE_MIN = 0;
 const NEW_LINE_MAX = 3;
+
+/** A criterion's parsed form; named here so the AST can be walked without importing core. */
+type CriterionExpr = NonNullable<TemplateCriterion['expr']>;
 
 /** A line that names one card, as opposed to one that describes a kind of card. */
 export type CardLine = Extract<TemplateLine, { card: TemplateCard }>;
@@ -320,15 +324,56 @@ export function withRenamedGroup(template: Template, id: string, name: string): 
   );
 }
 
+/** Whether a description names the group `id` directly. */
+function descNamesGroup(desc: Description, id: string): boolean {
+  return desc.anyOf.some((alt) => alt.t === 'group' && alt.groupId === id);
+}
+
+function exprNamesGroup(expr: CriterionExpr, id: string): boolean {
+  return expr.op === 'req' || expr.op === 'atMost'
+    ? descNamesGroup(expr.desc, id)
+    : expr.args.some((arg) => exprNamesGroup(arg, id));
+}
+
 /**
- * Without that group. The LINES are left exactly as they were: a description
- * that named it keeps saying `{name}`, and `analyze` reports that as a parse
- * error naming the group that is gone. Rewriting the user's text to cover the
- * deletion up would be the renderer deciding semantics (TDD §3).
+ * Without that group — and without the stored AST of any line or criterion
+ * that named it.
+ *
+ * The user's TEXT is left exactly as it was: a description that said
+ * `{starter}` keeps saying it, and rewriting it to cover the deletion up would
+ * be the renderer deciding semantics (TDD §3). What goes is the parsed form
+ * beside it, for the reason the whole authoritative-AST rule rests on (TDD
+ * §14, `core/model/meaning.ts`): a stored AST may be trusted BECAUSE it always
+ * came from text that still means that, which is why every edit to the text
+ * drops it. Deleting a group changes what `{starter}` can mean, so the AST it
+ * produced is no longer a faithful record of the text and must not outlive it.
+ *
+ * The practical difference is the diagnosis. Keeping the AST leaves the line
+ * running as a reference to a group that is gone, and the reader gets a stale-
+ * text warning plus "this line can hold no card" — two messages, neither of
+ * which says what happened. Dropping it re-parses the text and gives the one
+ * message that does: no group called `starter`.
+ *
+ * A RENAME is the opposite case and is left alone: the id still names the same
+ * group, so the AST is the faithful record and the text is the stale half —
+ * which is exactly what the stale-text warning then says.
  */
 export function withoutGroup(template: Template, id: string): Template {
   const groups = template.groups.filter((group) => group.id !== id);
-  return groups.length === template.groups.length ? template : withGroups(template, groups);
+  if (groups.length === template.groups.length) return template;
+
+  const lines = template.lines.map((line) =>
+    !isCardLine(line) && line.desc !== undefined && descNamesGroup(line.desc, id)
+      ? { id: line.id, min: line.min, max: line.max, text: line.text }
+      : line,
+  );
+  const criteria = template.criteria.map((criterion) => {
+    if (criterion.expr === undefined || !exprNamesGroup(criterion.expr, id)) return criterion;
+    const next: TemplateCriterion = { id: criterion.id, text: criterion.text };
+    if (criterion.name !== undefined) next.name = criterion.name;
+    return next;
+  });
+  return { ...template, groups, lines, criteria };
 }
 
 export function withGroupCard(template: Template, id: string, card: CardHit): Template {
