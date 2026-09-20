@@ -484,6 +484,63 @@ P(n) = \frac{1}{\binom{N}{H}} \sum_{h \in \mathcal{S}} \prod_{c} \binom{n_c}{h_c
 
 `src/core/prob/montecarlo.ts` builds a concrete deck of $`N`$ card objects tagged with their **line** (not class), draws hands by partial Fisher–Yates with a seeded PRNG, and decides success by brute-force assignment of cards to slots using the *match matrix rows of lines*. It deliberately shares no code with classes, masks, Hall's condition, the success set, or the binomial table. It is a test oracle and the future engine for non-hypergeometric features (PRD §9); it is not reachable from the app in v1 (the CLI harness exposes it as `estimate`). Two implementation choices are deliberate. The deck is **reset to built order before every draw**: without the reset a Sattolo-style off-by-one in the shuffle is statistically invisible — the arrangement becomes a random walk on the symmetric group whose stationary distribution is uniform, so the estimate stays unbiased — whereas with it the same bug means the first $`H`$ cards are never drawn and the closed-form anchor fails at once. And `nextInt` uses rejection sampling, so draws are exactly uniform. Intervals are Wilson score intervals; it runs at about 2.4 M hands per second.
 
+### 10.5 Draw cards
+
+A **draw card** is a named line that, when drawn, is replaced by `n > 0` further drawn cards, optionally **once-per-turn** so that only the first copy draws and the rest sit in hand. Draw cards drawn by draw cards draw in turn. Criteria judge the end hand, whatever size it is (PRD §5.7).
+
+Every other score in this engine draws a fixed `H` and judges it. This one makes the hand size a random variable of the hand's own contents, so it is the only place the *sample space* changes rather than the valuation.
+
+#### The hand is a prefix of a shuffled deck, and order matters
+
+The final hand is the first `ℓ` cards of a shuffled deck, where `ℓ` is the **least fixed point** of `ℓ = H + draws(first ℓ)`, reached by iterating up from `H`.
+
+**The obvious model is wrong and gives probabilities above 1.** "Order inside the prefix does not matter, so enumerate the multisets satisfying `|v| = H + draws(v)`" fails because whether a card is *in* the prefix depends on order: deck `{1 Pot(k=2), 3 blank}` at `H = 1` gives `ℓ = 3` for `[Pot, blank, blank]` and `ℓ = 1` for `[blank, Pot, blank]`, the same multiset. Measured total mass of that model on three small decks: **1.500**, **1.762**, **2.095**. The fixed point is **least, not unique** — the second ordering has fixed points `{1, 3}` — so any solver but upward iteration silently picks a wrong one, and a test pins an ordering with two.
+
+Each composition therefore carries an **ordering factor** `φ`: the process is a Łukasiewicz path, and validity is the budget `H + draws(prefix_t)` staying above `t` until it lands on `ℓ`. Without once-per-turn the cycle lemma gives `φ = H/ℓ` in closed form. **With once-per-turn it does not hold** — the first copy draws and the rest do not, so a card's contribution is not a function of the card: two once-per-turn copies in a prefix of 7 at `H = 5` give 20 valid arrangements of 21, `φ = 20/21`, against `H/ℓ = 5/7`. `φ` is then a DP over the **draw-class counts alone**, because every non-draw class is an interchangeable filler symbol.
+
+```math
+P \;=\; \sum_{\substack{v \text{ consistent} \\ v \text{ succeeds}}} \varphi \cdot \frac{\prod_c \binom{n_c}{v_c}}{\binom{N}{\ell}}
+```
+
+The parts **sum**; they are disjoint outcomes, not the weighted mean the first/second blend takes, and `pDisplay`'s divisor must come from the distinct hand sizes rather than the part count or it reports `P` over the number of prefix lengths.
+
+#### Two rejected designs, both of which are what one reaches for
+
+- **Scaling `φ` into each stored row.** It keeps the hot loop to one multiply-accumulate, and it breaks: under once-per-turn the per-bucket lcm explodes, and five once-per-turn draw-2 lines (prefix 15) exceed $`2^{53}`$ by **127×** — a silently rounded score on a realistic template. `φ` lives **outside** the float64 accumulation, grouped by the factor's **value** (1,023 draw vectors collapse to 56 distinct factors, and to one per length when nothing is once-per-turn), each group summed as a plain integer bounded by $`\binom{N}{\ell}`$ and combined once per deck. No BigInt per deck.
+- **A per-template drawing toggle.** "Best of two runs" is not the probability of any single event and cannot be ranked.
+
+#### One decision, and the flag that picks it
+
+There is exactly **one stop timing** (Andy, 2026-09-20): either nothing is activated, or everything resolves to the fixed point. There is deliberately no card-by-card choice — that is a decision tree, and `φ` exists because the continuation is determined once you commit.
+
+Each criterion carries **`stop`** (default false). Andy's sentence is the definition: *unchecked (`stop`) means "I would stop for this"; checked means "I am willing to lose this by drawing."*
+
+```
+look at the opening H cards
+  any `stop` criterion met?
+    yes -> STOP. worth the best weight among ALL criteria the OPENING meets
+    no  -> DRAW. worth the best weight among ALL criteria the POST-DRAW hand meets
+                 (0 if drawing broke them — there is no falling back)
+```
+
+**The flag picks the moment, not the criteria.** In whichever window the hand lands, *every* criterion is judged — a hand that stopped on a weight-1 criterion is still worth the weight-9 one it also holds. This is the correction that matters, and the naming invites the other reading, so a test states it rather than a comment.
+
+Unweighted this is plain optimal stopping and is achievable by a real player in that order. Weighted it is too, because the pre-draw check **decides** the window: there is no maximum taken over two windows, which would need hindsight. An earlier design did take that maximum and was wrong.
+
+Two consequences of the single decision point, both of which must be **visible to a user** and not only true:
+
+- **Drawing can lower the odds.** A limit is a census over the whole hand and a ceiling makes a surplus matching card fatal, so more cards means more ways to break both: `1-1x starter` measures 0.3734 without a live Pot and 0.3181 with one, monotone downward in copies.
+- **A drawing template's number is a LOWER bound on careful play.** A real player with two Pots could activate one, see the hand is fine, and keep the other; the model resolves both. `analyze` therefore emits `drawing-is-a-lower-bound` on every drawing template.
+
+#### Bounds, refusals and the class partition
+
+- **Two size bounds.** The longest **prefix** `L = H + Σ kᵢ·(opt ? 1 : maxᵢ)` drives $`\binom{N}{\ell}`$, the enumeration and the cost; the largest **hand** `H + Σ (kᵢ−1)·(opt ? 1 : maxᵢ)` drives slots and `MAX_HAND`. Three Pots give 11 and 8; three Upstarts give 8 and **5**, the hand never growing. `MAX_HAND_SIZE` is the *opening* hand and is neither.
+- **`MAX_PREFIX = 16`, justified by build time alone.** `analyze` rebuilds the success set on every keystroke; ≤ 16 holds that under ~50 ms at 10 classes, where prefix 23 costs 254 ms and 29 costs 705 ms. It is **not** an exactness frontier — an earlier claim that it was turned out to be an artefact of the rejected row-scaling.
+- **Deck-out is refused statically** when `L > N`, checkable from `ClassInfo.max`. The model otherwise drops that mass rather than mis-counting it (model mass + deck-out rate = 1.000000 exactly), and refusing buys the **mass = 1** invariant — the best self-test this feature has, and the precondition for the complement, which generalises globally but *not* per length, since a single length's ways do not sum to $`\binom{N}{\ell}`$.
+- **Draw-ness enters the class key, and a draw line never joins the blank class.** `compile`'s `fills.length === 0 ? 0` would otherwise swallow a `3x [Pot of Greed]` no criterion mentions, and its draws would vanish while the run reported today's number. **Two once-per-turn lines never share a class either**: "once" belongs to the card, so merging would let one copy stand for both.
+- **`then` (the 5/6 split) is refused alongside draw cards.** The `drawn` machinery assumes a set of `H` cards is `H` equally likely (opening, drawn) pairs; with draw cards the card at position `H−1` is biased toward them — 0.3333 against the 0.2000 a uniform reading assumes, because a draw card must land in the first `H` positions or never resolve at all.
+- Without any draw card the `stop` flag **changes nothing**, which is what protects every template written before this existed.
+
 ## 11. Optimizer
 
 ### 11.1 Search space
