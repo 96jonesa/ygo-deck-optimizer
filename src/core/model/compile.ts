@@ -1,17 +1,16 @@
 import type { CardRecord } from '../cards/record';
 import type { Expr, FlatCriterion } from '../criteria/ast';
 import { expand, expandAll } from '../criteria/expand';
-import { parseCriterion } from '../criteria/parser';
 import { printCriterion } from '../criteria/print';
 import type { Description } from '../desc/ast';
 import type { CardLookup, DescContext, GroupLookup, SetnameLookup } from '../desc/context';
 import { type Groups, matcher } from '../desc/evaluate';
 import { implies, UNIVERSE } from '../desc/implies';
 import type { Span } from '../desc/lexer';
-import { parse } from '../desc/parser';
 import { echo, print } from '../desc/print';
 import { type Count, toCount } from '../util/count';
 import { normalize } from '../util/normalize';
+import { criterionMeaning, lineMeaning } from './meaning';
 import {
   type ClassInfo,
   type CompiledCriterion,
@@ -169,8 +168,9 @@ function located(message: string, text: string, span: Span): string {
  *    remainder included, as the description `card` — and every distinct
  *    description of any flat criterion.
  *
- * TODO(M2g): a stored `desc` / `expr` is authoritative (TDD §14); until then
- * it is ignored and the text is parsed.
+ * What a line or criterion MEANS is `lineMeaning` / `criterionMeaning` and not
+ * a parse of its own: a stored AST is authoritative (TDD §14), and `analyze`
+ * has to judge the very thing this compiles.
  */
 export function resolveTemplate(template: Template, ctx: ResolveContext): ResolveResult {
   const errors: string[] = [];
@@ -185,24 +185,20 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
   const lines: ResolvedLine[] = [];
   for (const line of template.lines) {
     const label = `line ${JSON.stringify(line.id)}`;
-    let desc: Description;
-    let text: string;
-    if ('card' in line) {
-      desc = { anyOf: [{ t: 'card', passcode: line.card.passcode }] };
-      text = `#${line.card.passcode}`;
-      if (ctx.cards.get(line.card.passcode) === undefined)
-        warnings.push(
-          `${label}: #${line.card.passcode} (${line.card.name}) is not in the card database; only a requirement that names it can be filled by it`,
-        );
-    } else {
-      const parsed = parse(line.text, descCtx);
-      if (!parsed.ok) {
-        errors.push(`${label}: ${located(parsed.message, line.text, parsed.span)}`);
-        continue;
-      }
-      desc = parsed.desc;
-      text = line.text;
+    const meant = lineMeaning(line, descCtx);
+    if (!meant.ok) {
+      errors.push(
+        `${label}: ${located(meant.message, 'text' in line ? line.text : '', meant.span)}`,
+      );
+      continue;
     }
+    const { desc } = meant;
+    const text = 'card' in line ? `#${line.card.passcode}` : line.text;
+    if ('card' in line && ctx.cards.get(line.card.passcode) === undefined)
+      warnings.push(
+        `${label}: #${line.card.passcode} (${line.card.name}) is not in the card database; only a requirement that names it can be filled by it`,
+      );
+    if (meant.stale !== null) warnings.push(`${label}: ${meant.stale}`);
     // A generic line needs no existing card: it states what its cards are known to be, not
     // which cards exist (PRD §5.1). `count` is reported, and analyze() notes a zero.
     const count = ctx.cards.count(matcher(desc, members));
@@ -235,14 +231,16 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
 
   const handSize = template.hand.size;
   const parsedCriteria: { id: string; name?: string; text: string; expr: Expr }[] = [];
-  for (const { id, name, text } of template.criteria) {
-    const parsed = parseCriterion(text, descCtx);
-    if (!parsed.ok) {
-      errors.push(`criterion ${JSON.stringify(id)}: ${located(parsed.message, text, parsed.span)}`);
+  for (const criterion of template.criteria) {
+    const { id, name, text } = criterion;
+    const meant = criterionMeaning(criterion, descCtx);
+    if (!meant.ok) {
+      errors.push(`criterion ${JSON.stringify(id)}: ${located(meant.message, text, meant.span)}`);
       continue;
     }
+    if (meant.stale !== null) warnings.push(`criterion ${JSON.stringify(id)}: ${meant.stale}`);
     parsedCriteria.push(
-      name === undefined ? { id, text, expr: parsed.expr } : { id, name, text, expr: parsed.expr },
+      name === undefined ? { id, text, expr: meant.expr } : { id, name, text, expr: meant.expr },
     );
   }
 

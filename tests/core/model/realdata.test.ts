@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { CardIndex } from '../../../src/core/cards/index';
 import { analyze } from '../../../src/core/model/analyze';
 import { compileProblem, REMAINDER_ID, resolveTemplate } from '../../../src/core/model/compile';
+import { templateFromDeck } from '../../../src/core/model/ydk';
 import { createScorer } from '../../../src/core/prob/scorer';
 import { loadCardIndex, loadSetnames } from '../../../src/main/edopro/loader';
 import { motivatingTemplate } from '../../helpers/motivating';
@@ -74,5 +75,22 @@ describe.skipIf(!EDOPRO_WORKDIR)('the motivating example against a real install 
     console.log(
       `analyze(motivating) against ${cards.status.cards} cards: ${cold.toFixed(2)} ms, ${warm.toFixed(2)} ms with the match memo`,
     );
+  });
+});
+
+describe.skipIf(!EDOPRO_WORKDIR)('importing a real decklist', () => {
+  // The hazard TDD §19 parked until `.ydk` import landed, on the real index.
+  it('reads the alternate-art Harpie’s Feather Duster a real deck carries', () => {
+    expect(cards.get(18144507)).toBeUndefined();
+    const imported = templateFromDeck([18144507, ...Array(39).fill(14558127)], cards);
+    expect(imported.warnings).toEqual([
+      'the deck holds 39 copies of Ash Blossom & Joyous Spring; a deck holds at most 3 copies of one card, so its line is 3',
+    ]);
+    expect(imported.template.lines[0]).toEqual({
+      id: 'card1',
+      card: { passcode: 18144506, name: "Harpie's Feather Duster" },
+      min: 1,
+      max: 1,
+    });
   });
 });

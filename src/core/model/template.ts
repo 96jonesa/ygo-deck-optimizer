@@ -1,5 +1,7 @@
 import type { Expr } from '../criteria/ast';
+import { validateExpr } from '../criteria/validate';
 import type { Description } from '../desc/ast';
+import { validateDescription } from '../desc/validate';
 
 /** The only template file version this build reads (TDD §14). */
 export const TEMPLATE_VERSION = 1;
@@ -50,6 +52,23 @@ export interface TemplateRemainder {
   max: number | null;
 }
 
+/**
+ * The fields of one named card as a template file records them (TDD §14
+ * `cardSnapshot`). Results depend on the card database ONLY through named
+ * cards, so these are exactly the fields a reproduced run would need — which
+ * is what makes "this file gives the same numbers on another machine" a
+ * checkable claim rather than a hope.
+ */
+export interface CardSnapshot {
+  type: number;
+  attribute: number;
+  race: number;
+  level: number;
+  atk: number;
+  def: number;
+  setcodes: number[];
+}
+
 /** The template file (TDD §14). */
 export interface Template {
   version: typeof TEMPLATE_VERSION;
@@ -59,8 +78,8 @@ export interface Template {
   lines: TemplateLine[];
   remainder: TemplateRemainder;
   criteria: TemplateCriterion[];
-  /** The fields of every named card when the file was saved; read and written by M2g. */
-  cardSnapshot?: Record<string, unknown>;
+  /** The fields of every named card when the file was saved, by passcode. */
+  cardSnapshot?: Record<string, CardSnapshot>;
 }
 
 export type ValidateResult = { ok: true; template: Template } | { ok: false; errors: string[] };
@@ -205,15 +224,18 @@ class Validator {
       return { id, min, max, card };
     }
     const text = this.draftText(where, 'text', value.text);
-    if (value.desc !== undefined && !isObject(value.desc))
-      this.fail(`${where}: \`desc\` must be a description object, not ${show(value.desc)}`);
+    // The stored AST is AUTHORITATIVE (TDD §14), so it is checked here rather
+    // than carried through unread: `implies` and the box model would otherwise
+    // be the first thing to meet a `level: ["four"]` out of a hand-written file.
+    let desc: Description | undefined;
+    if (value.desc !== undefined) {
+      const parsed = validateDescription(value.desc, `${where}: \`desc\``);
+      if (parsed.ok) desc = parsed.desc;
+      else for (const message of parsed.errors) this.fail(message);
+    }
     if (id === undefined || min === undefined || max === undefined || text === undefined)
       return undefined;
-    // TODO(M2g): the stored AST is authoritative (TDD §14). Until then it is
-    // carried through unread, and `text` is what gets parsed.
-    return isObject(value.desc)
-      ? { id, min, max, text, desc: value.desc as unknown as Description }
-      : { id, min, max, text };
+    return desc === undefined ? { id, min, max, text } : { id, min, max, text, desc };
   }
 
   criterion(where: string, value: unknown): TemplateCriterion | undefined {
@@ -222,13 +244,71 @@ class Validator {
     const text = this.draftText(where, 'text', value.text);
     if (value.name !== undefined && typeof value.name !== 'string')
       this.fail(`${where}: \`name\` must be text, not ${show(value.name)}`);
-    if (value.expr !== undefined && !isObject(value.expr))
-      this.fail(`${where}: \`expr\` must be an expression object, not ${show(value.expr)}`);
+    // Authoritative, and so checked, exactly as a line's `desc` is.
+    let expr: Expr | undefined;
+    if (value.expr !== undefined) {
+      const parsed = validateExpr(value.expr, `${where}: \`expr\``);
+      if (parsed.ok) expr = parsed.expr;
+      else for (const message of parsed.errors) this.fail(message);
+    }
     if (id === undefined || text === undefined) return undefined;
     const out: TemplateCriterion = { id, text };
     if (typeof value.name === 'string') out.name = value.name;
-    // TODO(M2g): as for a line's `desc` — carried through unread for now.
-    if (isObject(value.expr)) out.expr = value.expr as unknown as Expr;
+    if (expr !== undefined) out.expr = expr;
+    return out;
+  }
+
+  /**
+   * `cardSnapshot`: a `CardSnapshot` per passcode. Written by the app, so a
+   * broken one is a broken file and says so rather than being quietly dropped
+   * — the whole point of it is that a run can be checked against it.
+   */
+  snapshot(value: unknown): Record<string, CardSnapshot> | undefined {
+    if (value === undefined) return undefined;
+    if (!isObject(value))
+      return this.fail(`\`cardSnapshot\` must be an object, not ${show(value)}`);
+    const out: Record<string, CardSnapshot> = {};
+    for (const [passcode, fields] of Object.entries(value)) {
+      const where = `\`cardSnapshot\` [${JSON.stringify(passcode)}]`;
+      if (!/^[1-9]\d*$/.test(passcode)) {
+        this.fail(`${where}: the key must be a passcode`);
+        continue;
+      }
+      if (!isObject(fields)) {
+        this.fail(`${where}: must be an object, not ${show(fields)}`);
+        continue;
+      }
+      const numbers = (['type', 'attribute', 'race', 'level', 'atk', 'def'] as const).map(
+        (field) =>
+          typeof fields[field] === 'number' && Number.isInteger(fields[field])
+            ? (fields[field] as number)
+            : this.fail(
+                `${where}: \`${field}\` must be a whole number, not ${show(fields[field])}`,
+              ),
+      );
+      const setcodes = Array.isArray(fields.setcodes)
+        ? fields.setcodes.filter(
+            (code): code is number => typeof code === 'number' && Number.isInteger(code),
+          )
+        : this.fail(`${where}: \`setcodes\` must be a list, not ${show(fields.setcodes)}`);
+      if (
+        Array.isArray(fields.setcodes) &&
+        setcodes !== undefined &&
+        setcodes.length !== fields.setcodes.length
+      )
+        this.fail(`${where}: every setcode must be a whole number`);
+      if (numbers.includes(undefined) || setcodes === undefined) continue;
+      const [type, attribute, race, level, atk, def] = numbers as number[];
+      out[passcode] = {
+        type: type!,
+        attribute: attribute!,
+        race: race!,
+        level: level!,
+        atk: atk!,
+        def: def!,
+        setcodes,
+      };
+    }
     return out;
   }
 
@@ -260,8 +340,11 @@ class Validator {
  * remainder — so that a template written by hand stays short; the template
  * that comes back always has them. Unknown fields are ignored.
  *
- * `desc` and `expr` are accepted and carried through, but only checked to be
- * objects: until M2g makes the stored AST authoritative, the text is parsed.
+ * A stored `desc` or `expr` is the AUTHORITATIVE meaning of its line or
+ * criterion (TDD §14), so it is fully checked here and comes back CANONICAL —
+ * every field the box model assumes of it is asserted before `implies` can
+ * meet it, and `resolveTemplate` can compare it with a fresh parse of the text
+ * by stringifying both.
  */
 export function validateTemplate(json: unknown): ValidateResult {
   if (!isObject(json))
@@ -312,8 +395,7 @@ export function validateTemplate(json: unknown): ValidateResult {
     criteria.map((criterion) => criterion?.id),
   );
 
-  if (json.cardSnapshot !== undefined && !isObject(json.cardSnapshot))
-    v.fail(`\`cardSnapshot\` must be an object, not ${show(json.cardSnapshot)}`);
+  const cardSnapshot = v.snapshot(json.cardSnapshot);
 
   if (v.errors.length > 0) return { ok: false, errors: v.errors };
   const template: Template = {
@@ -325,6 +407,6 @@ export function validateTemplate(json: unknown): ValidateResult {
     remainder,
     criteria: criteria as TemplateCriterion[],
   };
-  if (isObject(json.cardSnapshot)) template.cardSnapshot = json.cardSnapshot;
+  if (cardSnapshot !== undefined) template.cardSnapshot = cardSnapshot;
   return { ok: true, template };
 }

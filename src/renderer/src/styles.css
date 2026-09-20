@@ -1490,3 +1490,35 @@ ul.readout {
   color: inherit;
   font-weight: 400;
 }
+
+/* --- files (M2g) --------------------------------------------------------- */
+
+/* Open / Save / Import, and the one line that says what the last one did. */
+.file-actions {
+  margin-top: var(--sp-2);
+}
+
+/* The install's decks. A panel rather than a popup: it holds a handful of
+   names and the browse button, and nothing about it needs to float. */
+.deck-list {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+  background: var(--bg-sunken);
+}
+
+.deck-names {
+  margin: var(--sp-2) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.deck-names li {
+  margin: 0 0 var(--sp-1);
+}
+
+/* Beneath the headline figure, where the numbers it would export are. */
+.export {
+  margin: var(--sp-3) 0;
+}

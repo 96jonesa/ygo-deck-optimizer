@@ -17,9 +17,9 @@ combinatorial probability plus a card-database lookup layer.
 | Milestone | State |
 | --- | --- |
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
-| M0 — de-risk spike (headless) | **Done (in review)**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
-| M1 — exact engine + optimizer (headless) | **Done (in review)**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), inline name completion in both editors (`[card]`, `{group}`, `"archetype"`) |
+| M0 — de-risk spike (headless) | **Done**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
+| M1 — exact engine + optimizer (headless) | **Done**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), range requirements (`1-2x monster`: a ceiling that binds the cards it does not take, so the range means "in addition to the rest"), `exactly nx` for a range whose ends agree, inline name completion in both editors (`[card]`, `{group}`, `"archetype"`), M2g files (`.ydk` deck import, template open/save with `cardSnapshot`, CSV/JSON export of a run) |
 | M3 — polish | Not started |
 | M4 — release | Not started |
 
@@ -89,8 +89,12 @@ every count really does tie — where it does not, what each count costs is show
 criterion carries a limit, a quiet footnote says the number is exact under the tool's one
 matching rule and names the cards that rule cannot see.
 
-Template open/save is M2g; until then a template is written in the editors or loaded from the
-example, and export lives in the [command-line harness](#command-line-harness).
+**Work outlives the app process.** At the top of the template panel, **Open…** and **Save…**
+read and write a [template file](#template-files-and-decks); **Import a deck…** lists the decks in your EDOPro
+install by name and turns one into lines — one line per distinct card, at the copies the deck
+holds, with your criteria and groups left exactly as they were. A deck kept elsewhere goes
+through **Choose a .ydk file…**. Under a finished run, **Export** writes the ranked table as CSV
+or the whole result as JSON, in exact fractions rather than percentages.
 
 ## Description language
 
@@ -162,6 +166,38 @@ rounding, no BigInt and no epsilon; two decks tie iff their numerators are equal
 ranks a going-first / going-second blend the same way). The Monte Carlo engine below shares no code
 with any of this and is the cross-check: the two must agree within five standard errors on generated
 problems at real deck sizes, and the scorer must match a count of every hand of small decks exactly.
+
+## Template files and decks
+
+A **template file** is versioned JSON holding the lines, the groups, the criteria, the deck size
+and the opening hand. Two things in it are worth knowing.
+
+**The stored AST is what runs.** Every line and criterion is written with its parsed form
+(`desc` / `expr`) beside the text you typed. The text is kept for editing, and the AST is what
+the engine judges — so a file survives a change to the grammar and to the install's archetype
+names (an archetype is stored as its setcode, never as a name). If the text no longer reads as
+the AST beside it, the file still *means* what it meant and the line says so; typing over the
+text replaces the stored form.
+
+**`cardSnapshot` records every named card as it was.** Results depend on the card database only
+through the cards a template names, so the file keeps their fields. Opening it on another
+install compares the two and names any card that is missing or whose fields have moved, field by
+field. Those are notices: this install's card data is what runs. (Choosing the *file's* card data
+instead is not built — see the note in `src/main/services/files.ts`.)
+
+**Importing a `.ydk` decklist** reads the `#main` section only and makes one line per distinct
+card at the count the deck holds, with `min = max`, so the template starts as exactly the deck
+you have; widen the copies you want to tune and run. A passcode is resolved through the card
+index before counting, so an alternate-art printing lands on the card it is a reprint of and
+merges with it rather than reading as "no such card" — two of the five decks on the machine this
+was built against carry one. Anything a deck can say that a template cannot — a passcode no
+database holds, more than three copies, a main deck outside 40–60 — is kept usable and named in
+a warning.
+
+**Exporting a run** writes the ranked table as CSV (one row per class vector, a column per line)
+or the whole result as JSON. Both carry **exact fractions, never percentages**: a spreadsheet
+that divides `numerator` by `denominator` gets the number the app shows, and one that sorts on
+`numerator` gets the order the app ranks by, ties included.
 
 ## Command-line harness
 
@@ -360,7 +396,7 @@ BABELCDB_PATH=~/repos/deps/babelcdb/cards.cdb EDOPRO_WORKDIR=~/Applications/Proj
 | `src/core/` | Everything that can be *wrong*: card data, descriptions, implication, probability, optimizer. Pure TypeScript — no Electron, no Node built-ins, no DOM |
 | `src/main/` | Electron main process. Only `index.ts` imports Electron (a Biome `noRestrictedImports` rule keeps it so): it wires the window, the CSP and the dialogs into `app.ts` (startup: IPC registered **once**, first-run detection, the initial load, status pushes) and `ipc.ts` (the handlers), which take everything by injection and are tested without Electron |
 | `src/main/edopro/` | `loader.ts` walks an EDOPro install (no Electron import, so the CLI shares it); `probe.ts` says whether a folder is one, and where to look for one |
-| `src/main/services/` | `cards.ts` owns the card index, the archetype names and the analysis memo behind an `idle → loading → ready / error` state machine whose every change is pushed; `templates.ts` parses descriptions and analyzes templates over it; `typeline.ts` writes `Level 4 · WIND · Warrior · Effect Monster` |
+| `src/main/services/` | `cards.ts` owns the card index, the archetype names and the analysis memo behind an `idle → loading → ready / error` state machine whose every change is pushed; `templates.ts` parses descriptions and analyzes templates over it; `files.ts` reads and writes template files and exports a run; `decks.ts` lists and imports the install's `.ydk` decklists; `runs.ts` hosts the optimizer thread; `typeline.ts` writes `Level 4 · WIND · Warrior · Effect Monster` |
 | `src/main/store/` | `settings.ts`: versioned `settings.json`, loaded tolerantly, written write-then-rename |
 | `src/worker/` | The optimizer's `worker_threads` thread, bundled through electron-vite's `?nodeWorker` import. Imports `src/core` only — a run arrives compiled, as plain numbers. `optimizer.worker.ts` is the thread's entry; `session.ts` is what a message does (calibrate once, search, report progress, stop gracefully on a shared-memory flag), tested without a thread; `protocol.ts` types the messages |
 | `src/preload/` | The typed `window.api` bridge (emitted as CommonJS — see `electron.vite.config.ts`) |

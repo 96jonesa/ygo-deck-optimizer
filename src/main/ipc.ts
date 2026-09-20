@@ -6,12 +6,17 @@ import type {
   CardInfo,
   CardStatus,
   CompleteNameResult,
+  DeckImportResult,
+  DeckListResult,
   DescParseResult,
+  ResultsExportResult,
   RunControlResult,
   RunStartResult,
   Sequenced,
   Settings,
   SettingsPatch,
+  TemplateOpenResult,
+  TemplateSaveResult,
   WorkdirHealth,
 } from '../shared/types';
 import type { CardLoadOptions } from './services/cards';
@@ -40,6 +45,17 @@ export interface IpcDeps {
     parseDescription(text: unknown, groups: unknown): DescParseResult;
     completeName(text: unknown, caret: unknown, groups: unknown): CompleteNameResult;
     analyzeTemplate(template: unknown): AnalyzeTemplateResult;
+  };
+  /** `FileService`: dialogs and file I/O, never the renderer's (TDD §3). */
+  files: {
+    openTemplate(): Promise<TemplateOpenResult>;
+    saveTemplate(template: unknown): Promise<TemplateSaveResult>;
+    exportResults(request: unknown): Promise<ResultsExportResult>;
+  };
+  /** `DeckService`: the install's `.ydk` decklists. */
+  decks: {
+    list(): DeckListResult;
+    import(request: unknown): Promise<DeckImportResult>;
   };
   runs: {
     start(template: unknown, options: unknown): RunStartResult;
@@ -73,7 +89,7 @@ function sequenced<T>(request: unknown, answer: (payload: unknown) => T): Sequen
  * handler checks what it is given before it delegates.
  */
 export function registerIpc(ipcMain: IpcMainLike, deps: IpcDeps): void {
-  const { settings, cards, templates, runs } = deps;
+  const { settings, cards, templates, files, decks, runs } = deps;
 
   ipcMain.handle(IpcChannels.appInfo, () => deps.appInfo());
 
@@ -136,6 +152,18 @@ export function registerIpc(ipcMain: IpcMainLike, deps: IpcDeps): void {
   ipcMain.handle(IpcChannels.templateAnalyze, (_event, request) =>
     sequenced(request, (payload) => templates.analyzeTemplate(payload)),
   );
+
+  // Dialogs and file I/O, all of it here: the renderer names a template and a
+  // deck, and is never handed a path it could write to (TDD §3).
+  ipcMain.handle(IpcChannels.templateOpen, () => files.openTemplate());
+
+  ipcMain.handle(IpcChannels.templateSave, (_event, template) => files.saveTemplate(template));
+
+  ipcMain.handle(IpcChannels.deckList, () => decks.list());
+
+  ipcMain.handle(IpcChannels.deckImport, (_event, request) => decks.import(request));
+
+  ipcMain.handle(IpcChannels.resultsExport, (_event, request) => files.exportResults(request));
 
   // What a run says comes by push (`run:event`), under the id this returns.
   ipcMain.handle(IpcChannels.runStart, (_event, request) => {

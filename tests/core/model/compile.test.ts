@@ -297,8 +297,12 @@ describe('resolveTemplate', () => {
       ]);
     });
 
-    // TODO(M2g): when the stored AST becomes authoritative this test flips.
-    it('ignores a stored `desc` and parses the text', () => {
+    // The other half of the pair this test used to guard: the stored AST is
+    // authoritative (TDD §14), so a file still MEANS what it meant however the
+    // text beside it now reads — and the mismatch is said, not swallowed. The
+    // editor drops a stale AST on every text edit (`withLineText`), so this
+    // case only arises for a file, never for something being typed.
+    it('means the stored `desc`, not the text, and warns that the two disagree', () => {
       const r = resolved(
         templateOf(
           [
@@ -314,9 +318,52 @@ describe('resolveTemplate', () => {
         ),
       );
       expect(r.lines[0]!.desc).toEqual({
-        anyOf: [{ t: 'clause', clause: { kinds: ['monster'] } }],
+        anyOf: [{ t: 'clause', clause: { kinds: ['trap'] } }],
       });
+      expect(r.matrix[0]).toEqual([false]);
+      expect(r.warnings).toContain(
+        'line "m": this line means the saved description `trap`; the text beside it now reads as `monster`. Editing the text replaces the saved one.',
+      );
+    });
+
+    it('means the stored `desc` when the text no longer parses, rather than failing the line', () => {
+      const r = resolved(
+        templateOf(
+          [
+            {
+              id: 'm',
+              text: 'monstr',
+              desc: { anyOf: [{ t: 'clause', clause: { kinds: ['monster'] } }] },
+              min: 0,
+              max: 3,
+            },
+          ],
+          ['1x monster'],
+        ),
+      );
       expect(r.matrix[0]).toEqual([true]);
+      expect(r.warnings.some((w) => w.includes('no longer parses'))).toBe(true);
+    });
+
+    it('means the stored `expr` of a criterion, and warns the same way', () => {
+      const r = resolved({
+        ...templateOf([{ id: 'm', text: 'monster', min: 0, max: 3 }], []),
+        criteria: [
+          {
+            id: 'c1',
+            text: '1x trap',
+            expr: {
+              op: 'req',
+              n: 1,
+              desc: { anyOf: [{ t: 'clause', clause: { kinds: ['monster'] } }] },
+            },
+          },
+        ],
+      });
+      expect(r.descriptions.map((d) => d.text)).toEqual(['monster']);
+      expect(r.warnings).toContain(
+        'criterion "c1": this criterion means the saved expression `1x monster`; the text beside it now reads as `1x trap`. Editing the text replaces the saved one.',
+      );
     });
   });
 

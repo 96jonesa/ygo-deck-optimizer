@@ -2,8 +2,9 @@ import type { Template } from '../../../shared/types';
 
 /**
  * `examples/motivating.json` (PRD §4.2), word for word — the renderer cannot
- * read files, so the throwaway shell carries a copy; a test holds the two
- * equal. M2g's template open/save replaces it.
+ * read files, so it carries a copy; a test holds the two equal. It stays now
+ * that Open exists: "Load example" is one click and needs nobody to know
+ * where the repository put its `examples/` folder.
  */
 const MOTIVATING: Template = {
   version: 1,

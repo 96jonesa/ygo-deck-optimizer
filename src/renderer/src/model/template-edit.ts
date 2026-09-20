@@ -158,6 +158,21 @@ export function withMovedLine(template: Template, id: string, by: number): Templ
   return withLines(template, lines);
 }
 
+/**
+ * An imported `.ydk` decklist, laid over the template: its LINES and its deck
+ * size, and nothing else (PRD §9).
+ *
+ * What the deck becomes — which card a passcode is, how many copies a line
+ * holds, what the deck size is — was decided in main and arrives whole; this
+ * only says where it goes. And it goes over the lines alone: a decklist states
+ * no criteria and no groups, and throwing away the part the user wrote
+ * themselves would be the worst possible reading of "import". The hand size
+ * and the remainder are the user's too.
+ */
+export function withImportedDeck(template: Template, imported: Template): Template {
+  return { ...template, deckSize: imported.deckSize, lines: [...imported.lines] };
+}
+
 export function withDeckSize(template: Template, deckSize: number): Template {
   return template.deckSize === deckSize ? template : { ...template, deckSize };
 }

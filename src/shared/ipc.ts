@@ -6,8 +6,13 @@ import type {
   CardStatus,
   CompleteNameRequest,
   CompleteNameResult,
+  DeckImportRequest,
+  DeckImportResult,
+  DeckListResult,
   DescParseRequest,
   DescParseResult,
+  ResultsExportRequest,
+  ResultsExportResult,
   RunControlResult,
   RunEvent,
   RunStartRequest,
@@ -16,6 +21,8 @@ import type {
   Settings,
   SettingsPatch,
   Template,
+  TemplateOpenResult,
+  TemplateSaveResult,
   WorkdirHealth,
 } from './types';
 
@@ -24,8 +31,11 @@ export type { AppInfo };
 /**
  * The IPC contract (TDD §12), defined once: main registers a handler per
  * invoke channel — every entry here is one — and the preload implements
- * `RendererApi` over them. `template:open` / `template:save` and
- * `results:export` arrive with their slices.
+ * `RendererApi` over them.
+ *
+ * `deck:list` and `deck:import` are not in §12's table: `.ydk` import was
+ * folded into this slice, and listing the install's decks by name is what
+ * keeps a file dialog off the common path.
  */
 export const IpcChannels = {
   appInfo: 'app:info',
@@ -41,6 +51,11 @@ export const IpcChannels = {
   descParse: 'desc:parse',
   descComplete: 'desc:complete',
   templateAnalyze: 'template:analyze',
+  templateOpen: 'template:open',
+  templateSave: 'template:save',
+  deckList: 'deck:list',
+  deckImport: 'deck:import',
+  resultsExport: 'results:export',
   runStart: 'run:start',
   runCancel: 'run:cancel',
   runConfirm: 'run:confirm',
@@ -79,6 +94,29 @@ export interface RendererApi {
   completeName(request: Sequenced<CompleteNameRequest>): Promise<Sequenced<CompleteNameResult>>;
   /** The template is validated again in main: a structurally broken one comes back as `invalid`. */
   analyzeTemplate(request: Sequenced<Template>): Promise<Sequenced<AnalyzeTemplateResult>>;
+  /**
+   * Choose a template file and read it (TDD §14). The dialog, the read and the
+   * validation all happen in main; what comes back is a `Template` the editor
+   * can hold, plus what this install's card data says about the cards the file
+   * recorded.
+   */
+  openTemplate(): Promise<TemplateOpenResult>;
+  /**
+   * Choose a destination and write the template there, with the authoritative
+   * AST beside every text and a snapshot of every named card. The renderer
+   * hands over the template and never a path.
+   */
+  saveTemplate(template: Template): Promise<TemplateSaveResult>;
+  /** The decks in the install's `deck/` folder, by name; the folder is main's to know. */
+  listDecks(): Promise<DeckListResult>;
+  /**
+   * Read a `.ydk` decklist as a template: one line per distinct card at the
+   * count the deck holds (PRD §9). `name` is one of `listDecks`'s; without one,
+   * a file dialog opens, for a deck kept outside the install.
+   */
+  importDeck(request?: DeckImportRequest): Promise<DeckImportResult>;
+  /** Write a finished run to a file the user chooses; exact fractions, never percentages. */
+  exportResults(request: ResultsExportRequest): Promise<ResultsExportResult>;
   /**
    * Start searching the template, cancelling any run before it (one run at a
    * time, app-wide). What happens next arrives by `onRunEvent` under the

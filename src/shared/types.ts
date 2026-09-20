@@ -2,7 +2,7 @@ import type { Description } from '../core/desc/ast';
 import type { CompletionSite, NameKind } from '../core/desc/completion';
 import type { Span } from '../core/desc/lexer';
 import type { Analysis } from '../core/model/analyze';
-import type { Template, TemplateGroup } from '../core/model/template';
+import type { CardSnapshot, Template, TemplateGroup } from '../core/model/template';
 import type { OptimizeProgress, OptimizeResult, Rational } from '../core/opt/optimizer';
 import type { Count } from '../core/util/count';
 import type { WorkerResult } from '../worker/protocol';
@@ -36,6 +36,7 @@ export type {
 export type { ExpandedClass } from '../core/model/compile';
 export type { IntRange } from '../core/model/ranges';
 export type {
+  CardSnapshot,
   Template,
   TemplateCard,
   TemplateCriterion,
@@ -124,17 +125,6 @@ export interface CardHit {
   name: string;
   /** `Level 4 · WIND · Warrior · Effect Monster`, `Quick-Play Spell`. */
   typeline: string;
-}
-
-/** The fields a template file records of each named card (TDD §14 `cardSnapshot`). */
-export interface CardSnapshot {
-  type: number;
-  attribute: number;
-  race: number;
-  level: number;
-  atk: number;
-  def: number;
-  setcodes: number[];
 }
 
 export interface CardInfo extends CardHit {
@@ -355,3 +345,86 @@ export type RunEvent =
   /** `result` is what a graceful stop had scored; `null` when the run was abandoned. */
   | { runId: number; type: 'cancelled'; result: RunResult | null }
   | { runId: number; type: 'error'; message: string };
+
+// ---------------------------------------------------------------------------
+// Files: decks in, templates in and out, results out (TDD §12, §14)
+// ---------------------------------------------------------------------------
+
+/** A dialog the USER cancelled: not a failure, and nothing to say about it. */
+export interface Cancelled {
+  ok: false;
+  reason: 'cancelled';
+}
+
+/** A file that could not be read or written, with the reason the OS gave. */
+export interface FileFailure {
+  ok: false;
+  reason: 'read' | 'write';
+  message: string;
+}
+
+/**
+ * The decks in the user's EDOPro `deck/` folder, by the name shown there.
+ * Names, not paths: the renderer never receives a filesystem path it could
+ * hand back (TDD §3), and `deck:import` takes a name from this list.
+ */
+export type DeckListResult = { ok: true; decks: string[] } | NotReady | FileFailure;
+
+/** `name` is one of `deck:list`'s; leaving it out opens a file dialog instead. */
+export interface DeckImportRequest {
+  name?: string;
+}
+
+/** What the import saw, for the line that says what happened. */
+export interface DeckSummary {
+  /** The deck's own name, or the file's when it came from the dialog. */
+  name: string;
+  /** Entries in `#main`, before any clamping. */
+  mainSize: number;
+  /** Distinct cards, which is how many lines it became. */
+  distinct: number;
+}
+
+export type DeckImportResult =
+  | { ok: true; template: Template; deck: DeckSummary; warnings: string[] }
+  | Cancelled
+  | FileFailure
+  | NotReady
+  | InvalidRequest;
+
+export type TemplateOpenResult =
+  | {
+      ok: true;
+      template: Template;
+      /** Where it came from, to show; the renderer is never given a path to WRITE. */
+      path: string;
+      /** What this install's card data says about the cards the file recorded (TDD §14). */
+      notices: string[];
+    }
+  | Cancelled
+  | FileFailure
+  | NotReady
+  | InvalidRequest;
+
+export type TemplateSaveResult =
+  | { ok: true; path: string; warnings: string[] }
+  | Cancelled
+  | FileFailure
+  | NotReady
+  | InvalidRequest;
+
+/** CSV is the ranked table, for a spreadsheet; JSON is the whole result. */
+export type ExportFormat = 'csv' | 'json';
+
+export interface ResultsExportRequest {
+  runId: number;
+  format: ExportFormat;
+}
+
+export type ResultsExportResult =
+  | { ok: true; path: string }
+  | Cancelled
+  | FileFailure
+  /** The run is not the last one to have finished: there is nothing to export. */
+  | { ok: false; reason: 'no-run'; message: string }
+  | InvalidRequest;

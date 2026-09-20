@@ -16,6 +16,7 @@ import {
   withGroup,
   withGroupCard,
   withHandSize,
+  withImportedDeck,
   withLineRange,
   withLineText,
   withMovedCriterion,
@@ -614,6 +615,46 @@ describe('withMovedCriterion', () => {
 
   it('leaves the template alone when the id is not there', () => {
     expect(withMovedCriterion(EXAMPLE_TEMPLATE, 'c9', 1)).toBe(EXAMPLE_TEMPLATE);
+  });
+});
+
+describe('withImportedDeck', () => {
+  const imported: Template = {
+    ...EMPTY_TEMPLATE,
+    deckSize: 41,
+    lines: [
+      { id: 'card1', card: { passcode: ASH.passcode, name: ASH.name }, min: 3, max: 3 },
+      { id: 'card2', card: { passcode: MAXX.passcode, name: MAXX.name }, min: 1, max: 1 },
+    ],
+  };
+
+  it('replaces the lines and the deck size with the deck\u2019s', () => {
+    const after = withImportedDeck(EXAMPLE_TEMPLATE, imported);
+    expect(after.lines).toEqual(imported.lines);
+    expect(after.deckSize).toBe(41);
+  });
+
+  // A decklist says nothing about what a good hand looks like (PRD §9), so
+  // importing one must not throw away the part the user wrote themselves.
+  it('keeps the criteria, the groups, the hand size and the remainder', () => {
+    const before = withGroupCard(withGroup(EXAMPLE_TEMPLATE, 'starter'), 'g1', MAXX);
+    const after = withImportedDeck(withHandSize(before, 6), imported);
+    expect(after.criteria).toBe(before.criteria);
+    expect(after.groups).toBe(before.groups);
+    expect(after.remainder).toBe(before.remainder);
+    expect(after.hand).toEqual({ size: 6 });
+  });
+
+  it('gives back a template that validates', () => {
+    expect(validateTemplate(withImportedDeck(EXAMPLE_TEMPLATE, imported))).toMatchObject({
+      ok: true,
+    });
+  });
+
+  it('does not share an array with either template it came from', () => {
+    const after = withImportedDeck(EXAMPLE_TEMPLATE, imported);
+    expect(after.lines).not.toBe(imported.lines);
+    expect(after.lines).not.toBe(EXAMPLE_TEMPLATE.lines);
   });
 });
 

@@ -2,7 +2,6 @@ import type { CardRecord } from '../cards/record';
 import { KINDS, type Kind } from '../cards/vocabulary';
 import type { Expr, FlatCriterion } from '../criteria/ast';
 import { expand, expandAll } from '../criteria/expand';
-import { parseCriterion } from '../criteria/parser';
 import { countPrefix, printCriterion } from '../criteria/print';
 import { findSubsumed } from '../criteria/subsumes';
 import type { Description } from '../desc/ast';
@@ -16,7 +15,6 @@ import {
   type NearMissReason,
   nearMiss,
 } from '../desc/near-miss';
-import { parse } from '../desc/parser';
 import { echo, print } from '../desc/print';
 import { successSet } from '../prob/success-set';
 import { type Count, countToNumber, toCount } from '../util/count';
@@ -29,6 +27,7 @@ import {
   indexFlat,
   REMAINDER_ID,
 } from './compile';
+import { criterionMeaning, lineMeaning } from './meaning';
 import { MAX_DECK_SIZE } from './problem';
 import { achievableRange, countSums, type IntRange } from './ranges';
 import {
@@ -57,6 +56,7 @@ export type IssueCode =
   | 'named-max'
   | 'min-over-max'
   | 'shared-limit'
+  | 'stale-text'
   | 'duplicate-card'
   | 'unsatisfiable'
   | 'group-missing-members'
@@ -511,9 +511,14 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
         );
     } else {
       text = line.text;
-      const result = parse(line.text, descCtx);
-      if (result.ok) desc = result.desc;
-      else {
+      // What the line MEANS, which is the stored AST when there is one (TDD
+      // §14) — the same call `resolveTemplate` makes, so the analysis is about
+      // the very description the run will compile.
+      const result = lineMeaning(line, descCtx);
+      if (result.ok) {
+        desc = result.desc;
+        if (result.stale !== null) found.push(warning('stale-text', result.stale));
+      } else {
         // A parse failure is deliberately reported TWICE, and both are load-bearing:
         // `parsed` carries the result a caller renders (message, span, and on
         // success the canonical text and echo), while the issue carries the
@@ -721,7 +726,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       issues: [],
     };
     if (criterion.name !== undefined) out.name = criterion.name;
-    const result = parseCriterion(criterion.text, descCtx);
+    const result = criterionMeaning(criterion, descCtx);
     if (!result.ok) {
       // Both, for the reason given on the line-parse failure above.
       out.parsed = { ok: false, message: result.message, span: result.span };
@@ -729,6 +734,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       parsedCriteria.push(null);
       return out;
     }
+    if (result.stale !== null) out.issues.push(warning('stale-text', result.stale));
     out.parsed = { ok: true, canonical: printCriterion(result.expr, descCtx) };
     const expanded = expand(result.expr, { maxHandSize: handSize });
     if (!expanded.ok) {
@@ -1113,8 +1119,10 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
  * `classes` and the class-vector side of `work` need every line and criterion
  * to resolve; until then they are `null` and everything else is still there.
  *
- * TODO(M2g): a stored `desc` / `expr` is authoritative (TDD §14); until then
- * the text is parsed, as in `resolveTemplate`.
+ * What a line or criterion MEANS is `lineMeaning` / `criterionMeaning`, shared
+ * with `resolveTemplate`: a stored AST is authoritative (TDD §14), and an
+ * analysis of one description beside a run of another would be worse than no
+ * analysis at all.
  */
 export function analyze(
   template: Template,

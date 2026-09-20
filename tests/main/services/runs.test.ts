@@ -659,6 +659,41 @@ describe('RunService', () => {
     });
   });
 
+  // `results:export` writes the file from main's own copy of the result, not
+  // from one that has crossed IPC to the renderer and back (TDD §3), so the
+  // service keeps the last run that scored anything — and only that one, since
+  // there is no run history in v1 (TDD §13).
+  describe('result', () => {
+    it('is the last run that scored something, partial results included', async () => {
+      const { runs, workers, start } = await harness();
+      expect(runs.result(1)).toBeNull();
+
+      const first = start();
+      const worker = workers.worker(0);
+      worker.result(first, realResult(worker.request(0)));
+      expect(runs.result(first)?.best.blend.num).toBeGreaterThan(0);
+
+      const second = start();
+      // A run under way has not scored anything yet, and the last one still stands.
+      expect(runs.result(second)).toBeNull();
+      expect(runs.result(first)).not.toBeNull();
+
+      const whole = realResult(worker.request(1));
+      if (whole.status !== 'done') throw new Error('expected a scored result');
+      worker.result(second, { ...whole, status: 'cancelled', partial: true, done: 7 });
+      expect(runs.result(second)).toMatchObject({ partial: true, done: 7 });
+      // One at a time: the run before is gone.
+      expect(runs.result(first)).toBeNull();
+    });
+
+    it('is null for a run that was abandoned before it scored anything', async () => {
+      const { runs, start } = await harness();
+      const runId = start();
+      await runs.cancel(runId);
+      expect(runs.result(runId)).toBeNull();
+    });
+  });
+
   describe('cost', () => {
     it('is unknown until a worker has calibrated, then what it said — and outlives the worker', async () => {
       const { runs, workers, start } = await harness();
