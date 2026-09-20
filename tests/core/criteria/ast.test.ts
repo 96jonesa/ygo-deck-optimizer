@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalizeExpr, type Expr, MAX_COUNT } from '../../../src/core/criteria/ast';
+import {
+  canonicalizeExpr,
+  type Expr,
+  MAX_COUNT,
+  MAX_SIXTH_SLOTS,
+  slotsOf,
+} from '../../../src/core/criteria/ast';
+import { expandAll } from '../../../src/core/criteria/expand';
 import type { Description } from '../../../src/core/desc/ast';
 import { genExpr, uncanonical } from '../../helpers/gen-criteria';
 import { seededRng } from '../../helpers/prng';
@@ -26,7 +33,88 @@ it('pins the largest count', () => {
   expect(MAX_COUNT).toBe(60);
 });
 
+it('pins the slots the sixth card may be asked for: it is one card', () => {
+  expect(MAX_SIXTH_SLOTS).toBe(1);
+});
+
+describe('slotsOf', () => {
+  const limit: Expr = { op: 'atMost', n: 1, desc: card(9) };
+  const range: Expr = { op: 'req', n: 0, max: 2, desc: card(9) };
+
+  it('counts a requirement by its lower bound and a limit as nothing', () => {
+    expect(slotsOf(A)).toBe(1);
+    expect(slotsOf(C)).toBe(3);
+    expect(slotsOf(limit)).toBe(0);
+    expect(slotsOf(range)).toBe(0);
+  });
+
+  it('sums an and and takes the worst branch of an or', () => {
+    expect(slotsOf(and(A, B, limit))).toBe(3);
+    expect(slotsOf(or(A, C))).toBe(3);
+    expect(slotsOf(and(A, or(B, C)))).toBe(4);
+  });
+
+  it('counts both sides of a split', () => {
+    expect(slotsOf({ op: 'split', five: B, sixth: A })).toBe(3);
+    expect(slotsOf({ op: 'split', sixth: A })).toBe(1);
+  });
+
+  /**
+   * The reason this lives in the AST rather than in the parser: it has to agree
+   * with what `expand` counts per alternative, which merges requirements on one
+   * description by ADDING their lower bounds — the same sum.
+   */
+  it('is the most slots any one alternative of the expansion asks for', () => {
+    const rng = seededRng(0x51075a);
+    for (let i = 0; i < 500; i++) {
+      const expr = genExpr(rng, {
+        desc: (r) => card(r.int(1, 3)),
+        maxDepth: 3,
+        maxArgs: 3,
+        limitChance: 0.3,
+      });
+      const expanded = expandAll([expr], { maxHandSize: 60 });
+      if (!expanded.ok) continue;
+      const worst = Math.max(
+        0,
+        ...expanded.flat.map(({ reqs }) => reqs.reduce((sum, { n }) => sum + n, 0)),
+      );
+      expect(slotsOf(expr), JSON.stringify(expr)).toBe(worst);
+    }
+  });
+});
+
 describe('canonicalizeExpr', () => {
+  describe('a split', () => {
+    it('canonicalizes both sides and keeps five before sixth', () => {
+      const canonical = canonicalizeExpr({
+        op: 'split',
+        five: and(A, and(B)),
+        sixth: { op: 'or', args: [A] },
+      });
+      expect(canonical).toEqual({ op: 'split', five: and(A, B), sixth: A });
+      // `meaning.ts` decides a stored AST is stale by stringifying both, so the
+      // key ORDER is part of the contract, not only the keys.
+      expect(Object.keys(canonical)).toEqual(['op', 'five', 'sixth']);
+    });
+
+    it('leaves out an absent five-card part rather than writing undefined', () => {
+      const canonical = canonicalizeExpr({ op: 'split', sixth: A });
+      expect(canonical).toEqual({ op: 'split', sixth: A });
+      expect(Object.keys(canonical)).toEqual(['op', 'sixth']);
+      expect(JSON.stringify(canonical)).toBe(JSON.stringify({ op: 'split', sixth: A }));
+    });
+
+    it('is not spliced into anything: it is the whole criterion', () => {
+      // No node of the same kind can contain it, so there is nothing to splice.
+      expect(canonicalizeExpr({ op: 'split', five: A, sixth: B })).toEqual({
+        op: 'split',
+        five: A,
+        sixth: B,
+      });
+    });
+  });
+
   it('splices an operator into a parent of the same kind, in order', () => {
     expect(canonicalizeExpr(and(A, and(B, C)))).toEqual(and(A, B, C));
     expect(canonicalizeExpr(and(and(A, and(B)), C))).toEqual(and(A, B, C));

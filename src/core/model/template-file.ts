@@ -29,7 +29,13 @@ function passcodesOf(desc: Description, into: Set<number>): void {
 
 function passcodesOfExpr(expr: Expr, into: Set<number>): void {
   if (expr.op === 'req' || expr.op === 'atMost') passcodesOf(expr.desc, into);
-  else for (const arg of expr.args) passcodesOfExpr(arg, into);
+  else if (expr.op === 'split') {
+    // A card named as the SIXTH CARD is as load-bearing as one named anywhere
+    // else: results depend on the database through named cards, and leaving
+    // this branch out would snapshot a template that cannot be checked.
+    if (expr.five !== undefined) passcodesOfExpr(expr.five, into);
+    passcodesOfExpr(expr.sixth, into);
+  } else for (const arg of expr.args) passcodesOfExpr(arg, into);
 }
 
 /**

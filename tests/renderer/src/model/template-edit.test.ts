@@ -1027,4 +1027,95 @@ describe('a criterion keeps everything but its parsed form', () => {
       weight: 6,
     });
   });
+
+  /**
+   * THE SIXTH CARD lives inside the criterion's `text` and its `expr`, not in a
+   * field of its own, so these transforms carry it for the same reason they
+   * carry the tag — and `withCriterionText` drops it with the AST, which is
+   * right: the text being retyped is the new statement of the split.
+   */
+  describe('a split criterion', () => {
+    const splitTagged: Template = {
+      ...tagged,
+      criteria: [
+        {
+          ...tagged.criteria[0]!,
+          text: '1x {starter} then no trap',
+          expr: {
+            op: 'split',
+            five: { op: 'req', n: 1, desc: { anyOf: [{ t: 'group', groupId: 'g1' }] } },
+            sixth: {
+              op: 'atMost',
+              n: 0,
+              desc: { anyOf: [{ t: 'clause', clause: { kinds: ['trap'] } }] },
+            },
+          } as const,
+        },
+      ],
+    };
+
+    it('keeps the whole split through a name edit', () => {
+      const next = withCriterionName(splitTagged, 'c1', 'renamed');
+      expect(next.criteria[0]).toEqual({ ...splitTagged.criteria[0], name: 'renamed' });
+    });
+
+    it('keeps the text — the split included — through a text edit, and drops only the AST', () => {
+      const next = withCriterionText(splitTagged, 'c1', '1x monster then 1x trap');
+      expect(next.criteria[0]).toEqual({
+        id: 'c1',
+        text: '1x monster then 1x trap',
+        name: 'the opener',
+        when: 'second',
+        weight: 6,
+      });
+    });
+
+    it('drops the AST when a deleted group is named in the FIVE-card part', () => {
+      const next = withoutGroup(splitTagged, 'g1');
+      expect(next.criteria[0]).not.toHaveProperty('expr');
+      expect(next.criteria[0]).toMatchObject({ when: 'second', weight: 6, name: 'the opener' });
+    });
+
+    it("drops the AST when a deleted group is named in the SIXTH CARD's part alone", () => {
+      // The branch a walker that stopped at `req`/`atMost` would have missed:
+      // the stored AST would have survived a deletion that made it meaningless.
+      const onlySixth: Template = {
+        ...splitTagged,
+        criteria: [
+          {
+            ...splitTagged.criteria[0]!,
+            text: '1x monster then 1x {starter}',
+            expr: {
+              op: 'split',
+              five: {
+                op: 'req',
+                n: 1,
+                desc: { anyOf: [{ t: 'clause', clause: { kinds: ['monster'] } }] },
+              },
+              sixth: { op: 'req', n: 1, desc: { anyOf: [{ t: 'group', groupId: 'g1' }] } },
+            } as const,
+          },
+        ],
+      };
+      expect(withoutGroup(onlySixth, 'g1').criteria[0]).not.toHaveProperty('expr');
+      // And a split naming no group keeps its AST.
+      const noGroup: Template = {
+        ...onlySixth,
+        criteria: [
+          {
+            ...onlySixth.criteria[0]!,
+            expr: {
+              op: 'split',
+              sixth: {
+                op: 'req',
+                n: 1,
+                desc: { anyOf: [{ t: 'clause', clause: { kinds: ['trap'] } }] },
+              },
+            } as const,
+          },
+        ],
+      };
+      expect(withoutGroup(noGroup, 'g1').criteria[0]).toEqual(noGroup.criteria[0]);
+    });
+  });
 });

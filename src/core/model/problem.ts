@@ -5,7 +5,7 @@
  * `src/core/prob` consumes it.
  */
 
-import { MAX_RANGES } from '../criteria/ast';
+import { MAX_RANGES, MAX_SIXTH_SLOTS } from '../criteria/ast';
 import { choose } from '../prob/binomial';
 
 /** Classes, the blank class included: a class mask is a non-negative 32-bit integer. */
@@ -44,6 +44,19 @@ export interface CompiledRequirement {
   max: number | null;
 }
 
+/**
+ * The SIXTH CARD's part of a split criterion: the same three fields, judged
+ * against the ONE card drawn (PRD §5.6). `slots` holds at most one mask — it
+ * is one card — and a limit there is a census over that card alone, so `no
+ * trap` says the card drawn is not a trap. A ceiling of 1 or more, and a limit
+ * of 1 or more, can never bind on one card and `compile` drops them.
+ */
+export interface SixthCard {
+  slots: number[];
+  limits: CompiledLimit[];
+  reqs?: CompiledRequirement[];
+}
+
 export interface CompiledCriterion {
   /**
    * One class bitmask per requirement slot: the classes that can fill it.
@@ -75,6 +88,18 @@ export interface CompiledCriterion {
    * largest weight to what `C(N, H)` leaves below 2^53.
    */
   weight?: number;
+  /**
+   * The SIXTH CARD's own part (PRD §5.6). Present: `slots`, `limits` and
+   * `reqs` above are about the OPENING FIVE — the hand less its last card —
+   * and this is about the card drawn. Absent: the criterion is judged over the
+   * whole hand, which is every criterion the language had before this and is
+   * why such a run is byte for byte what it always was.
+   *
+   * It may only be judged by a hand size marked `drawn`, and `validateProblem`
+   * holds it to that: the split is a statement about a hand you draw in two
+   * pieces, and going first there is no sixth card to speak of.
+   */
+  sixth?: SixthCard;
 }
 
 export interface HandSize {
@@ -100,6 +125,33 @@ export interface HandSize {
    * criteria are ever taken out of it.
    */
   criteria?: number[];
+  /**
+   * Whether this hand's LAST card is DRAWN: going second you see five cards
+   * and then draw one (PRD §5.5), and a criterion may then speak of that card
+   * on its own (`CompiledCriterion.sixth`).
+   *
+   * It changes the SAMPLE SPACE, and that is the whole of what it does. A hand
+   * stops being a set of `H` cards and becomes the ordered pair (the opening
+   * `H - 1`, the card drawn), of which there are `H` per set — so every count
+   * is `H` times what it was, `outcomesOf` is that `H`, and a run in which
+   * nothing is split scores exactly what it always scored with both sides of
+   * the fraction multiplied by it (a fact pinned by a test).
+   *
+   * It is a property of the HAND and not of the criteria, so that every score
+   * of one run — the headline and each criterion's own row — is a fraction over
+   * one denominator. `compileProblem` sets it wherever a criterion the hand
+   * judges is split, and honours it wherever a caller asks for it.
+   */
+  drawn?: boolean;
+}
+
+/**
+ * The outcomes one hand of `hand.H` cards holds: `H` when its last card is
+ * drawn separately — a set of `H` cards is `H` different (opening, drawn)
+ * pairs — and 1 otherwise, which is every hand the engine had before.
+ */
+export function outcomesOf(hand: Pick<HandSize, 'H' | 'drawn'>): number {
+  return hand.drawn === true ? hand.H : 1;
 }
 
 export interface Problem {
@@ -161,7 +213,8 @@ export function validateProblem(problem: Problem): void {
 
   if (handSizes.length === 0) throw new RangeError('a problem needs at least one hand size');
   const seen = new Set<number>();
-  for (const { H, weight, criteria: own } of handSizes) {
+  for (const hand of handSizes) {
+    const { H, weight, criteria: own, drawn } = hand;
     checkHandSize(H, deckSize);
     if (seen.has(H)) throw new RangeError(`hand size ${H} appears twice`);
     seen.add(H);
@@ -169,15 +222,26 @@ export function validateProblem(problem: Problem): void {
       throw new RangeError(
         `hand size ${H}: a weight is a positive whole number — a blend is a ratio such as 1 : 1 — not ${weight}`,
       );
-    if (own === undefined) continue;
+    // One card drawn leaves none to open on, and the split says something
+    // about both halves of the hand.
+    if (drawn === true && H < 2)
+      throw new RangeError(
+        `hand size ${H}: a hand whose last card is drawn separately holds at least 2 cards — one to open on, and the one drawn`,
+      );
     const taken = new Set<number>();
-    for (const at of own) {
+    for (const at of own ?? criteria.map((_, index) => index)) {
       if (!Number.isInteger(at) || at < 0 || at >= criteria.length)
         throw new RangeError(
           `hand size ${H}: \`criteria\` holds ${at}, which is not one of the problem's ${criteria.length} criteria`,
         );
       if (taken.has(at)) throw new RangeError(`hand size ${H}: criterion ${at} appears twice`);
       taken.add(at);
+      // A split criterion is a statement about a hand drawn in two pieces, so
+      // the hand judging it has to be one — going first there is no sixth card.
+      if (criteria[at]!.sixth !== undefined && drawn !== true)
+        throw new RangeError(
+          `hand size ${H}: criterion ${at} is about the card you draw, but this hand does not draw one — a split criterion is judged only by a hand marked \`drawn\``,
+        );
     }
   }
 
@@ -194,25 +258,35 @@ export function validateProblem(problem: Problem): void {
       );
   });
 
-  criteria.forEach(({ slots, limits, reqs, weight }, criterion) => {
+  criteria.forEach(({ weight, sixth, ...part }, criterion) => {
     if (weight !== undefined && (!Number.isSafeInteger(weight) || weight < 1))
       throw new RangeError(
         `criterion ${criterion}: a weight is a positive whole number — the score is a sum of weights, and exactness rests on that — not ${weight}`,
       );
-    slots.forEach((mask, slot) => {
-      checkMask(mask, classes.length, `criterion ${criterion}, slot ${slot}`, 'fill a requirement');
-    });
-    limits.forEach(({ mask, n }, limit) => {
-      const where = `criterion ${criterion}, limit ${limit}`;
-      checkMask(mask, classes.length, where, 'count against a limit');
-      if (!isCount(n))
-        throw new RangeError(`${where}: a limit's count is a whole number, not ${n}`);
-    });
-    if (reqs === undefined) return;
-    checkRequirements(reqs, slots, classes.length, criterion);
+    checkPart(part, classes.length, `criterion ${criterion}`);
+    if (sixth === undefined) return;
+    if (sixth.slots.length > MAX_SIXTH_SLOTS)
+      throw new RangeError(
+        `criterion ${criterion}: the sixth card is one card, and its part asks for ${sixth.slots.length}`,
+      );
+    checkPart(sixth, classes.length, `criterion ${criterion}, the sixth card`);
   });
 
-  for (const { H } of problem.handSizes) checkWeightBound(deckSize, H, maxCriterionWeight(problem));
+  for (const hand of problem.handSizes)
+    checkWeightBound(deckSize, hand.H, maxCriterionWeight(problem), outcomesOf(hand));
+}
+
+/** The slots, limits and ranges of one window: a whole hand, or the card drawn. */
+function checkPart({ slots, limits, reqs }: SixthCard, classCount: number, where: string): void {
+  slots.forEach((mask, slot) => {
+    checkMask(mask, classCount, `${where}, slot ${slot}`, 'fill a requirement');
+  });
+  limits.forEach(({ mask, n }, limit) => {
+    const at = `${where}, limit ${limit}`;
+    checkMask(mask, classCount, at, 'count against a limit');
+    if (!isCount(n)) throw new RangeError(`${at}: a limit's count is a whole number, not ${n}`);
+  });
+  if (reqs !== undefined) checkRequirements(reqs, slots, classCount, where);
 }
 
 /**
@@ -227,13 +301,26 @@ export function validateProblem(problem: Problem): void {
  *
  * Checked per HAND SIZE, since `C(N, 6) > C(N, 5)`: a weight a going-first run
  * can score exactly is not necessarily one an average can.
+ *
+ * `outcomes` is `outcomesOf` the hand — 6 where the sixth card is drawn
+ * separately, since every hand is then six (opening, drawn) pairs and every
+ * count is six times what it was. It multiplies the headroom away exactly as a
+ * weight does, so it is part of the SAME bound and not a second one:
+ * `6 × C(60, 6) = 300,383,160` leaves room for weights up to 29,985,699, and
+ * far more for a smaller deck. The editor's cap of 1,000 is nowhere near it —
+ * which is the point of having the number rather than trusting it.
  */
-export function checkWeightBound(deckSize: number, H: number, maxWeight: number): void {
-  if (maxWeight === 1) return;
-  const den = choose(deckSize, H);
+export function checkWeightBound(
+  deckSize: number,
+  H: number,
+  maxWeight: number,
+  outcomes = 1,
+): void {
+  const den = choose(deckSize, H) * outcomes;
   if (Number.isSafeInteger(maxWeight * den)) return;
+  const drawn = outcomes === 1 ? '' : `${outcomes} × `;
   throw new RangeError(
-    `a weight of ${maxWeight} cannot be scored exactly at a hand of ${H}: the score would reach ${maxWeight} × C(${deckSize}, ${H}) = ${maxWeight} × ${den}, past 2^53 — the largest weight this deck and hand allow is ${Math.floor(Number.MAX_SAFE_INTEGER / den)}`,
+    `a weight of ${maxWeight} cannot be scored exactly at a hand of ${H}: the score would reach ${maxWeight} × ${drawn}C(${deckSize}, ${H}) = ${maxWeight} × ${den}, past 2^53 — the largest weight this deck and hand allow is ${Math.floor(Number.MAX_SAFE_INTEGER / den)}`,
   );
 }
 
@@ -255,7 +342,11 @@ export function checkWeightBound(deckSize: number, H: number, maxWeight: number)
 export function partProblem(problem: Problem, hand: HandSize): Problem {
   return {
     deckSize: problem.deckSize,
-    handSizes: [{ H: hand.H, weight: 1 }],
+    // `drawn` travels with the part: it says what a HAND is, and a part that
+    // forgot it would answer over a sample space its siblings do not share.
+    handSizes: [
+      hand.drawn === true ? { H: hand.H, weight: 1, drawn: true } : { H: hand.H, weight: 1 },
+    ],
     classes: problem.classes,
     criteria:
       hand.criteria === undefined
@@ -282,19 +373,19 @@ function checkRequirements(
   reqs: readonly CompiledRequirement[],
   slots: readonly number[],
   classCount: number,
-  criterion: number,
+  owner: string,
 ): void {
   const ceilings = reqs.filter(({ max }) => max !== null).length;
   if (ceilings === 0)
     throw new RangeError(
-      `criterion ${criterion}: with no ceiling to keep, \`reqs\` is left out and \`slots\` says it all`,
+      `${owner}: with no ceiling to keep, \`reqs\` is left out and \`slots\` says it all`,
     );
   if (ceilings > MAX_RANGES)
     throw new RangeError(
-      `criterion ${criterion}: the engine judges at most ${MAX_RANGES} range requirements, not ${ceilings}`,
+      `${owner}: the engine judges at most ${MAX_RANGES} range requirements, not ${ceilings}`,
     );
   reqs.forEach(({ mask, min, max }, at) => {
-    const where = `criterion ${criterion}, requirement ${at}`;
+    const where = `${owner}, requirement ${at}`;
     checkMask(mask, classCount, where, 'fill a requirement');
     if (!isCount(min))
       throw new RangeError(`${where}: a lower bound is a whole number, not ${min}`);
@@ -309,6 +400,6 @@ function checkRequirements(
   const expanded = reqs.flatMap(({ mask, min }) => new Array<number>(min).fill(mask));
   if (slotKey(expanded) !== slotKey(slots))
     throw new RangeError(
-      `criterion ${criterion}: \`slots\` must be the requirements' lower bounds expanded — ${expanded.length} slot(s) expected, ${slots.length} given`,
+      `${owner}: \`slots\` must be the requirements' lower bounds expanded — ${expanded.length} slot(s) expected, ${slots.length} given`,
     );
 }

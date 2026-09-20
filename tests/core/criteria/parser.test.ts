@@ -413,6 +413,82 @@ describe('parseCriterion', () => {
     });
   });
 
+  describe('the sixth card, after then', () => {
+    const split = (five: Expr | undefined, sixth: Expr): Expr =>
+      five === undefined ? { op: 'split', sixth } : { op: 'split', five, sixth };
+
+    it('separates the five cards opened on from the one drawn', () => {
+      expectExpr('1x [C] then 1x [D]', split(req(1, C), req(1, D)));
+      expectExpr('no [C] then no [D]', split(atMost(0, C), atMost(0, D)));
+    });
+
+    it('binds looser than and and or, so neither side needs parentheses', () => {
+      expectExpr(
+        '1x [C] and 1x [D] then 1x [E] or no [C]',
+        split(and(req(1, C), req(1, D)), or(req(1, E), atMost(0, C))),
+      );
+      expectExpr('1x [C] or 2x [D] then 1x [E]', split(or(req(1, C), req(2, D)), req(1, E)));
+    });
+
+    it('may lead, which leaves the opening five unasked about', () => {
+      expectExpr('then 1x [C]', split(undefined, req(1, C)));
+      expectExpr('then no [C] and no [D]', split(undefined, and(atMost(0, C), atMost(0, D))));
+    });
+
+    it('allows a limit and a range of one card, which are questions about one card', () => {
+      expectExpr('1x [C] then at most 1x [D]', split(req(1, C), atMost(1, D)));
+      expectExpr('1x [C] then exactly 1x [D]', split(req(1, C), range(1, 1, D)));
+      expectExpr('1x [C] then 0-1x [D]', split(req(1, C), range(0, 1, D)));
+    });
+
+    it('refuses more than one card of it, naming what asked', () => {
+      expect(errorOf('1x [C] then 2x [D]')).toEqual({
+        message:
+          'the sixth card is one card, and this asks 2 of it: after `then`, write one requirement — `1x …` — or limits alone, as in `no trap`',
+        at: '2x [D]',
+        start: 12,
+      });
+      // `and` sums the slots; `or` takes the worse branch, which is what a
+      // branch that can never hold would be.
+      expect(errorOf('then 1x [C] and 1x [D]').message).toContain('asks 2 of it');
+      expect(errorOf('then 1x [C] or 2x [D]').message).toContain('asks 2 of it');
+      // A limit beside the one requirement costs no card.
+      expect(parseCriterion('then 1x [C] and no [D]', ctx).ok).toBe(true);
+    });
+
+    it('refuses a second then: one card is drawn, not two', () => {
+      expect(errorOf('1x [C] then 1x [D] then 1x [E]')).toEqual({
+        message:
+          'a criterion has one `then`: it separates the five cards you open on from the one you draw, and there is only one card drawn',
+        at: 'then',
+        start: 19,
+      });
+      // A doubled `then` has nothing where a term must start, and the message
+      // names the word it came after.
+      expect(errorOf('then then 1x [C]').message).toContain('after `then`');
+    });
+
+    it('refuses nothing after it', () => {
+      for (const text of ['1x [C] then', 'then']) {
+        const { message } = errorOf(text);
+        expect(message, text).toContain('what the card you draw must be after `then`');
+      }
+      expect(errorOf('1x [C] then').start).toBe(11);
+    });
+
+    it('refuses it inside parentheses, which is not where it stands', () => {
+      expect(errorOf('(1x [C] then 1x [D]) and 1x [E]')).toEqual({
+        message:
+          '`then` separates the five cards you open on from the one you draw, so it stands between them and not inside parentheses',
+        at: 'then',
+        start: 8,
+      });
+      expect(errorOf('1x ([C] then [D])').message).toContain(
+        "cannot stand inside a description's parentheses",
+      );
+    });
+  });
+
   describe('errors', () => {
     it('asks for a term when there is nothing', () => {
       for (const text of ['', '   '])

@@ -153,6 +153,31 @@ describe('matchingSection', () => {
     expect(matchingSection(many)).toMatch(/^ {2}requirement +1-2x \/ 1x \/ 2x monster/m);
   });
 
+  /**
+   * `1x trap` of the card you draw is a different statement from `1x trap` in
+   * six cards, so the two never share a row — and the drawn one says so. The
+   * renderer's `criteria-readout.ts` pins the very same strings; the two copies
+   * are held in step by tests on either side, not by shared code.
+   */
+  it('marks a requirement or a limit asked of the card you draw', () => {
+    const lines = [line('m', 'monster'), line('t', 'trap')];
+    const second = (texts: string[]) =>
+      matchingSection(
+        analyze(
+          templateOf(
+            lines,
+            texts.map((text, at) => ({ id: `c${at + 1}`, text, when: 'second' as const })),
+            { hand: { size: 6 }, mode: 'second' },
+          ),
+          ctx,
+        ),
+      );
+    expect(second(['1x monster then 1x trap'])).toMatch(/^ {2}requirement +1x drawn trap/m);
+    expect(second(['1x monster then no trap'])).toMatch(/^ {2}limit +no drawn trap/m);
+    // Asked of the hand AND of the card drawn: two counts, the hand's first.
+    expect(second(['1x trap then 1x trap'])).toMatch(/^ {2}requirement +1x \/ 1x drawn trap/m);
+  });
+
   it('writes a limit’s own count, so `no` and `at most 2x` do not print alike', () => {
     const lines = [line('m', 'monster'), line('t', 'trap')];
     const none = matchingSection(analyze(templateOf(lines, ['1x monster, no trap']), ctx));

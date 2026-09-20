@@ -23,8 +23,10 @@ import {
   type Generated,
   genProblem,
   hasRange,
+  hasSplit,
   smallProblems,
   smallRangedProblems,
+  smallSplitProblems,
 } from '../../helpers/gen-problem';
 import { referenceNumerator, referenceWeightedNumerator } from '../../helpers/matcher-oracle';
 import { type Rng, seededRng } from '../../helpers/prng';
@@ -1336,5 +1338,263 @@ describe('createBlendScorer with weighted criteria', () => {
     expect(blend.score([37, 3]).parts[0]!.num).toBe(1_000_000_000 * 222111);
     expect(() => blend.rankKey([37, 3])).toThrow(/exact/);
     expect(() => blend.keysOf(blend.score([37, 3]))).toThrow(/exact/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The sixth card, split from the opening five (PRD §5.6, TDD §10.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE HAND CALCULATION. Ten cards: two of `A`, two of `B`, and six that fill
+ * nothing. Going second you see five cards and THEN draw one, so a hand is the
+ * ordered pair (the five, the card drawn) and there are `N · C(N − 1, 5)`
+ * = `6 · C(N, 6)` = 1,260 of them.
+ *
+ *   SPLIT     the opening five hold an `A`, and the card drawn is a `B`
+ *   ALL SIX   the six cards, between them, hold an `A` and a `B`
+ *
+ * The card drawn is uniform over the deck and the five are uniform over what is
+ * left, so
+ *
+ *   P(split) = (2/10) · P(five of {2 A, 1 B, 6 blank} hold an A)
+ *            = (1/5) · (1 − C(7,5)/C(9,5)) = (1/5)(105/126) = 1/6
+ *
+ * and over 1,260 outcomes that numerator is 210 — the two `B`s, each with the
+ * 105 five-card hands out of C(9,5) = 126 that hold an `A`.
+ *
+ * Asking the same of all six cards is a different question and a different
+ * number: 1 − 2·C(8,6)/C(10,6) + C(6,6)/C(10,6) = (210 − 28 − 28 + 1)/210
+ * = 155/210 = 31/42. The two AGREE on nothing — 1/6 against 31/42 — which is
+ * the point: the split fixes which card is which.
+ */
+describe('the sixth card split, by hand', () => {
+  const TEN = [6, 2, 2];
+  const deckOfTen = (criteria: CompiledCriterion[], drawn: boolean): Problem => ({
+    deckSize: 10,
+    handSizes: [{ H: 6, weight: 1, ...(drawn ? { drawn: true } : {}) }],
+    classes: [
+      { lineIds: ['blank'], min: 6, max: 6 },
+      { lineIds: ['a'], min: 2, max: 2 },
+      { lineIds: ['b'], min: 2, max: 2 },
+    ],
+    criteria,
+  });
+
+  /** `1x A then 1x B`: the five hold an `A`, the card drawn is a `B`. */
+  const SPLIT = deckOfTen([{ slots: [A], limits: [], sixth: { slots: [B], limits: [] } }], true);
+  /** `1x A and 1x B`, over all six cards. */
+  const ALL_SIX = deckOfTen([{ slots: [A, B], limits: [] }], false);
+
+  it('scores the split at 210/1260 — one hand in six', () => {
+    expect(createScorer(SPLIT, 6).score(TEN)).toEqual({ num: 210, den: 1260, successNum: 210 });
+    expect(210 / 1260).toBeCloseTo(1 / 6, 12);
+  });
+
+  it('scores the same question of all six cards at 155/210, which is not the same number', () => {
+    expect(createScorer(ALL_SIX, 6).score(TEN)).toEqual({ num: 155, den: 210, successNum: 155 });
+    expect(155 / 210).toBeCloseTo(31 / 42, 12);
+    // The whole point of the feature: 1/6 is not 31/42.
+    expect(210 / 1260).not.toBeCloseTo(155 / 210, 3);
+  });
+
+  it('agrees with the Monte Carlo oracle, which shares none of this code', () => {
+    const problem = {
+      deckSize: 10,
+      // `a`, `b`, then the remainder row, which fills nothing.
+      matrix: [
+        [true, false],
+        [false, true],
+        [false, false],
+      ],
+      flat: [
+        { reqs: [{ n: 1, desc: 0 }], limits: [], sixth: { reqs: [{ n: 1, desc: 1 }], limits: [] } },
+      ],
+    };
+    const { p, ci95 } = estimate(problem, [2, 2], {
+      handSize: 6,
+      samples: 400_000,
+      seed: 20260920,
+    });
+    expect(p).toBeCloseTo(1 / 6, 2);
+    expect(ci95[0]).toBeLessThan(1 / 6);
+    expect(ci95[1]).toBeGreaterThan(1 / 6);
+  });
+
+  /**
+   * Both stores must answer the same, and with the sixth card there are TWO
+   * ceilings to flip over rather than one: the weighted `maxValue` and the plain
+   * `maxPlain`, which is the outcomes per hand and no longer 1.
+   */
+  it('answers the same either way round the store, weights and outcomes included', () => {
+    const weighted = deckOfTen(
+      [
+        { slots: [A], limits: [], sixth: { slots: [B], limits: [] }, weight: 7 },
+        { slots: [B], limits: [] },
+      ],
+      true,
+    );
+    const direct = createScorer(weighted, 6, { storage: 'successes' }).score(TEN);
+    const flipped = createScorer(weighted, 6, { storage: 'complement' }).score(TEN);
+    expect(createScorer(weighted, 6, { storage: 'successes' }).complemented).toBe(false);
+    expect(createScorer(weighted, 6, { storage: 'complement' }).complemented).toBe(true);
+    expect(flipped).toEqual(direct);
+    // A weight really is in play, so the two numerators are not the same number.
+    expect(direct.successNum).toBeLessThan(direct.num);
+    expect(direct.den).toBe(1260);
+  });
+
+  it('is the ordinary score six times over when nothing is split', () => {
+    // Every outcome of a hand is worth the same when no criterion names the
+    // card drawn, so distinguishing it multiplies BOTH sides by six and says
+    // exactly what it always said.
+    const drawn = deckOfTen([{ slots: [A, B], limits: [] }], true);
+    const plainScore = createScorer(ALL_SIX, 6).score(TEN);
+    const drawnScore = createScorer(drawn, 6).score(TEN);
+    expect(drawnScore).toEqual({
+      num: 6 * plainScore.num,
+      den: 6 * plainScore.den,
+      successNum: 6 * plainScore.successNum,
+    });
+  });
+});
+
+/**
+ * EVERY OUTCOME of a drawn hand, listed: each card of the deck as the one
+ * drawn, and every `H - 1` subset of what is left as the cards opened on. There
+ * are `N · C(N - 1, H - 1)` = `H · C(N, H)` of them, which is the denominator
+ * the scorer reports, and nothing here knows that — it counts what it lists.
+ *
+ * The hand handed to the oracle is `[...opening, drawn]`, the card drawn LAST,
+ * which is the one convention the split rests on: `satisfiesFlat` reads the
+ * last card as the sixth and the rest as the five, and judges an unsplit
+ * alternative over all of them as it always did.
+ */
+function enumerateDrawn(g: Generated, counts: readonly number[], flat: readonly FlatCriterion[]) {
+  const deck = deckOf(g.problem, counts);
+  const fills = fillsOf(g.problem);
+  let outcomes = 0;
+  let successes = 0;
+  for (let drawn = 0; drawn < deck.length; drawn++) {
+    const rest = deck.filter((_, at) => at !== drawn);
+    for (const opening of combinations(rest, g.handSize - 1)) {
+      outcomes++;
+      if (satisfiesAnyFlat(flat, [...opening, deck[drawn]!], fills)) successes++;
+    }
+  }
+  return { outcomes, successes };
+}
+
+describe('the sixth card against exhaustive enumeration of every outcome', () => {
+  const generated = smallSplitProblems();
+
+  it('generates problems worth testing', () => {
+    expect(generated.length).toBeGreaterThanOrEqual(200);
+    const split = generated.filter(hasSplit);
+    // Split criteria, and problems that MIX split and unsplit ones — the case a
+    // sum of separate probabilities would get wrong.
+    expect(split.length).toBeGreaterThanOrEqual(120);
+    const mixed = generated.filter(
+      (g) =>
+        g.flat.some(({ sixth }) => sixth !== undefined) &&
+        g.flat.some(({ sixth }) => sixth === undefined),
+    );
+    expect(mixed.length).toBeGreaterThanOrEqual(15);
+    // The sixth card's part is sometimes limits alone, sometimes a requirement,
+    // and sometimes both; and some criteria leave the opening five unasked about.
+    const sixths = generated.flatMap((g) => g.flat.flatMap(({ sixth }) => (sixth ? [sixth] : [])));
+    expect(sixths.filter(({ reqs }) => reqs.length === 0).length).toBeGreaterThanOrEqual(20);
+    expect(sixths.filter(({ reqs }) => reqs.length > 0).length).toBeGreaterThanOrEqual(80);
+    expect(sixths.filter(({ limits }) => limits.length > 0).length).toBeGreaterThanOrEqual(20);
+    expect(
+      generated.filter((g) =>
+        g.flat.some(
+          ({ sixth, reqs, limits }) =>
+            sixth !== undefined && reqs.length === 0 && limits.length === 0,
+        ),
+      ).length,
+    ).toBeGreaterThanOrEqual(10);
+    // Both storages, and probabilities that are actually decided by chance.
+    const scorers = split.map((g) =>
+      createScorer(problemFromMatrix(g.problem, [g.handSize]).problem, g.handSize),
+    );
+    expect(scorers.filter(({ complemented }) => complemented).length).toBeGreaterThanOrEqual(5);
+    expect(scorers.filter(({ complemented }) => !complemented).length).toBeGreaterThanOrEqual(60);
+    const p = split.map((g) => {
+      const { outcomes, successes } = enumerateDrawn(g, g.counts, g.flat);
+      return successes / outcomes;
+    });
+    expect(p.filter((value) => value > 0.02 && value < 0.98).length).toBeGreaterThanOrEqual(60);
+  });
+
+  it('counts exactly the successful outcomes of every deck, problem by problem', () => {
+    let decks = 0;
+    let outcomes = 0;
+    generated.forEach((g, i) => {
+      const converted = problemFromMatrix(g.problem, [g.handSize]);
+      const scorer = createScorer(converted.problem, g.handSize);
+      const rng = seededRng(84_000 + i);
+      for (const counts of [g.counts, otherCounts(rng, g)]) {
+        const exact = enumerateDrawn(g, counts, g.flat);
+        const context = () => ({ index: i, counts, problem: g.problem, handSize: g.handSize });
+        same(exact.outcomes, g.handSize * choose(g.problem.deckSize, g.handSize), context);
+        const { num, den } = scorer.score(converted.totals(counts));
+        // A problem with nothing split scores over SETS of `H` cards, and this
+        // enumeration lists each set `H` times — once per card that could have
+        // been the one drawn. So the scale between the two is `H` there and 1
+        // where the card drawn is named, which is the same identity as
+        // "distinguishing it changes no probability", now over generated
+        // problems rather than one worked by hand.
+        const factor = hasSplit(g) ? 1 : g.handSize;
+        same(num * factor, exact.successes, context);
+        same(den * factor, exact.outcomes, context);
+        decks++;
+        outcomes += exact.outcomes;
+      }
+    });
+    // Pinned so the size of the check is on record; it moves only if the generator does.
+    expect({ decks, outcomes }).toEqual({ decks: 480, outcomes: 710_552 });
+  });
+
+  it('counts the same outcomes as the UNEXPANDED criteria do', () => {
+    generated.slice(0, 80).forEach((g, i) => {
+      const converted = problemFromMatrix(g.problem, [g.handSize]);
+      const fills = fillsOf(g.problem);
+      const deck = deckOf(g.problem, g.counts);
+      let successes = 0;
+      for (let drawn = 0; drawn < deck.length; drawn++) {
+        const rest = deck.filter((_, at) => at !== drawn);
+        for (const opening of combinations(rest, g.handSize - 1))
+          if (g.exprs.some((expr) => satisfiesTree(expr, [...opening, deck[drawn]!], fills)))
+            successes++;
+      }
+      const { num } = createScorer(converted.problem, g.handSize).score(converted.totals(g.counts));
+      same(num * (hasSplit(g) ? 1 : g.handSize), successes, () => ({
+        index: i,
+        problem: g.problem,
+      }));
+    });
+  });
+
+  it('agrees with the Monte Carlo oracle on the whole family', () => {
+    smallSplitProblems()
+      .filter(hasSplit)
+      .slice(0, 40)
+      .forEach((g, i) => {
+        const converted = problemFromMatrix(g.problem, [g.handSize]);
+        const { num, den } = createScorer(converted.problem, g.handSize).score(
+          converted.totals(g.counts),
+        );
+        const { ci95 } = estimate(g.problem, g.counts, {
+          handSize: g.handSize,
+          samples: 60_000,
+          seed: 91_000 + i,
+        });
+        const p = num / den;
+        if (p < ci95[0] - 1e-9 || p > ci95[1] + 1e-9)
+          throw new Error(
+            `exact ${p} outside the 95% interval [${ci95[0]}, ${ci95[1]}] for problem ${i}: ${JSON.stringify(g.problem)}`,
+          );
+      });
   });
 });

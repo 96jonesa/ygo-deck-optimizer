@@ -43,6 +43,8 @@ export interface GenProblemOptions {
   fill: number;
   /** How often a requirement is a range, `a-b×`; 0 leaves the criteria as they were. */
   rangeChance?: number;
+  /** How often a criterion is SPLIT across the cards opened on and the one drawn. */
+  splitChance?: number;
 }
 
 export const SMALL_PROBLEMS: GenProblemOptions = {
@@ -56,6 +58,14 @@ export const SMALL_PROBLEMS: GenProblemOptions = {
 
 /** `SMALL_PROBLEMS`, with a range requirement in roughly half the leaves. */
 export const RANGED_PROBLEMS: GenProblemOptions = { ...SMALL_PROBLEMS, rangeChance: 0.5 };
+
+/**
+ * `SMALL_PROBLEMS` where half the criteria name the card drawn. The hand runs
+ * from 3 to 4 as it always did, so the five-card part is judged over 2 or 3
+ * cards — small enough that every (opening, drawn) outcome of the deck can be
+ * listed, which is what the split is checked against.
+ */
+export const SPLIT_PROBLEMS: GenProblemOptions = { ...SMALL_PROBLEMS, splitChance: 0.5 };
 
 export function genProblem(rng: Rng, options: GenProblemOptions = SMALL_PROBLEMS): Generated {
   for (;;) {
@@ -86,17 +96,23 @@ export function genProblem(rng: Rng, options: GenProblemOptions = SMALL_PROBLEMS
         maxArgs: 3,
         limitChance: 0.25,
         ...(options.rangeChance === undefined ? {} : { rangeChance: options.rangeChance }),
+        ...(options.splitChance === undefined ? {} : { splitChance: options.splitChance }),
       }),
     );
     const expanded = expandAll(exprs, { maxHandSize: handSize });
     if (!expanded.ok) continue;
-    const flat = expanded.flat.map(({ reqs, limits }) => ({
+    const side = ({ reqs, limits }: Pick<FlatCriterion, 'reqs' | 'limits'>) => ({
       reqs: reqs.map(({ n, max, desc }) => {
         const at = columnOf(desc);
         return max === undefined ? { n, desc: at } : { n, max, desc: at };
       }),
       limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc) })),
-    }));
+    });
+    const flat = expanded.flat.map((alternative) =>
+      alternative.sixth === undefined
+        ? side(alternative)
+        : { ...side(alternative), sixth: side(alternative.sixth) },
+    );
     return {
       problem: { deckSize, matrix, flat },
       counts,
@@ -150,4 +166,21 @@ export function smallRangedProblems(): Generated[] {
 /** Whether any alternative of `generated` holds a requirement with a ceiling. */
 export function hasRange({ flat }: Generated): boolean {
   return flat.some(({ reqs }) => reqs.some(({ max }) => max !== undefined));
+}
+
+/** Whether any alternative of `generated` names the card drawn. */
+export function hasSplit({ flat }: Generated): boolean {
+  return flat.some(({ sixth }) => sixth !== undefined);
+}
+
+/**
+ * A third family for the same oracles, where half the criteria name the card
+ * drawn: `drawn` hands, ordered outcomes, and — deliberately — unsplit criteria
+ * beside split ones in the same problem, since a run that mixes them is the one
+ * a sum of separate probabilities would get wrong.
+ */
+export function smallSplitProblems(): Generated[] {
+  return Array.from({ length: SMALL_PROBLEM_COUNT }, (_, i) =>
+    genProblem(seededRng(83_000 + i), SPLIT_PROBLEMS),
+  );
 }

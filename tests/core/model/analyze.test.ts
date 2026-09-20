@@ -1158,3 +1158,84 @@ describe('analyze: weighted criteria', () => {
     expect(codes(a.issues)).not.toContain('!internal');
   });
 });
+
+/** The SIXTH CARD in the readout (PRD §5.6): what the editor shows of a split. */
+describe('analyze of a split criterion', () => {
+  const secondOf = (text: string, when: 'first' | 'second' | 'both' = 'second'): Template =>
+    templateOf(
+      [line('mon', 'monster', 0, 10), line('tr', 'trap', 0, 10)],
+      [{ id: 'c1', text, when }],
+      { hand: { size: 6 }, mode: 'second' },
+    );
+
+  it('shows the expansion with `then` between the two parts', () => {
+    const a = analyze(secondOf('1x monster then no trap'), ctx);
+    expect(a.ok).toBe(true);
+    expect(criterionOf(a, 'c1').alternatives).toEqual(['1x monster then no trap']);
+    expect(criterionOf(a, 'c1').parsed).toMatchObject({
+      ok: true,
+      canonical: '1x monster then no trap',
+    });
+  });
+
+  it('leads with `then` where nothing is asked of the cards opened on', () => {
+    const a = analyze(secondOf('then 1x trap'), ctx);
+    expect(criterionOf(a, 'c1').alternatives).toEqual(['then 1x trap']);
+  });
+
+  it("counts the sixth card's descriptions as requirements and limits like any others", () => {
+    const a = analyze(secondOf('1x monster then no trap'), ctx);
+    expect(requirementOf(a, 'monster').filledBy).toEqual(['mon']);
+    expect(limitOf(a, 'trap').counts).toEqual(['tr']);
+    // And each appearance says WHICH window asked, because `1x trap` of the card
+    // you draw is a different statement from `1x trap` in six cards.
+    expect(requirementOf(a, 'monster').appearsIn).toEqual([
+      { criterion: 'c1', alternative: 0, n: 1 },
+    ]);
+    expect(limitOf(a, 'trap').appearsIn).toEqual([
+      { criterion: 'c1', alternative: 0, n: 0, sixth: true },
+    ]);
+  });
+
+  it('warns that no line fills a requirement the sixth card alone asks for', () => {
+    const noSpell = templateOf(
+      [line('mon', 'monster', 0, 10)],
+      [{ id: 'c1', text: '1x monster then 1x spell', when: 'second' }],
+      {
+        hand: { size: 6 },
+        mode: 'second',
+      },
+    );
+    const a = analyze(noSpell, ctx);
+    expect(requirementOf(a, 'spell').filledBy).toEqual([]);
+    expect(codes(requirementOf(a, 'spell').issues)).toContain('unfilled');
+  });
+
+  it('is an error, on the criterion, when it is not tagged going second', () => {
+    for (const when of ['first', 'both'] as const) {
+      const a = analyze(secondOf('1x monster then no trap', when), ctx);
+      expect(a.ok, when).toBe(false);
+      expect(codes(criterionOf(a, 'c1').issues), when).toEqual(['!sixth-card']);
+      expect(criterionOf(a, 'c1').issues[0]!.message, when).toContain('tag it going second');
+    }
+  });
+
+  it('is a parse error, with a span, when the sixth card is asked for two cards', () => {
+    // The parser refuses it — `slotsOf` counts exactly what expansion would —
+    // so the reader gets the span of the thing that asked too much, rather than
+    // a message about an expansion they never see.
+    const a = analyze(secondOf('1x monster then 2x trap'), ctx);
+    expect(a.ok).toBe(false);
+    expect(codes(criterionOf(a, 'c1').issues)).toEqual(['!parse']);
+    const [issue] = criterionOf(a, 'c1').issues;
+    expect(issue!.message).toContain('the sixth card is one card, and this asks 2 of it');
+    expect('1x monster then 2x trap'.slice(issue!.span!.start, issue!.span!.end)).toBe('2x trap');
+  });
+
+  it('reports the work of a drawn hand: the same terms, one per composition', () => {
+    const a = analyze(secondOf('1x monster then no trap'), ctx);
+    expect(a.work.hands).toHaveLength(1);
+    expect(a.work.hands![0]).toMatchObject({ H: 6, part: 'second' });
+    expect(a.work.hands![0]!.terms).toBeGreaterThan(0);
+  });
+});

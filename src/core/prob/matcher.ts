@@ -2,7 +2,9 @@ import {
   type CompiledCriterion,
   type CompiledRequirement,
   MAX_HAND_SIZE,
+  maxCriterionWeight,
   type Problem,
+  type SixthCard,
   validateProblem,
 } from '../model/problem';
 
@@ -107,7 +109,7 @@ function capsOf(reqs: readonly CompiledRequirement[]): Map<number, number> {
   return out;
 }
 
-function compileCriterion({ slots, limits, reqs }: CompiledCriterion): HallCriterion {
+function compileCriterion({ slots, limits, reqs }: SixthCard): HallCriterion {
   const needOf = new Map<number, number>();
   // More slots than any hand holds is never met; its 2^slots subsets are never built.
   if (slots.length <= MAX_HAND_SIZE) {
@@ -162,6 +164,16 @@ function chosen(problem: Problem, opts: MatcherOptions): CompiledCriterion[] {
 }
 
 /**
+ * A split criterion's `slots` and `limits` are about the OPENING FIVE, not the
+ * whole hand, so anything that reads a hand as one window would read it wrong.
+ * `compileValuer` is the one thing that knows a hand has two.
+ */
+function refuseSplit(criteria: readonly CompiledCriterion[], because: string): void {
+  const at = criteria.findIndex(({ sixth }) => sixth !== undefined);
+  if (at >= 0) throw new RangeError(`criterion ${at} is about the card you draw, but ${because}`);
+}
+
+/**
  * The matcher for `problem`, with every criterion's subset unions computed
  * once: a hand succeeds if ANY criterion has its requirements feasible and
  * all its limits satisfied.
@@ -171,7 +183,12 @@ function chosen(problem: Problem, opts: MatcherOptions): CompiledCriterion[] {
  */
 export function compileMatcher(problem: Problem, opts: MatcherOptions = {}): Matcher {
   validateProblem(problem);
-  const criteria = chosen(problem, opts).map(compileCriterion);
+  const picked = chosen(problem, opts);
+  refuseSplit(
+    picked,
+    'a matcher reads a hand as one window — score it through `compileValuer`, which judges the cards opened on and the card drawn apart',
+  );
+  const criteria = picked.map(compileCriterion);
   if (criteria.every(({ capMasks }) => capMasks.length === 0))
     return (h, H) => {
       for (const criterion of criteria) if (meets(criterion, h, H)) return true;
@@ -200,7 +217,12 @@ export type Weigher = (h: ArrayLike<number>, H: number) => number;
  */
 export function compileWeigher(problem: Problem, opts: MatcherOptions = {}): Weigher {
   validateProblem(problem);
-  const ordered = [...chosen(problem, opts)].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
+  const picked = chosen(problem, opts);
+  refuseSplit(
+    picked,
+    'a weigher reads a hand as one window — score it through `compileValuer`, which judges the cards opened on and the card drawn apart',
+  );
+  const ordered = [...picked].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
   const weights = ordered.map(({ weight }) => weight ?? 1);
   const criteria = ordered.map(compileCriterion);
   if (criteria.every(({ capMasks }) => capMasks.length === 0))
@@ -213,6 +235,189 @@ export function compileWeigher(problem: Problem, opts: MatcherOptions = {}): Wei
     for (let at = 0; at < criteria.length; at++)
       if (meets(criteria[at]!, h, H) && withinCeilings(criteria[at]!, h)) return weights[at]!;
     return 0;
+  };
+}
+
+/** What one composition is worth, and how many of its outcomes succeed at all. */
+export interface Worth {
+  /**
+   * Summed over the hand's OUTCOMES, the best weight each one meets. With the
+   * sixth card drawn separately a set of `H` cards is `H` outcomes — one per
+   * choice of which card was drawn — and they need not agree.
+   */
+  value: number;
+  /** How many of those outcomes meet any criterion at all: the plain probability's share. */
+  plain: number;
+}
+
+export interface Valuer {
+  /** `outcomesOf` the hand: `H` when the sixth card is drawn separately, else 1. */
+  outcomes: number;
+  /** The most `value` any composition can be worth: `outcomes × max(weight)`. */
+  maxValue: number;
+  /** The most `plain` can be, which is `outcomes`. */
+  maxPlain: number;
+  /** Fills `into` for the hand `h` of `H` cards; `h` is trusted, and `into` is reused. */
+  worth(h: ArrayLike<number>, into: Worth): void;
+}
+
+export interface ValuerOptions extends MatcherOptions {
+  /**
+   * Whether this hand's LAST card is drawn separately. It is an argument rather
+   * than something read off `problem.handSizes`, for the reason `createScorer`
+   * takes its hand size: the hand being scored decides, and a problem may
+   * declare hands this valuer is not for. `successSet` reads it off the hand it
+   * is enumerating, and a split criterion judged without it throws.
+   */
+  drawn?: boolean;
+}
+
+/**
+ * The classes a SINGLE card of which meets `sixth` — the whole of the sixth
+ * card's part, precomputed once as a bitmask.
+ *
+ * The part is a criterion like any other, judged against a hand of one card,
+ * so this is the ordinary matcher run over the `k` one-card hands there are.
+ * Nothing about it is special-cased: a requirement slot is a mask the class
+ * must be in, `no trap` is a limit no class in its mask satisfies, and the
+ * BLANK class passes a part that is limits alone — a card that implies nothing
+ * implies no trap either, which is what a limit has always meant (PRD §6.3).
+ */
+function acceptsOf(sixth: SixthCard, classCount: number): number {
+  const compiled = compileCriterion(sixth);
+  const one = new Uint8Array(classCount);
+  let mask = 0;
+  for (let cls = 0; cls < classCount; cls++) {
+    one.fill(0);
+    one[cls] = 1;
+    if (meets(compiled, one, 1) && withinCeilings(compiled, one)) mask |= 1 << cls;
+  }
+  return mask >>> 0;
+}
+
+/**
+ * What a hand of `H` cards is WORTH, with the sixth card told from the other
+ * five where a criterion asks it to be (PRD §5.6).
+ *
+ * ---------------------------------------------------------------------------
+ * THE SAMPLE SPACE. Going second you see five cards and then draw one, so an
+ * outcome is the ordered pair (the opening five, the card drawn) — and a SET
+ * of six cards is six of those, one per choice of which card was drawn. Draw
+ * the sixth first and it is uniform over the whole deck, so for a set `h` and
+ * a class `c` the pairs whose drawn card is of class `c` number
+ *
+ *     h_c · Π_c' C(n_c', h_c')          and          Σ_c h_c = H,
+ *
+ * which is `H` times the ways to hold `h`. That factor of `h_c` is the whole
+ * of the arithmetic: what a composition is worth is
+ *
+ *     value(h) = Σ_c h_c · best(h − e_c, c)
+ *
+ * where `best` is the highest weight among the criteria that outcome meets —
+ * an unsplit criterion judged over all `H` cards, a split one judged as its
+ * five-card part over `h − e_c` and its sixth-card part over `c` alone.
+ *
+ * TWO CONSEQUENCES WORTH STATING, because they are why this is cheap:
+ *
+ * - it does NOT change the enumeration. The success set still walks the
+ *   compositions of `H` cards; only what each one is worth changes, and that
+ *   is decided ONCE per composition rather than once per deck. A split costs
+ *   the scorer's hot loop nothing at all.
+ * - a composition holds at most `H` classes, so the per-class sum is at most
+ *   six terms however many classes the problem has.
+ *
+ * With nothing split, every outcome of a hand is worth the same and the sum is
+ * `H · weight(h)`: the score it always was, with both sides of the fraction
+ * multiplied by `H`. That is the backward-compatibility argument, and it is
+ * checked rather than asserted.
+ */
+export function compileValuer(problem: Problem, H: number, opts: ValuerOptions = {}): Valuer {
+  validateProblem(problem);
+  const classCount = problem.classes.length;
+  const picked = chosen(problem, opts);
+  const drawn = opts.drawn === true;
+  if (!drawn)
+    refuseSplit(picked, `this hand of ${H} draws none: pass \`drawn\` for the hand that does`);
+  const outcomes = drawn ? H : 1;
+  const maxValue = outcomes * maxCriterionWeight(problem);
+
+  // Heaviest first in both lists, so the FIRST criterion met is the best one
+  // and the loop stops there — the maximum for nothing, exactly as the
+  // unsplit weigher gets it. `sort` is stable, so an unweighted problem keeps
+  // the order it was written in.
+  const byWeight = (a: CompiledCriterion, b: CompiledCriterion) =>
+    (b.weight ?? 1) - (a.weight ?? 1);
+  const whole = [...picked].filter(({ sixth }) => sixth === undefined).sort(byWeight);
+  const split = [...picked].filter(({ sixth }) => sixth !== undefined).sort(byWeight);
+  const wholeWeights = whole.map(({ weight }) => weight ?? 1);
+  const wholeHall = whole.map(compileCriterion);
+  const splitWeights = split.map(({ weight }) => weight ?? 1);
+  /** A split criterion's own `slots`, `limits` and `reqs` ARE its five-card part. */
+  const fiveHall = split.map(compileCriterion);
+  const accepts = split.map(({ sixth }) => acceptsOf(sixth!, classCount));
+
+  /** The best weight among `criteria` that `h` meets, or `floor` if none beats it. */
+  const bestOf = (
+    criteria: readonly HallCriterion[],
+    weights: readonly number[],
+    h: ArrayLike<number>,
+    cards: number,
+    floor: number,
+  ): number => {
+    for (let at = 0; at < criteria.length; at++) {
+      if (weights[at]! <= floor) return floor;
+      const criterion = criteria[at]!;
+      if (meets(criterion, h, cards) && withinCeilings(criterion, h)) return weights[at]!;
+    }
+    return floor;
+  };
+
+  if (split.length === 0) {
+    // Nothing names the card drawn, so every outcome of a hand is worth the
+    // same and the whole per-class sum collapses to one multiplication.
+    return {
+      outcomes,
+      maxValue,
+      maxPlain: outcomes,
+      worth: (h, into) => {
+        const weight = bestOf(wholeHall, wholeWeights, h, H, 0);
+        into.value = outcomes * weight;
+        into.plain = weight > 0 ? outcomes : 0;
+      },
+    };
+  }
+
+  /** `h` with one card of some class taken out: the five you opened on. */
+  const five = new Int32Array(classCount);
+  return {
+    outcomes,
+    maxValue,
+    maxPlain: outcomes,
+    worth: (h, into) => {
+      // The unsplit criteria read the whole hand and so are the same for every
+      // outcome of it: judged once, and the floor each outcome starts from.
+      const base = bestOf(wholeHall, wholeWeights, h, H, 0);
+      let value = 0;
+      let plain = 0;
+      for (let cls = 0; cls < classCount; cls++) {
+        const held = h[cls]!;
+        if (held === 0) continue;
+        for (let other = 0; other < classCount; other++) five[other] = h[other]!;
+        five[cls] = held - 1;
+        let best = base;
+        for (let at = 0; at < splitWeights.length; at++) {
+          if (splitWeights[at]! <= best) break;
+          if (((accepts[at]! >>> cls) & 1) === 0) continue;
+          const criterion = fiveHall[at]!;
+          if (meets(criterion, five, H - 1) && withinCeilings(criterion, five))
+            best = splitWeights[at]!;
+        }
+        value += held * best;
+        if (best > 0) plain += held;
+      }
+      into.value = value;
+      into.plain = plain;
+    },
   };
 }
 

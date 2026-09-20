@@ -36,6 +36,52 @@ function or(...args: Expr[]): Expr {
 }
 
 describe('printCriterion', () => {
+  describe('a split', () => {
+    const split = (five: Expr | undefined, sixth: Expr): Expr =>
+      five === undefined ? { op: 'split', sixth } : { op: 'split', five, sixth };
+
+    it('writes then between the two parts', () => {
+      expect(printCriterion(split(req(1, 'monster'), atMost(0, 'trap')), ctx)).toBe(
+        '1x monster then no trap',
+      );
+    });
+
+    it('leads with then when the opening five are unasked about', () => {
+      expect(printCriterion(split(undefined, req(1, '#89631139')), ctx)).toBe('then 1x #89631139');
+    });
+
+    it('needs no parentheses on either side: then binds looser than both', () => {
+      const text = printCriterion(
+        split(or(req(1, 'monster'), req(2, 'spell')), or(req(1, 'trap'), atMost(0, 'spell'))),
+        ctx,
+      );
+      expect(text).toBe('1x monster or 2x spell then 1x trap or no spell');
+      // And it reads back as itself, which is what "no parentheses" has to mean.
+      expect(parseCriterion(text, ctx)).toEqual({
+        ok: true,
+        expr: split(or(req(1, 'monster'), req(2, 'spell')), or(req(1, 'trap'), atMost(0, 'spell'))),
+      });
+    });
+
+    it('round-trips every generated split', () => {
+      const rng = seededRng(0x5171e2);
+      let splits = 0;
+      for (let i = 0; i < 400; i++) {
+        const expr = genExpr(rng, {
+          desc: () => d('monster'),
+          maxDepth: 2,
+          maxArgs: 3,
+          limitChance: 0.3,
+          splitChance: 0.6,
+        });
+        if (expr.op === 'split') splits++;
+        const text = printCriterion(expr, ctx);
+        expect(parseCriterion(text, ctx), text).toEqual({ ok: true, expr });
+      }
+      expect(splits).toBeGreaterThan(150);
+    });
+  });
+
   it('prints a requirement as its count and the canonical description', () => {
     expect(printCriterion(req(1, 'monsters'), ctx)).toBe('1x monster');
     expect(printCriterion(req(3, 'fire level 4 or lower'), ctx)).toBe(
@@ -241,6 +287,9 @@ describe('parseCriterion/printCriterion round trip (E3)', () => {
       if (expr.op === 'req' || expr.op === 'atMost') {
         if (expr.op === 'atMost' && expr.n === 0) seen.add('no');
         if (expr.desc.anyOf.length > 1) seen.add(`description-level or in ${expr.op}`);
+      } else if (expr.op === 'split') {
+        if (expr.five !== undefined) walk(expr.five, 'split');
+        walk(expr.sixth, 'split');
       } else for (const arg of expr.args) walk(arg, expr.op);
     };
     for (let i = 0; i < 3000; i++) walk(genExpr(rng, options), 'root');

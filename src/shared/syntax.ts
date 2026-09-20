@@ -288,6 +288,32 @@ export const CRITERION_SYNTAX: ExampleSection = {
       note: 'One token decides which `or` you wrote: a count, `exactly`, `at most`, `no`, or a `(` before one of those starts a new term. Anything else continues the description.',
     },
     {
+      heading: 'The card you draw going second',
+      rows: [
+        {
+          syntax: '1x {starter} and 1x {extender} then 1x [Ash Blossom & Joyous Spring]',
+          means:
+            'the FIVE cards you open on hold a starter and an extender, and the card you draw is Ash Blossom',
+        },
+        {
+          syntax: 'then 1x [Ash Blossom & Joyous Spring]',
+          means: 'only the card you draw is asked about; the five may be anything',
+        },
+        { syntax: '1x {starter} then no trap', means: 'the card you draw is not a trap' },
+        {
+          syntax: '1x monster then 2x trap',
+          means: 'an error — one card cannot be two cards',
+          fails: 'the sixth card is one card',
+        },
+        {
+          syntax: '1x monster then 1x trap then 1x spell',
+          means: 'an error — one card is drawn, not two',
+          fails: 'a criterion has one `then`',
+        },
+      ],
+      note: '`then` is a different question from asking the same of all six cards together: it fixes WHICH card is which, and it is the question to ask when the extra card has to be the answer. A row with a `then` must be tagged going second — going first there is no sixth card.',
+    },
+    {
       heading: 'Two errors worth recognizing',
       rows: [
         {
@@ -305,7 +331,7 @@ export const CRITERION_SYNTAX: ExampleSection = {
   ],
   notes: [
     'A hand succeeds if it meets ANY ONE criterion: between criteria it is always `or`.',
-    'Which hand a criterion is judged for — going first, going second, either hand — is the control on the row, not something written in its text.',
+    'Which hand a criterion is judged for — going first, going second, either hand — is the control on the row, not something written in its text. A criterion with a `then` in it has to be the going-second one.',
     'What a criterion is WORTH is a control too, not text: turn on “Weight the criteria” and every row gets a number. See “What weighting the criteria does”.',
   ],
 };

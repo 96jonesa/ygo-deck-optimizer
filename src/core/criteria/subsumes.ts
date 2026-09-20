@@ -88,6 +88,23 @@ export function subsumes(
   ctx: Implication,
   maxHandSize = Number.POSITIVE_INFINITY,
 ): boolean {
+  // A SPLIT reads the same argument twice, once per window — the five cards
+  // you open on and the one you draw are disjoint, so nothing crosses between
+  // them. One side split and the other not is simply given up on: the two are
+  // about different sample spaces and the injection says nothing.
+  if ((B.sixth === undefined) !== (A.sixth === undefined)) return false;
+  if (B.sixth !== undefined && A.sixth !== undefined && !holdsOver(B.sixth, A.sixth, ctx, 1))
+    return false;
+  return holdsOver(B, A, ctx, maxHandSize);
+}
+
+/** `subsumes` over one window: the whole hand, the opening five, or the card drawn. */
+function holdsOver(
+  B: Pick<FlatCriterion, 'reqs' | 'limits'>,
+  A: Pick<FlatCriterion, 'reqs' | 'limits'>,
+  ctx: Implication,
+  maxHandSize: number,
+): boolean {
   if (B.reqs.some(({ max }) => max !== undefined)) return false;
   const holds = relationOf(ctx);
   const covered = B.limits.every(

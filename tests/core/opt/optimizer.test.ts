@@ -21,6 +21,7 @@ import {
   type ScoredVector,
   sweepFixed,
 } from '../../../src/core/opt/optimizer';
+import { estimate } from '../../../src/core/prob/montecarlo';
 import { type BlendPart, createScorer } from '../../../src/core/prob/scorer';
 import { same } from '../../helpers/assert';
 import { columnOf } from '../../helpers/gen-problem';
@@ -1306,5 +1307,114 @@ describe('optimize with weighted criteria', () => {
     expect(over.ok).toBe(false);
     if (over.ok) throw new Error('expected the weight to be refused');
     expect(over.errors.join('\n')).toMatch(/past 2\^53/);
+  });
+});
+
+/**
+ * The SIXTH CARD end to end (PRD §5.6): compile, search, headline, per-criterion
+ * breakdown — and the Monte Carlo oracle over the ratio the search chose, which
+ * shares none of the exact engine's code.
+ */
+describe('optimize with the sixth card split', () => {
+  /** Line `a` fills column 0, line `b` fills column 1, the remainder fills nothing. */
+  const matrix = [
+    [true, false],
+    [false, true],
+    [false, false],
+  ];
+  const inputOf = (flat: CompileInput['flat']): CompileInput => ({
+    deckSize: 40,
+    handSize: 6,
+    lines: [
+      { id: 'a', isRemainder: false, min: 0, max: 3 },
+      { id: 'b', isRemainder: false, min: 0, max: 3 },
+      { id: REMAINDER_ID, isRemainder: true, min: 0, max: null },
+    ],
+    matrix,
+    flat,
+  });
+  /** `1x a then 1x b`, beside the unsplit `2x a`. */
+  const SPLIT = inputOf([
+    { reqs: [{ n: 1, desc: 0 }], limits: [], sixth: { reqs: [{ n: 1, desc: 1 }], limits: [] } },
+    { reqs: [{ n: 2, desc: 0 }], limits: [] },
+  ]);
+  const HAND: HandSize[] = [{ H: 6, weight: 1 }];
+
+  it('scores the run over the outcomes of a drawn hand, not the sets', () => {
+    const c = compiled(SPLIT, HAND);
+    expect(c.problem.handSizes).toEqual([{ H: 6, weight: 1, drawn: true }]);
+    const { best } = run(c);
+    // 6 · C(40, 6) = 6 · 3,838,380.
+    expect(best.score.parts[0]!.den).toBe(6 * 3_838_380);
+    expect(best.blend.den).toBe(6 * 3_838_380);
+    expect(best.score.pDisplay).toBeGreaterThan(0);
+    expect(best.score.pDisplay).toBeLessThan(1);
+  });
+
+  it("puts every criterion's own row over the run's denominator", () => {
+    const c = compiled(SPLIT, HAND);
+    const { best } = run(c);
+    const rows = breakdown(
+      c,
+      SPLIT.flat.map((alternative, at) => ({ id: `c${at}`, alternatives: [alternative] })),
+      best.classTotals,
+    );
+    // Including the UNSPLIT criterion's, which is worth the same whichever of
+    // the six cards was drawn: a row over C(40, 6) would not sit under the
+    // headline, and the reader could not compare the two.
+    for (const row of rows) expect(row.score.parts[0]!.den).toBe(best.score.parts[0]!.den);
+    expect(rows.map((row) => row.blend.den)).toEqual([best.blend.den, best.blend.den]);
+  });
+
+  it('gives the split criterion a different number from the same question over six cards', () => {
+    const c = compiled(SPLIT, HAND);
+    const { best } = run(c);
+    const rows = breakdown(
+      c,
+      [
+        {
+          id: 'split',
+          alternatives: [
+            {
+              reqs: [{ n: 1, desc: 0 }],
+              limits: [],
+              sixth: { reqs: [{ n: 1, desc: 1 }], limits: [] },
+            },
+          ],
+        },
+        {
+          id: 'whole',
+          alternatives: [
+            {
+              reqs: [
+                { n: 1, desc: 0 },
+                { n: 1, desc: 1 },
+              ],
+              limits: [],
+            },
+          ],
+        },
+      ],
+      best.classTotals,
+    );
+    const [split, whole] = rows;
+    expect(split!.blend.num).not.toBe(whole!.blend.num);
+    // Asking it of all six cards is the easier question: any `a` and any `b`
+    // will do, where the split needs the `b` to be the card drawn.
+    expect(split!.blend.num / split!.blend.den).toBeLessThan(whole!.blend.num / whole!.blend.den);
+  });
+
+  it('agrees with the Monte Carlo oracle on the ratio the search chose', () => {
+    const c = compiled(SPLIT, HAND);
+    const { best } = run(c);
+    const counts = exampleRatio(c, best.classTotals).slice(0, -1);
+    const { ci95 } = estimate({ deckSize: 40, matrix, flat: SPLIT.flat }, counts, {
+      handSize: 6,
+      samples: 400_000,
+      seed: 20_260_920,
+    });
+    const p = best.score.parts[0]!.num / best.score.parts[0]!.den;
+    expect(p).toBeGreaterThan(ci95[0]);
+    expect(p).toBeLessThan(ci95[1]);
   });
 });

@@ -476,6 +476,37 @@ describe('requirementRows', () => {
   });
 });
 
+/**
+ * The same two strings the CLI's `matchingSection` pins (`tests/cli/report.test.ts`):
+ * the renderer keeps its own copy of the phrasing, so both sides are held to it.
+ */
+describe('a count asked of the card you draw', () => {
+  it('is marked `drawn`, and never shares a row with the same count over the hand', () => {
+    const [requirement] = requirementRows(
+      analysisOf({
+        requirements: [
+          requirementOf('trap', {
+            appearsIn: [
+              { criterion: 'c1', alternative: 0, n: 1, sixth: true },
+              { criterion: 'c1', alternative: 0, n: 1 },
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(requirement?.heading).toBe('1x / 1x drawn trap');
+
+    const [limit] = limitRows(
+      analysisOf({
+        limits: [
+          limitOf('trap', { appearsIn: [{ criterion: 'c1', alternative: 0, n: 0, sixth: true }] }),
+        ],
+      }),
+    );
+    expect(limit?.heading).toBe('no drawn trap');
+  });
+});
+
 describe('limitRows', () => {
   it('is empty before the first analysis, and for a template with no limit', () => {
     expect(limitRows(null)).toEqual([]);

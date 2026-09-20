@@ -39,6 +39,12 @@ function printExpr(expr: Expr, ctx: PrintContext): string {
       return expr.args
         .map((arg) => (arg.op === 'or' ? `(${printExpr(arg, ctx)})` : printExpr(arg, ctx)))
         .join(' and ');
+    case 'split':
+      // `then` binds looser than `and` and `or` both, and a criterion holds
+      // one, so neither side ever needs parentheses to read back as itself.
+      return expr.five === undefined
+        ? `then ${printExpr(expr.sixth, ctx)}`
+        : `${printExpr(expr.five, ctx)} then ${printExpr(expr.sixth, ctx)}`;
   }
 }
 
@@ -47,7 +53,9 @@ function printExpr(expr: Expr, ctx: PrintContext): string {
  * `canonicalizeExpr(expr)` for every `expr` the grammar can express — counts
  * within their ranges, descriptions the description grammar can express, and
  * no `and` / `or` without arguments, which prints as nothing. Terms are
- * joined by `and`, alternatives by `or`, and `at most 0x` reads `no`.
+ * joined by `and`, alternatives by `or`, and `at most 0x` reads `no`. A split
+ * criterion writes `then` between its two parts, and a split with no
+ * five-card part leads with it.
  */
 export function printCriterion(expr: Expr, ctx: PrintContext): string {
   return printExpr(canonicalizeExpr(expr), ctx);

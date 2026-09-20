@@ -27,7 +27,19 @@ export interface MatchProblem {
   /** `matrix[line][description]`: whether a card of the line matches. The LAST row is the remainder. */
   matrix: readonly (readonly boolean[])[];
   /** A hand succeeds if it meets ANY of these. */
-  flat: readonly { reqs: readonly MatchRange[]; limits: readonly MatchCounted[] }[];
+  flat: readonly MatchFlat[];
+}
+
+/** One flat alternative, with the sixth card's own part when it is split. */
+export interface MatchFlat {
+  reqs: readonly MatchRange[];
+  limits: readonly MatchCounted[];
+  /**
+   * The SIXTH CARD's part (PRD §5.6). Present: `reqs` and `limits` above are
+   * about the cards you OPENED on — every position but the last — and this is
+   * about the last one, which is the card `drawHand` drew last.
+   */
+  sixth?: { reqs: readonly MatchRange[]; limits: readonly MatchCounted[] };
 }
 
 export interface EstimateOptions {
@@ -123,6 +135,13 @@ interface JudgedCriterion {
  * the requirements so that each takes a count within its range and no card
  * matching a CAPPED requirement is left over.
  *
+ * A SPLIT criterion reads the very same rules over two WINDOWS instead of one:
+ * its own `reqs` and `limits` over positions `0 … size - 2`, the cards you
+ * opened on, and its `sixth` part over position `size - 1` alone, the card
+ * drawn. `drawHand` fills position `i` at step `i`, so the last position IS the
+ * last card drawn, and conditional on the others it is uniform over what is
+ * left — the oracle needs no new sampling, only a second window to judge.
+ *
  * The assignment is searched exhaustively over concrete cards, one card at a
  * time: each is offered to every requirement that matches it and still has
  * room, and then to no requirement at all — which is only allowed when no
@@ -138,7 +157,7 @@ export function createJudge(
   const matches = Array.from({ length: columns }, (_, desc) =>
     problem.matrix.map((row) => row[desc] === true),
   );
-  const criteria = problem.flat.map(({ reqs, limits }): JudgedCriterion => {
+  const judged = ({ reqs, limits }: Omit<MatchFlat, 'sixth'>): JudgedCriterion => {
     const bounded = reqs.map(({ n, max, desc }) => ({
       min: n,
       max: max ?? Number.POSITIVE_INFINITY,
@@ -150,28 +169,34 @@ export function createJudge(
       capped: reqs.flatMap(({ max, desc }) => (max === undefined ? [] : [desc])),
       limits,
     };
-  });
+  };
+  const criteria = problem.flat.map((alternative) => ({
+    /** The whole hand, or — when it is split — the cards opened on. */
+    opening: judged(alternative),
+    sixth: alternative.sixth === undefined ? null : judged(alternative.sixth),
+  }));
 
   let hand: ArrayLike<number> = [];
   let size = 0;
 
-  const withinLimits = (limits: readonly MatchCounted[]): boolean => {
+  /** A census over the window `[from, to)` of the hand. */
+  const withinLimits = (limits: readonly MatchCounted[], from: number, to: number): boolean => {
     for (const { n, desc } of limits) {
       const counted = matches[desc]!;
       let count = 0;
-      for (let position = 0; position < size; position++) if (counted[hand[position]!]) count++;
+      for (let position = from; position < to; position++) if (counted[hand[position]!]) count++;
       if (count > n) return false;
     }
     return true;
   };
 
-  const assigns = ({ reqs, capped }: JudgedCriterion): boolean => {
+  const assigns = ({ reqs, capped }: JudgedCriterion, from: number, to: number): boolean => {
     const taken = reqs.map(() => 0);
     /** What the requirements still owe: the search gives up once the cards left cannot pay it. */
     let owed = reqs.reduce((sum, { min }) => sum + min, 0);
     const place = (position: number): boolean => {
-      if (owed > size - position) return false;
-      if (position === size) return true;
+      if (owed > to - position) return false;
+      if (position === to) return true;
       const line = hand[position]!;
       for (let at = 0; at < reqs.length; at++) {
         const req = reqs[at]!;
@@ -186,15 +211,26 @@ export function createJudge(
       // Left over, which only a card no ceiling would have counted may be.
       return capped.every((desc) => !matches[desc]![line]) && place(position + 1);
     };
-    return place(0);
+    return place(from);
   };
+
+  /** Whether `criterion` holds over the window `[from, to)` of the hand. */
+  const holds = (criterion: JudgedCriterion, from: number, to: number): boolean =>
+    criterion.needed <= to - from &&
+    withinLimits(criterion.limits, from, to) &&
+    assigns(criterion, from, to);
 
   return (cards, cardCount = cards.length) => {
     hand = cards;
     size = cardCount;
-    for (const criterion of criteria) {
-      if (criterion.needed > size || !withinLimits(criterion.limits)) continue;
-      if (assigns(criterion)) return true;
+    for (const { opening, sixth } of criteria) {
+      if (sixth === null) {
+        if (holds(opening, 0, size)) return true;
+        continue;
+      }
+      // The card drawn is the last position; the cards opened on are the rest.
+      if (size < 1) continue;
+      if (holds(sixth, size - 1, size) && holds(opening, 0, size - 1)) return true;
     }
     return false;
   };

@@ -21,6 +21,47 @@ function errors(value: unknown): string[] {
 const REQ = { op: 'req', n: 1, desc: { anyOf: [{ t: 'clause', clause: { kinds: ['monster'] } }] } };
 
 describe('validateExpr', () => {
+  describe('a split', () => {
+    it('accepts what the parser produces, either side present or not', () => {
+      for (const text of [
+        '1x monster then 1x #89631139',
+        'then no trap',
+        '1x monster or 2x spell then 1x trap or no spell',
+      ])
+        expect(errors(ast(text)), text).toEqual([]);
+    });
+
+    it('refuses one below the root: a hand comes in two pieces, not four', () => {
+      const split = { op: 'split', sixth: REQ };
+      expect(errors({ op: 'and', args: [split, REQ] })).toEqual([
+        'expr.args[0]: `split` is the whole of a criterion — the five cards you open on, then the one you draw — and cannot stand inside `and`, `or` or another `split`',
+      ]);
+      expect(errors({ op: 'split', five: split, sixth: REQ })[0]).toContain('cannot stand inside');
+      expect(errors({ op: 'split', sixth: split })[0]).toContain('cannot stand inside');
+    });
+
+    it('refuses a sixth card asked for more than one card', () => {
+      expect(errors({ op: 'split', sixth: { op: 'and', args: [REQ, REQ] } })).toEqual([
+        'expr.sixth: the sixth card is one card, and this asks 2 of it',
+      ]);
+      expect(errors({ op: 'split', sixth: { op: 'req', n: 2, desc: REQ.desc } })[0]).toContain(
+        'asks 2 of it',
+      );
+    });
+
+    it('reports what is wrong inside either side, located', () => {
+      expect(errors({ op: 'split', five: { op: 'req' }, sixth: REQ })[0]).toContain('expr.five');
+      expect(errors({ op: 'split', sixth: { op: 'nand' } })[0]).toContain('expr.sixth');
+    });
+
+    it('gives back the canonical form, an absent five-card part left out', () => {
+      const result = validateExpr({ op: 'split', sixth: { op: 'or', args: [REQ] } }, 'expr');
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      expect(result.expr).toEqual({ op: 'split', sixth: REQ });
+      expect(Object.keys(result.expr)).toEqual(['op', 'sixth']);
+    });
+  });
+
   it('accepts every expression the parser produces', () => {
     for (const text of [
       '1x monster',
@@ -43,7 +84,7 @@ describe('validateExpr', () => {
   it('refuses anything that is not an expression', () => {
     expect(errors(null)).toEqual(['expr: must be an expression object, not null']);
     expect(errors({ op: 'nand', args: [] })).toEqual([
-      'expr: `op` must be "and", "or", "req" or "atMost", not "nand"',
+      'expr: `op` must be "and", "or", "req", "atMost" or "split", not "nand"',
     ]);
   });
 

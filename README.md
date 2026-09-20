@@ -19,7 +19,7 @@ combinatorial probability plus a card-database lookup layer.
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | **Done**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), range requirements (`1-2x monster`: a ceiling that binds the cards it does not take, so the range means "in addition to the rest"), `exactly nx` for a range whose ends agree, inline name completion in both editors (`[card]`, `{group}`, `"archetype"`), M2g files (`.ydk` deck import, template open/save with `cardSnapshot`, CSV/JSON export of a run) |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), range requirements (`1-2x monster`: a ceiling that binds the cards it does not take, so the range means "in addition to the rest"), `exactly nx` for a range whose ends agree, the sixth-card split (`1x {starter} then 1x [Ash]`: what the opening five must hold, and what the card you draw going second must be), inline name completion in both editors (`[card]`, `{group}`, `"archetype"`), M2g files (`.ydk` deck import, template open/save with `cardSnapshot`, CSV/JSON export of a run) |
 | M3 — polish | Not started |
 | M4 — release | **In progress**: installers for macOS (arm64 DMG) and Windows (x64 NSIS) built and attached by `.github/workflows/release.yml` on a `v*` tag; the suite also runs on Windows in CI. Unsigned, so each platform warns once |
 
@@ -100,6 +100,18 @@ maximum, not a sum, so no single criterion has a share of it to report. Only the
 template had before, weights and all left where they were; `optimize --weighted` and
 `--unweighted` override it from the harness, which is how the same template gives two answers one
 command apart.
+
+**Going second, you can ask what the card you draw has to be.** A going-second criterion may be
+**split** with `then`: `1x {starter} then 1x [Ash Blossom & Joyous Spring]` says the five cards you
+open on hold a starter **and** the card you draw is Ash Blossom. That is a different question from
+asking the same of all six cards together, and a harder one — it fixes *which* card is which, and
+it is the question to ask when the extra card has to be the answer. A leading `then` asks only
+about the card drawn. What follows `then` is about **one card**, so it takes one requirement at
+most (a limit is free: `then no trap` says the card drawn is not a trap), and `then 2x monster` is
+refused with the span of the thing that asked too much. The split is going-second only — going
+first there is no sixth card — so a criterion with a `then` in it must be tagged going second, and
+a template that says otherwise does not run. A criterion with no `then` is judged over all six
+cards exactly as before.
 
 Under them are the two readouts the tool exists for. **Per requirement**: the lines that fill it
 and — the point — the near misses, each with the dimension it leaves unsaid (`` `monster`:
@@ -182,6 +194,17 @@ A hand succeeds if it meets any one criterion (`src/core/criteria`: `parseCriter
 | `1-2x monster`, `exactly 1x monster` | A requirement with a **ceiling**, counted after the other requirements have taken theirs: one or two monsters *besides* whatever else was asked for. A card matching a capped description counts unless another requirement consumed it, so the ceiling really binds. `exactly n` is sugar for `n-n`, parses to the same thing, and is what the printer writes back |
 | `at most 1x [Brick]`, `no trap` | A **limit**: a count over the whole hand, not an assignment |
 
+One thing is not a term but a **split** of the criterion: `then`, written once, between what the
+five cards you open on must hold and what the card you draw must be (`1x {starter} then 1x [Ash]`).
+It binds looser than `and` and `or` both, so neither side ever needs parentheses, and a leading
+`then` leaves the opening five unasked about. Its right-hand side is a criterion over **one card**:
+at most one requirement slot (`slotsOf` counts them exactly as expansion would, so the parser
+refuses `then 2x monster` with a span rather than leaving it to score zero), any number of limits,
+and a ceiling or a limit of 1 or more dropped as something one card can never break. A split
+criterion is judged only going second, and only against a hand that draws a sixth card
+(`HandSize.drawn`); `resolveTemplate` and `analyze` both refuse one tagged otherwise, in the same
+words.
+
 The `x` may be left out wherever only a term can start (`1-2 monster`, `at most 2 trap`); the
 printer always writes it. `and` and `,` are the same and bind tighter than `or`; parentheses
 group. There are two "or"s: `1x [C] or 2x [D]` chooses between terms, because a count (or
@@ -213,6 +236,29 @@ criterion, comes out of the same walk, so a weighted run reports the probability
 for nothing. The Monte Carlo engine below shares no code
 with any of this and is the cross-check: the two must agree within five standard errors on generated
 problems at real deck sizes, and the scorer must match a count of every hand of small decks exactly.
+
+**The sixth card changes the sample space, and nothing else.** Where a hand draws its last card
+separately, an outcome is the ordered pair (the five you open on, the card you draw) and a *set* of
+six cards is six of them — so `den` is $`6\binom{N}{6}`$ and each composition of the success set is
+stored with what all of its outcomes come to,
+
+```math
+\text{value}(h) \;=\; \sum_{c} h_c \cdot \operatorname{best}\bigl(h - e_c,\ c\bigr)
+```
+
+`best` being the highest weight among the criteria that outcome meets — an unsplit criterion judged
+over all six cards, a split one as its five-card part over $`h - e_c`$ and its sixth-card part over
+the class $`c`$ alone (which compiles to one class bitmask: the sixth-card part is a criterion
+judged against a hand of one). The enumeration, the products, the binomial table and the scorer's
+inner loop are **untouched**: a split costs one pass at build time and nothing per deck, and it
+composes with unsplit criteria in the same run — which a sum of separate probabilities could not,
+since a hand may meet both. With nothing split every outcome of a hand is worth the same and the
+sum is $`6 \cdot \text{weight}(h)`$: the score the tool always gave, with both sides of the
+fraction multiplied by six. The factor multiplies the exactness headroom away exactly as a weight
+does, so it is part of the same bound — $`6\binom{60}{6} = 300{,}383{,}160`$ leaves room for
+weights up to 29,985,699 — and `checkWeightBound` throws rather than round. The Monte Carlo oracle
+learns the split by judging two *windows* of the hand it already draws: `drawHand` fills position
+`i` at step `i`, so the last position **is** the card drawn last.
 
 ## Template files and decks
 

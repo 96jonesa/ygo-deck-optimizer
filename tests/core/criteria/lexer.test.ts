@@ -16,6 +16,23 @@ function spansOf(text: string): string[] {
 }
 
 describe('lexCriterion', () => {
+  describe('then', () => {
+    it('reads it as a word of its own, in any case', () => {
+      for (const text of ['then', 'THEN', 'Then'])
+        expect(bodies(text), text).toEqual([{ t: 'then' }]);
+    });
+
+    it('leaves it alone inside a word, and inside a bracketed or quoted name', () => {
+      // `lexOne` takes a bracketed name whole, so nothing inside one is a keyword.
+      expect(bodies('[Then and Now]')).toEqual([{ t: 'cardName', text: 'Then and Now' }]);
+      expect(bodies('thenar')).toEqual([{ t: 'word', text: 'thenar' }]);
+    });
+
+    it('spans exactly the word', () => {
+      expect(spansOf('1x monster then no trap')).toEqual(['1x', 'monster', 'then', 'no', 'trap']);
+    });
+  });
+
   it('returns no tokens for empty or blank text', () => {
     expect(bodies('')).toEqual([]);
     expect(bodies(' \n\t')).toEqual([]);

@@ -89,7 +89,16 @@ function outcomesOf<C>(
     }
     case 'or':
       return collect(expr.args.flatMap((arg) => outcomesOf(arg, available, hand, fills)));
+    case 'split':
+      // `satisfiesTree` takes it, splitting the hand first; nothing below the
+      // root of a criterion can be one.
+      throw new RangeError('a `split` stands only at the root of a criterion');
   }
+}
+
+/** The five cards opened on, and the one drawn: the LAST card of the hand. */
+function windows<C>(hand: readonly C[]): { opening: readonly C[]; drawn: readonly C[] } {
+  return { opening: hand.slice(0, -1), drawn: hand.slice(-1) };
 }
 
 function popcount(mask: number): number {
@@ -111,6 +120,17 @@ function popcount(mask: number): number {
  * is what holding the two against each other checks.
  */
 export function satisfiesTree<C>(expr: Expr, hand: readonly C[], fills: Fills<C>): boolean {
+  // A SPLIT reads the whole of the rest of this over two hands: the cards
+  // opened on, and the single card drawn. Nothing crosses between them, which
+  // is exactly why the same evaluator answers both.
+  if (expr.op === 'split') {
+    if (hand.length === 0) return false;
+    const { opening, drawn } = windows(hand);
+    return (
+      satisfiesTree(expr.sixth, drawn, fills) &&
+      (expr.five === undefined || satisfiesTree(expr.five, opening, fills))
+    );
+  }
   return outcomesOf(expr, 2 ** hand.length - 1, hand, fills).some(({ available, capped }) =>
     hand.every(
       (card, position) =>
@@ -125,7 +145,19 @@ export function satisfiesTree<C>(expr: Expr, hand: readonly C[], fills: Fills<C>
  * requirement takes a count within `[n, max]` and every card left over matches
  * no requirement that has a ceiling.
  */
-export function satisfiesFlat<C>(flat: FlatCriterion, hand: readonly C[], fills: Fills<C>) {
+export function satisfiesFlat<C>(
+  flat: FlatCriterion,
+  hand: readonly C[],
+  fills: Fills<C>,
+): boolean {
+  if (flat.sixth !== undefined) {
+    if (hand.length === 0) return false;
+    const { opening, drawn } = windows(hand);
+    return (
+      satisfiesFlat({ reqs: flat.sixth.reqs, limits: flat.sixth.limits }, drawn, fills) &&
+      satisfiesFlat({ reqs: flat.reqs, limits: flat.limits }, opening, fills)
+    );
+  }
   for (const { n, desc } of flat.limits)
     if (hand.filter((card) => fills(card, desc)).length > n) return false;
 

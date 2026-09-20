@@ -286,6 +286,39 @@ describe('CRITERION_SYNTAX', () => {
       expect(slot).toEqual(criterion('1x ({starter} or {extender})'));
     });
 
+    it('splits the hand at `then`, and binds it looser than `and` and `or`', () => {
+      const expr = criterion(
+        '1x {starter} and 1x {extender} then 1x [Ash Blossom & Joyous Spring]',
+      );
+      expect(expr).toMatchObject({ op: 'split' });
+      if (expr.op !== 'split') throw new Error('not a split');
+      // The whole `and` is the five-card part; only the last term is the card drawn.
+      expect(expr.five).toEqual(criterion('1x {starter} and 1x {extender}'));
+      expect(expr.sixth).toEqual(criterion('1x [Ash Blossom & Joyous Spring]'));
+    });
+
+    it('leaves the five unasked about when `then` leads', () => {
+      const expr = criterion('then 1x [Ash Blossom & Joyous Spring]');
+      expect(expr).toMatchObject({ op: 'split' });
+      expect(expr).not.toHaveProperty('five');
+    });
+
+    /**
+     * The claim the row's `means` makes, and the reason the feature exists: the
+     * split is NOT the same question as asking the same of all six cards. Two
+     * requirements over six cards, against one over five and one over the card
+     * drawn.
+     */
+    it('is a different criterion from asking the same of all six cards', () => {
+      const split = expand(criterion('1x {starter} then no trap'), { maxHandSize: 6 });
+      const whole = expand(criterion('1x {starter} and no trap'), { maxHandSize: 6 });
+      expect(split.ok && whole.ok).toBe(true);
+      if (!split.ok || !whole.ok) throw new Error('expansion failed');
+      expect(split.flat[0]!.sixth).toBeDefined();
+      expect(whole.flat[0]).not.toHaveProperty('sixth');
+      expect(split.flat).not.toEqual(whole.flat);
+    });
+
     it('expands a nested `or` into one alternative per branch', () => {
       const expr = criterion('(1x {starter} or 1x {extender}) and 1x monster');
       const result = expand(expr, { maxHandSize: 6 });

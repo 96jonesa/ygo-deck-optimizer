@@ -21,6 +21,15 @@ import { type SuccessSetOptions, successSet } from './success-set';
  *
  * The plain success count comes out of the same walk (`successNum`), so a
  * weighted run reports the probability beside its score for nothing.
+ *
+ * THE SIXTH CARD (PRD §5.6) changes the DENOMINATOR and nothing else. Where the
+ * hand's last card is drawn separately, a set of `H` cards is `H` ordered
+ * (opening, drawn) outcomes, so `den` is `H · C(N, H)` and each composition's
+ * stored value is what all of its outcomes come to (`compileValuer`). The
+ * products, the table, the inner loop and the exactness argument are untouched:
+ * the sum is at most `max(w) · H · C(N, H)`, which `checkWeightBound` holds
+ * below 2^53 — 6 × C(60, 6) = 300,383,160, leaving room for weights up to
+ * 29,985,699 against an editor that caps them at 1,000.
  */
 export interface Fraction {
   num: number;
@@ -39,8 +48,15 @@ export interface Score extends Fraction {
 
 export interface Scorer {
   H: number;
-  /** C(N, H): the same for every deck. */
+  /**
+   * The outcomes this hand holds: `outcomes · C(N, H)`, the same for every
+   * deck. With the sixth card drawn separately a SET of `H` cards is `H`
+   * ordered (opening, drawn) pairs, so both sides of the fraction are `H`
+   * times what they were and the value it means is unchanged.
+   */
   den: number;
+  /** `outcomesOf` the hand: `H` when the sixth card is drawn separately, else 1. */
+  outcomes: number;
   /** Products summed per score — the stored side of the success set: what a score costs. */
   terms: number;
   complemented: boolean;
@@ -56,14 +72,23 @@ const TABLE = binomialTable();
 const STRIDE = TABLE.maxR + 1;
 
 export function createScorer(problem: Problem, H: number, opts: SuccessSetOptions = {}): Scorer {
-  const { compositions, count, width, complemented, values, maxWeight } = successSet(
-    problem,
-    H,
-    opts,
-  );
+  const {
+    compositions,
+    count,
+    width,
+    complemented,
+    values,
+    plains,
+    maxWeight,
+    outcomes,
+    maxValue,
+    maxPlain,
+  } = successSet(problem, H, opts);
   const { deckSize } = problem;
   const classCount = problem.classes.length;
-  const den = TABLE.values[deckSize * STRIDE + H]!;
+  /** C(N, H): the SETS of `H` cards, which is what the products count. */
+  const sets = TABLE.values[deckSize * STRIDE + H]!;
+  const den = outcomes * sets;
 
   // Each stored composition as the classes it holds a card of — the blank
   // class included — since C(n, 0) = 1 for all the others. A factor is a
@@ -92,10 +117,6 @@ export function createScorer(problem: Problem, H: number, opts: SuccessSetOption
    */
   const unit = count === 0 ? 1 : values[0]!;
   const uniform = values.every((value) => value === unit);
-  /** Rows that count toward the plain success total; only read when a weight is in play. */
-  const plainly = new Float64Array(count).fill(1);
-  if (complemented)
-    for (let row = 0; row < count; row++) plainly[row] = values[row] === maxWeight ? 1 : 0;
 
   /** Fills `ways` for this deck, and refuses class totals that are not one. */
   const prepare = (n: ArrayLike<number>): void => {
@@ -139,16 +160,19 @@ export function createScorer(problem: Problem, H: number, opts: SuccessSetOption
         sum += product;
       }
     }
-    return complemented ? maxWeight * den - sum : sum;
+    return complemented ? maxValue * sets - sum : sum;
   };
 
   /**
    * The weighted numerator and the plain one in ONE walk. Under direct storage
-   * every stored row is a hand that succeeds; under complement storage the rows
-   * worth `maxWeight` are the ones worth nothing before the flip — the hands
-   * that fail — so the plain count is `den` less those.
+   * every stored row is worth what its own outcomes come to; under complement
+   * storage each row holds what it FALLS SHORT of the most a row can be worth,
+   * so both sums are the ceiling less what is stored.
    */
   const score = (n: ArrayLike<number>): Score => {
+    // Nothing weighted: a row's plain value IS its value, and one walk answers
+    // both — which is every run the tool made before weights existed, and every
+    // split run that does not weight its criteria.
     if (maxWeight === 1) {
       const num = numerator(n);
       return { num, den, successNum: num };
@@ -160,16 +184,16 @@ export function createScorer(problem: Problem, H: number, opts: SuccessSetOption
       let product = 1;
       for (let at = starts[row]!; at < starts[row + 1]!; at++) product *= ways[factors[at]!]!;
       sum += values[row]! * product;
-      plain += plainly[row]! * product;
+      plain += plains[row]! * product;
     }
     return {
-      num: complemented ? maxWeight * den - sum : sum,
+      num: complemented ? maxValue * sets - sum : sum,
       den,
-      successNum: complemented ? den - plain : plain,
+      successNum: complemented ? maxPlain * sets - plain : plain,
     };
   };
 
-  return { H, den, terms: count, complemented, maxWeight, numerator, score };
+  return { H, den, outcomes, terms: count, complemented, maxWeight, numerator, score };
 }
 
 export interface BlendPart extends Score {

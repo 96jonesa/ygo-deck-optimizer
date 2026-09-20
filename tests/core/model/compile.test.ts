@@ -1638,3 +1638,153 @@ describe('weighted criteria through resolve and compile', () => {
     expect(result.errors.join('\n')).toMatch(/past 2\^53/);
   });
 });
+
+/**
+ * The SIXTH CARD through resolve and compile (PRD §5.6). The split lives in the
+ * criterion's TEXT and its AST, so nothing new travels beside them — and the one
+ * new thing a `Problem` gains, `drawn`, is derived from the alternatives a hand
+ * judges rather than declared twice.
+ */
+describe('the sixth card through resolve and compile', () => {
+  const secondTemplate = (texts: string[], hand = 6): Template => {
+    const template = templateOf(
+      [line('mon', 'monster', 0, 10), line('sp', 'spell', 0, 10), line('tr', 'trap', 0, 10)],
+      texts,
+    );
+    return {
+      ...template,
+      hand: { size: hand },
+      mode: hand === 6 ? 'second' : 'first',
+      criteria: template.criteria.map((criterion) => ({ ...criterion, when: 'second' })),
+    };
+  };
+
+  it('resolves the two sides into columns of ONE match matrix', () => {
+    const r = resolved(secondTemplate(['1x monster then 1x trap']));
+    expect(r.criteria[0]!.canonical).toBe('1x monster then 1x trap');
+    expect(r.flat).toEqual([
+      { reqs: [{ n: 1, desc: 0 }], limits: [], sixth: { reqs: [{ n: 1, desc: 1 }], limits: [] } },
+    ]);
+    // `trap` is a column like any other, so the classes tell traps apart.
+    expect(r.descriptions.map((d) => d.text)).toEqual(['monster', 'trap']);
+    expect(fillersOf(r, 'trap')).toEqual(['tr']);
+  });
+
+  it('compiles the sixth card into its own masks, and marks the hand as drawing one', () => {
+    const compiled = compileProblem(resolved(secondTemplate(['1x monster then 1x trap'])), {
+      handSizes: [{ H: 6, weight: 1 }],
+    });
+    if (!compiled.ok) throw new Error(compiled.errors.join('\n'));
+    const [criterion] = compiled.problem.criteria;
+    expect(criterion!.sixth).toBeDefined();
+    expect(criterion!.slots).toHaveLength(1);
+    expect(criterion!.sixth!.slots).toHaveLength(1);
+    // The two masks name different classes: a monster is not a trap.
+    expect(criterion!.slots[0]).not.toBe(criterion!.sixth!.slots[0]);
+    expect(compiled.problem.handSizes).toEqual([{ H: 6, weight: 1, drawn: true }]);
+    expect(() => validateProblem(compiled.problem)).not.toThrow();
+  });
+
+  it('leaves a template with no split exactly as it was: no `drawn` anywhere', () => {
+    const compiled = compileProblem(resolved(secondTemplate(['1x monster and 1x trap'])), {
+      handSizes: [{ H: 6, weight: 1 }],
+    });
+    if (!compiled.ok) throw new Error(compiled.errors.join('\n'));
+    expect(compiled.problem.handSizes).toEqual([{ H: 6, weight: 1 }]);
+    for (const criterion of compiled.problem.criteria)
+      expect(criterion).not.toHaveProperty('sixth');
+  });
+
+  it('honours a `drawn` the caller asked for, so every row of a run shares one denominator', () => {
+    const compiled = compileProblem(resolved(secondTemplate(['1x monster and 1x trap'])), {
+      handSizes: [{ H: 6, weight: 1, drawn: true }],
+    });
+    if (!compiled.ok) throw new Error(compiled.errors.join('\n'));
+    expect(compiled.problem.handSizes).toEqual([{ H: 6, weight: 1, drawn: true }]);
+  });
+
+  it('marks only the part that judges the split, in an average', () => {
+    const template = secondTemplate(['1x monster then 1x trap', '1x spell']);
+    const both: Template = {
+      ...template,
+      mode: 'average',
+      criteria: [
+        { ...template.criteria[0]!, when: 'second' },
+        { ...template.criteria[1]!, when: 'first' },
+      ],
+    };
+    const r = resolved(both);
+    const compiled = compileProblem(r, { handSizes: handSizesForMode(r, 'average') });
+    if (!compiled.ok) throw new Error(compiled.errors.join('\n'));
+    expect(compiled.problem.handSizes.map(({ H, drawn }) => ({ H, drawn }))).toEqual([
+      { H: 5, drawn: undefined },
+      { H: 6, drawn: true },
+    ]);
+  });
+
+  it('drops a sixth-card ceiling and limit that one card can never break, and says so', () => {
+    // `at most 1x trap` and `0-1x trap` both hold of any single card.
+    const compiled = compileProblem(
+      resolved(secondTemplate(['1x monster then at most 1x trap', '1x monster then 0-1x trap'])),
+      { handSizes: [{ H: 6, weight: 1 }] },
+    );
+    if (!compiled.ok) throw new Error(compiled.errors.join('\n'));
+    expect(compiled.droppedLimits).toEqual([
+      { criterion: 0, desc: 1, n: 1, reason: 'never-binds', sixth: true },
+    ]);
+    expect(compiled.droppedCeilings).toEqual([
+      { criterion: 1, desc: 1, n: 0, max: 1, reason: 'never-binds', sixth: true },
+    ]);
+  });
+
+  it('keeps `no trap` of the card drawn, which is the whole point of a limit there', () => {
+    const compiled = compileProblem(resolved(secondTemplate(['1x monster then no trap'])), {
+      handSizes: [{ H: 6, weight: 1 }],
+    });
+    if (!compiled.ok) throw new Error(compiled.errors.join('\n'));
+    expect(compiled.droppedLimits).toEqual([]);
+    expect(compiled.problem.criteria[0]!.sixth).toMatchObject({ slots: [] });
+    expect(compiled.problem.criteria[0]!.sixth!.limits).toHaveLength(1);
+  });
+
+  it('judges the five-card part over five cards, so `6x` there can never be met', () => {
+    expect(resolved(secondTemplate(['5x monster then 1x trap'])).criteria[0]!.dropped).toBe(0);
+    expect(resolved(secondTemplate(['6x monster then 1x trap'])).criteria[0]!.dropped).toBe(1);
+    // Unsplit, all six cards are available.
+    expect(resolved(secondTemplate(['6x monster'])).criteria[0]!.dropped).toBe(0);
+  });
+
+  describe('a split criterion must be tagged going second', () => {
+    const tagged = (when: 'first' | 'second' | 'both'): Template => {
+      const template = secondTemplate(['1x monster then 1x trap']);
+      return { ...template, criteria: [{ ...template.criteria[0]!, when }] };
+    };
+
+    it('resolves when it is', () => {
+      expect(errorsOf(tagged('second'))).toEqual([]);
+    });
+
+    it('refuses `both`, naming what to do about it', () => {
+      expect(errorsOf(tagged('both'))).toEqual([
+        'criterion "c1": `then` is about the card you draw going second, but this one is judged for both hands, and going first the hand is five cards and none of them is drawn after — tag it going second, or ask for the six cards together and drop the `then`',
+      ]);
+    });
+
+    it('refuses `first`', () => {
+      expect(errorsOf(tagged('first'))[0]).toContain('this one is judged going first');
+    });
+
+    it('refuses it however the template is tagged: a run going first has such criteria too', () => {
+      // The template's MODE is a different thing from a criterion's tag, and a
+      // going-first template may hold going-second criteria.
+      const goingFirst = { ...tagged('both'), hand: { size: 5 }, mode: 'first' as const };
+      expect(errorsOf(goingFirst)[0]).toContain('tag it going second');
+    });
+  });
+
+  it('refuses a sixth card asked for more than one card, wherever it is written', () => {
+    expect(errorsOf(secondTemplate(['1x monster then 2x trap']))[0]).toContain(
+      'the sixth card is one card',
+    );
+  });
+});
