@@ -17,11 +17,11 @@ import { sweepChart } from '../model/sweep-chart';
 // may not leave out zero, and one that includes zero would show none of the
 // differences that matter here. A dot's position may.
 
-function Chart({ sweep, name }: { sweep: LineSweep; name: string }) {
-  const chart = sweepChart(sweep);
+function Chart({ sweep, name, weighted }: { sweep: LineSweep; name: string; weighted: boolean }) {
+  const chart = sweepChart(sweep, undefined, weighted);
   const { box } = chart;
   const floor = box.height - box.bottom;
-  const described = `${name}: the best probability at each number of copies, from ${chart.low} to ${chart.high}, best at ${chart.bestAt}`;
+  const described = `${name}: the best ${weighted ? 'weighted score' : 'probability'} at each number of copies, from ${chart.low} to ${chart.high}, best at ${chart.bestAt}`;
 
   return (
     <figure className="chart" data-testid={`sweep-${sweep.lineId}`}>
@@ -104,7 +104,7 @@ function Chart({ sweep, name }: { sweep: LineSweep; name: string }) {
       <p className="chart-values tabular" data-testid={`sweep-${sweep.lineId}-values`}>
         {chart.points.map((point) => (
           <span key={point.count} className={point.best ? 'cell best' : 'cell'}>
-            <span className="dim">{point.count}:</span> {point.percent}
+            <span className="dim">{point.count}:</span> {point.value}
           </span>
         ))}
       </p>
@@ -115,9 +115,12 @@ function Chart({ sweep, name }: { sweep: LineSweep; name: string }) {
 export function SweepCharts({
   sweeps,
   labels,
+  weighted,
 }: {
   sweeps: readonly LineSweep[];
   labels: ReadonlyMap<string, string>;
+  /** The run's own: the charts plot an expected weight rather than a probability (PRD §5.6). */
+  weighted: boolean;
 }) {
   if (sweeps.length === 0)
     return (
@@ -128,7 +131,12 @@ export function SweepCharts({
   return (
     <div className="charts" data-testid="sweeps">
       {sweeps.map((sweep) => (
-        <Chart key={sweep.lineId} sweep={sweep} name={labelOf(labels, sweep.lineId)} />
+        <Chart
+          key={sweep.lineId}
+          sweep={sweep}
+          name={labelOf(labels, sweep.lineId)}
+          weighted={weighted}
+        />
       ))}
     </div>
   );

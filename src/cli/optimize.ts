@@ -53,6 +53,8 @@ and the best ratio criterion by criterion. Progress goes to stderr.
   --top <n>            rows of the ranked table to print (default 20)
   --delta <points>     the plateau's width in percentage points (default 0.5)
   --sweep <lineId>     also sweep this line in detail: re-optimized, and with the others held fixed
+  --weighted           rank by the weighted score even if the template does not
+  --unweighted         rank by P(success) even if the template says weighted
   --mode <first|second|average>
                        which run: going first (5 cards, the criteria tagged
                        first or both), going second (6 cards, second or both),
@@ -80,6 +82,8 @@ export interface OptimizeArgs {
   thresholdMs: number;
   force: boolean;
   json: boolean;
+  /** Override the template's weighting switch (PRD §5.6); absent leaves it as written. */
+  weighted?: boolean;
 }
 
 export type ParsedOptimizeArgs = Parsed<OptimizeArgs> | { ok: true; help: true };
@@ -133,7 +137,12 @@ const VALUE_FLAGS = [
 ] as const;
 
 export function parseOptimizeArgs(argv: readonly string[], env: CliIo['env']): ParsedOptimizeArgs {
-  const flags = parseFlags(argv, VALUE_FLAGS, ['--force', '--json'] as const);
+  const flags = parseFlags(argv, VALUE_FLAGS, [
+    '--force',
+    '--json',
+    '--weighted',
+    '--unweighted',
+  ] as const);
   if (!flags.ok) return flags;
   if (flags.help) return { ok: true, help: true };
   const { values } = flags;
@@ -194,6 +203,11 @@ export function parseOptimizeArgs(argv: readonly string[], env: CliIo['env']): P
   if (mode.value !== undefined) value.mode = mode.value;
   const sweep = values.get('--sweep');
   if (sweep !== undefined) value.sweep = sweep;
+  const on = flags.switches.has('--weighted');
+  const off = flags.switches.has('--unweighted');
+  if (on && off)
+    return { ok: false, message: '--weighted and --unweighted say opposite things; give one' };
+  if (on || off) value.weighted = on;
   return { ok: true, value };
 }
 
@@ -222,7 +236,12 @@ export async function runOptimize(argv: readonly string[], io: CliIo): Promise<n
   // runs. An average is judged at both hands, so the criteria are expanded
   // for the larger (TDD §8), which is what `handSizeForMode` says.
   const mode = args.mode ?? modeOf(read.value);
-  const template: Template = { ...read.value, mode, hand: { size: handSizeForMode(mode) } };
+  const template: Template = {
+    ...read.value,
+    mode,
+    hand: { size: handSizeForMode(mode) },
+    weighted: args.weighted ?? read.value.weighted === true,
+  };
   const install = await loadInstall(args.workdir);
   if (!install.ok) return fail(io, install.errors);
   const { cards, setnames, header } = install.value;

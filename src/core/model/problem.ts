@@ -6,6 +6,7 @@
  */
 
 import { MAX_RANGES } from '../criteria/ast';
+import { choose } from '../prob/binomial';
 
 /** Classes, the blank class included: a class mask is a non-negative 32-bit integer. */
 export const MAX_CLASSES = 30;
@@ -62,6 +63,18 @@ export interface CompiledCriterion {
    * slot and two more under its ceiling.
    */
   reqs?: CompiledRequirement[];
+  /**
+   * What a hand meeting it is WORTH (PRD §5.6, weighted criteria). A positive
+   * whole number; absent is 1, which is every criterion of an unweighted run
+   * and is why such a run is byte for byte what it always was.
+   *
+   * A hand meeting several criteria is worth the HIGHEST of their weights, not
+   * their sum — it is one hand, and the best thing it can do is the best thing
+   * it can do. Whole numbers, because the score is `Σ w · ways` and exactness
+   * (TDD §10.3) rests on that sum being an integer; `validateProblem` holds the
+   * largest weight to what `C(N, H)` leaves below 2^53.
+   */
+  weight?: number;
 }
 
 export interface HandSize {
@@ -111,6 +124,19 @@ function checkMask(mask: number, classCount: number, where: string, role: string
     );
   if (mask % 2 === BLANK_BIT)
     throw new RangeError(`${where}: the blank class (bit 0) cannot ${role}`);
+}
+
+/**
+ * The largest weight any criterion of `problem` carries, and never below 1: a
+ * problem with no criteria, and one whose criteria are all unweighted, both
+ * answer 1, which is what makes the weighted score of an unweighted problem
+ * the probability it always was.
+ */
+export function maxCriterionWeight(problem: Pick<Problem, 'criteria'>): number {
+  let most = 1;
+  for (const { weight } of problem.criteria)
+    if (weight !== undefined && weight > most) most = weight;
+  return most;
 }
 
 /** Throws unless `H` is a hand the engine can score from a deck of `deckSize`. */
@@ -168,7 +194,11 @@ export function validateProblem(problem: Problem): void {
       );
   });
 
-  criteria.forEach(({ slots, limits, reqs }, criterion) => {
+  criteria.forEach(({ slots, limits, reqs, weight }, criterion) => {
+    if (weight !== undefined && (!Number.isSafeInteger(weight) || weight < 1))
+      throw new RangeError(
+        `criterion ${criterion}: a weight is a positive whole number — the score is a sum of weights, and exactness rests on that — not ${weight}`,
+      );
     slots.forEach((mask, slot) => {
       checkMask(mask, classes.length, `criterion ${criterion}, slot ${slot}`, 'fill a requirement');
     });
@@ -181,6 +211,30 @@ export function validateProblem(problem: Problem): void {
     if (reqs === undefined) return;
     checkRequirements(reqs, slots, classes.length, criterion);
   });
+
+  for (const { H } of problem.handSizes) checkWeightBound(deckSize, H, maxCriterionWeight(problem));
+}
+
+/**
+ * THE EXACTNESS BOUND for weighted criteria (TDD §10.3). A weighted numerator
+ * is `Σ_h w(h) · Π_c C(n_c, h_c)`, and every hand is counted once by exactly
+ * one composition, so the whole sum is at most `max(w) · C(N, H)` — with
+ * `C(60, 6) = 50,063,860` that leaves room for weights up to 179,914,198, and
+ * far more for a smaller deck. Past it the sum would be ROUNDED and two decks
+ * could then tie, or fail to, by accident. So this throws rather than answer
+ * inexactly, which is the choice `compareScores` and `rankKey` already make
+ * about a blend.
+ *
+ * Checked per HAND SIZE, since `C(N, 6) > C(N, 5)`: a weight a going-first run
+ * can score exactly is not necessarily one an average can.
+ */
+export function checkWeightBound(deckSize: number, H: number, maxWeight: number): void {
+  if (maxWeight === 1) return;
+  const den = choose(deckSize, H);
+  if (Number.isSafeInteger(maxWeight * den)) return;
+  throw new RangeError(
+    `a weight of ${maxWeight} cannot be scored exactly at a hand of ${H}: the score would reach ${maxWeight} × C(${deckSize}, ${H}) = ${maxWeight} × ${den}, past 2^53 — the largest weight this deck and hand allow is ${Math.floor(Number.MAX_SAFE_INTEGER / den)}`,
+  );
 }
 
 /**

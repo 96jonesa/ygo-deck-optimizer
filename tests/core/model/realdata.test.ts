@@ -42,6 +42,7 @@ describe.skipIf(!EDOPRO_WORKDIR)('the motivating example against a real install 
     expect(createScorer(compiled.problem, 5).score([23, 3, 3, 8, 3])).toEqual({
       num: 46185,
       den: 658008,
+      successNum: 46185,
     });
   });
 
@@ -264,15 +265,19 @@ describe.skipIf(!EDOPRO_WORKDIR)(
     });
 
     it('reports each mode’s best as the exact fraction of its own hand', () => {
-      expect(modes().first.best.score.parts).toEqual([
-        { H: 5, weight: 1, num: 527_097, den: 658_008 },
-      ]);
-      expect(modes().second.best.score.parts).toEqual([
-        { H: 6, weight: 1, num: 3_632_237, den: 3_838_380 },
-      ]);
+      // `successNum` is the same number as `num` throughout: nothing is weighted.
+      const part = (H: number, num: number, den: number) => ({
+        H,
+        weight: 1,
+        num,
+        den,
+        successNum: num,
+      });
+      expect(modes().first.best.score.parts).toEqual([part(5, 527_097, 658_008)]);
+      expect(modes().second.best.score.parts).toEqual([part(6, 3_632_237, 3_838_380)]);
       expect(modes().average.best.score.parts).toEqual([
-        { H: 5, weight: 1, num: 518_046, den: 658_008 },
-        { H: 6, weight: 1, num: 3_605_820, den: 3_838_380 },
+        part(5, 518_046, 658_008),
+        part(6, 3_605_820, 3_838_380),
       ]);
       expect(modes().average.best.blend).toEqual({ num: 39_766_530, den: 46_060_560 });
     });

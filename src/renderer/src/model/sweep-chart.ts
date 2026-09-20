@@ -1,12 +1,12 @@
 import type { Fraction, LineSweep, SweepCell } from '../../../shared/types';
-import { countsLabel, exactText, fractionText, partLines, percentText } from './run-format';
+import { countsLabel, exactText, partLines, scoreText } from './run-format';
 
 // The geometry of one line's sweep (PRD §5.6): copies across, the best
 // probability reachable at that count up. Inline SVG, so there is no charting
 // library to disagree with the engine.
 //
 // The arithmetic here places a PIXEL and nothing else. No number this file
-// computes is ever shown as a number: every value on screen is `percentText`
+// computes is ever shown as a number: every value on screen is `scoreText`
 // or `exactText` of the exact fraction the engine returned, and the best
 // count is the engine's own `argmax`, never a maximum found here. Two cells
 // with the same exact score therefore land on exactly the same height, which
@@ -39,7 +39,8 @@ export interface ChartPoint {
   count: number;
   x: number;
   y: number;
-  percent: string;
+  /** The score as shown: a percentage, or an expected weight when the run is weighted. */
+  value: string;
   exact: string;
   /** The engine's argmax: a count at which the overall best is reached. */
   best: boolean;
@@ -89,7 +90,11 @@ const round = (value: number): number => Math.round(value * 100) / 100;
  * axis. That is why `low`, `high` and `zeroBased` come out with the geometry —
  * a chart that does not start at zero has to say so.
  */
-export function sweepChart(sweep: LineSweep, box: ChartBox = CHART_BOX): SweepChart {
+export function sweepChart(
+  sweep: LineSweep,
+  box: ChartBox = CHART_BOX,
+  weighted = false,
+): SweepChart {
   const cells = sweep.cells;
   const plotWidth = box.width - box.left - box.right;
   const plotHeight = box.height - box.top - box.bottom;
@@ -142,19 +147,19 @@ export function sweepChart(sweep: LineSweep, box: ChartBox = CHART_BOX): SweepCh
   const copies = (count: number): string => `${count} cop${count === 1 ? 'y' : 'ies'}`;
   const points = cells.map((cell: SweepCell): ChartPoint => {
     const best = argmax.has(cell.count);
-    const percent = percentText(cell.best.blend);
+    const value = scoreText(cell.best.blend, weighted);
     const exact = exactText(cell.best.blend);
     return {
       count: cell.count,
       x: xOf(cell.count),
       y: yOf(cell.best.blend),
-      percent,
+      value,
       exact,
       best,
       title: [
-        `${copies(cell.count)}: ${fractionText(cell.best.blend)}`,
-        ...partLines(cell.best.score).map(
-          (part) => `${part.label}: ${part.exact} = ${part.percent}`,
+        `${copies(cell.count)}: ${exact} = ${value}`,
+        ...partLines(cell.best.score, weighted).map(
+          (part) => `${part.label}: ${part.exact} = ${part.value}`,
         ),
         ...(best ? ['the best this template reaches'] : []),
       ].join(' — '),
@@ -191,8 +196,8 @@ export function sweepChart(sweep: LineSweep, box: ChartBox = CHART_BOX): SweepCh
     points,
     segments: cells.length === 1 ? [] : segments,
     ticks,
-    low: percentText(lowest.best.blend),
-    high: percentText(highest.best.blend),
+    low: scoreText(lowest.best.blend, weighted),
+    high: scoreText(highest.best.blend, weighted),
     zeroBased: lowest.best.blend.num === 0,
     bestAt: countsLabel(sweep.argmax),
   };

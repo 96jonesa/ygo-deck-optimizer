@@ -93,9 +93,18 @@ export interface ScoredVector {
   /**
    * The whole score as ONE exact fraction, every vector of a run over the
    * same denominator — so two vectors tie iff their `blend.num` are equal.
-   * For one hand size it is that hand's fraction.
+   * For one hand size it is that hand's fraction. What the run RANKS by: the
+   * expected weight per hand when the criteria are weighted (PRD §5.6), and
+   * the probability when they are not.
    */
   blend: Fraction;
+  /**
+   * P(at least one criterion), over the same denominator — the number the tool
+   * reported before weights existed, kept beside the weighted one because both
+   * are wanted and the second costs one more walk of the same success set.
+   * Identical to `blend` when nothing is weighted.
+   */
+  success: Fraction;
 }
 
 export interface RankedVector extends ScoredVector {
@@ -154,6 +163,15 @@ export interface PlateauResult {
 
 export interface OptimizeOutputs {
   handSizes: HandSize[];
+  /**
+   * Whether the score is a WEIGHTED score — the expected weight per hand —
+   * rather than a probability (PRD §5.6). It travels with the result because a
+   * finished run's readout is a pure function of its result (TDD §3): what the
+   * headline number IS cannot be looked up from a template that has moved on.
+   */
+  weighted: boolean;
+  /** The largest weight any criterion of the run carries; 1 when none is weighted. */
+  maxWeight: number;
   /** Vectors scored, of the exact number there are. */
   done: number;
   total: Count;
@@ -194,7 +212,7 @@ export type OptimizeResult =
 
 interface Ranker {
   blend: BlendScorer;
-  /** `rankKey / rankDen` is the blended probability, exactly. */
+  /** `rankKey / rankDen` is the blended score, exactly. */
   rankDen: number;
   scored(classTotals: ArrayLike<number>): ScoredVector;
 }
@@ -206,25 +224,33 @@ function gcd(a: bigint, b: bigint): bigint {
 
 function createRanker(problem: Problem): Ranker {
   const blend = createBlendScorer(problem);
-  // The denominator `rankKey` is over: the total weight times the least common denominator.
+  // The denominator `rankKey` is over: the total weight times the least common
+  // denominator. Checked here in BigInt rather than in float64, and with the
+  // largest CRITERION weight in it — a part's numerator is up to `max(w) · den`
+  // rather than `den`, so that is what a key is bounded by.
   const common = blend.scorers.reduce((lcm, { den }) => {
     const next = BigInt(den);
     return (lcm / gcd(lcm, next)) * next;
   }, 1n);
   const weight = problem.handSizes.reduce((sum, hand) => sum + BigInt(hand.weight), 0n);
-  if (weight * common > BigInt(Number.MAX_SAFE_INTEGER))
+  if (BigInt(blend.maxWeight) * weight * common > BigInt(Number.MAX_SAFE_INTEGER))
     throw new RangeError(
-      'these hand-size weights cannot be ranked in exact integers: a score would pass 2^53 — use smaller weights, such as 3 : 2',
+      'these weights cannot be ranked in exact integers: a score would pass 2^53 — use smaller criterion weights, or a smaller hand-size blend such as 3 : 2',
     );
   const rankDen = Number(weight * common);
   return {
     blend,
     rankDen,
-    scored: (classTotals) => ({
-      classTotals: Array.from(classTotals),
-      score: blend.score(classTotals),
-      blend: { num: blend.rankKey(classTotals), den: rankDen },
-    }),
+    scored: (classTotals) => {
+      const score = blend.score(classTotals);
+      const keys = blend.keysOf(score);
+      return {
+        classTotals: Array.from(classTotals),
+        score,
+        blend: { num: keys.blend, den: rankDen },
+        success: { num: keys.success, den: rankDen },
+      };
+    },
   };
 }
 
@@ -495,19 +521,21 @@ function search(compiled: Compiled, opts: OptimizeOptions): OptimizeResult {
       continue;
     }
     const flat = counts.every((count) => cellKey.get(count) === bestKey);
-    const { classTotals, score, blend: fraction } = best;
+    const { classTotals, score, blend: fraction, success } = best;
     irrelevant.push({
       lineId: line.id,
       flat,
       min: counts[0]!,
       max: counts.at(-1)!,
-      best: { classTotals, score, blend: fraction },
+      best: { classTotals, score, blend: fraction, success },
       ...(flat ? {} : { cells }),
     });
   }
 
   const outputs: OptimizeOutputs = {
     handSizes: problem.handSizes,
+    weighted: compiled.weighted,
+    maxWeight: ranker.blend.maxWeight,
     done,
     total,
     rawRatios: toCount(
@@ -629,6 +657,8 @@ export interface BreakdownCriterion {
    * going first, and its share of an average is halved rather than hidden.
    */
   parts?: readonly boolean[];
+  /** What meeting it is worth (PRD §5.6); absent is 1. Reported, never scored — see `breakdown`. */
+  weight?: number;
 }
 
 export interface CriterionScore {
@@ -636,6 +666,8 @@ export interface CriterionScore {
   name?: string;
   score: BlendScore;
   blend: Fraction;
+  /** What the run counts a hand meeting it as being worth; 1 when nothing is weighted. */
+  weight: number;
 }
 
 /**
@@ -645,6 +677,17 @@ export interface CriterionScore {
  * alternatives of ALL the criteria together, duplicates removed, so its
  * indices are not the template's. Each criterion is judged as a problem of
  * its own instead — the same classes, its own alternatives.
+ *
+ * WEIGHTS ARE REPORTED, NOT APPLIED. A criterion's own number is its
+ * PROBABILITY, in a weighted run exactly as in an unweighted one, because that
+ * is the question the row answers — how often this happens — and it is what
+ * makes the rows of a weighted run comparable with those of the same template
+ * unweighted. There is no per-criterion "contribution" to the weighted total to
+ * put here instead: the total is a MAXIMUM over the criteria a hand meets, not
+ * a sum, so it does not decompose criterion by criterion at all, and a column
+ * of `weight × probability` would add up to something the run never computed.
+ * The weight is carried beside the probability so the reader can see which
+ * criterion the score is leaning on.
  */
 export function breakdown(
   compiled: Compiled,
@@ -662,9 +705,12 @@ export function breakdown(
   // The same ceiling and limit dropping the whole problem got, so a criterion
   // alone is judged exactly as it is judged among the others.
   const largestHand = Math.max(...compiled.problem.handSizes.map(({ H }) => H));
-  return criteria.map(({ id, name, alternatives, parts }) => {
+  return criteria.map(({ id, name, alternatives, parts, weight }) => {
+    // Its own alternatives, unweighted whatever the run does: this row is a
+    // probability, and a weight here would scale it into something else.
     const own = alternatives.map(
-      (alternative) => compileCriterion(alternative, maskOf, largestHand).criterion,
+      (alternative) =>
+        compileCriterion({ ...alternative, weight: 1 }, maskOf, largestHand).criterion,
     );
     // Every one of its own alternatives in the parts it counts for, none in
     // the others — the same shape of blend the run has, so its numbers sit
@@ -680,6 +726,8 @@ export function breakdown(
       criteria: own,
     };
     const { score, blend } = createRanker(alone).scored(classTotals);
-    return name === undefined ? { id, score, blend } : { id, name, score, blend };
+    const row: CriterionScore = { id, score, blend, weight: weight ?? 1 };
+    if (name !== undefined) row.name = name;
+    return row;
   });
 }

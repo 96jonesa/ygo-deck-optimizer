@@ -10,7 +10,7 @@ import { matcher } from '../../src/core/desc/evaluate';
 import { type ImpliesContext, implies } from '../../src/core/desc/implies';
 import { type DescContext, parse } from '../../src/core/desc/parser';
 import { print } from '../../src/core/desc/print';
-import { RUN_MODES } from '../../src/core/model/template';
+import { CRITERION_WEIGHT_MAX, RUN_MODES } from '../../src/core/model/template';
 import {
   CRITERION_SYNTAX,
   DESCRIPTION_SYNTAX,
@@ -19,6 +19,7 @@ import {
   FACT_SECTIONS,
   FILE_REFERENCE,
   RUN_MODE_REFERENCE,
+  WEIGHTING_REFERENCE,
 } from '../../src/shared/syntax';
 import { cardRecord, contextOf, FakeCards, FakeGroups } from '../helpers/desc-context';
 import { checkExampleRow, syntaxRows } from '../helpers/syntax-rows';
@@ -298,8 +299,13 @@ describe('CRITERION_SYNTAX', () => {
 });
 
 describe('FACT_SECTIONS', () => {
-  it('holds the run modes, the files and the exports, in that order', () => {
-    expect(FACT_SECTIONS).toEqual([RUN_MODE_REFERENCE, FILE_REFERENCE, EXPORT_REFERENCE]);
+  it('holds the run modes, weighting, the files and the exports, in that order', () => {
+    expect(FACT_SECTIONS).toEqual([
+      RUN_MODE_REFERENCE,
+      WEIGHTING_REFERENCE,
+      FILE_REFERENCE,
+      EXPORT_REFERENCE,
+    ]);
   });
 
   it('gives every section, group and row something to say', () => {
@@ -318,6 +324,28 @@ describe('FACT_SECTIONS', () => {
   it('gives every section a distinct id, shared with no example section', () => {
     const ids = [...FACT_SECTIONS, ...EXAMPLE_SECTIONS].map((section) => section.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+/**
+ * Weighting adds no grammar, so there is nothing here for the executable
+ * reference to parse — what there IS to hold is that the numbers the prose
+ * quotes are the numbers the code enforces.
+ */
+describe('WEIGHTING_REFERENCE', () => {
+  it('quotes the bound the editor actually enforces', () => {
+    expect(CRITERION_WEIGHT_MAX).toBe(1000);
+    const bounds = WEIGHTING_REFERENCE.rows.filter((row) =>
+      row.means.includes(`1 to ${CRITERION_WEIGHT_MAX}`),
+    );
+    expect(bounds).toHaveLength(1);
+  });
+
+  it('says the two things a reader most needs: highest, not sum; and reversible', () => {
+    const text = WEIGHTING_REFERENCE.rows.map((row) => row.means).join(' ');
+    expect(text).toContain('HIGHEST');
+    expect(text).toContain('never their sum');
+    expect(text).toContain('exactly the answer the template had before');
   });
 });
 
@@ -341,8 +369,20 @@ describe('src/shared/syntax.ts', () => {
   const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
   it('imports nothing at runtime', () => {
-    const imports = code.match(/^\s*(import|export)\s[^;]*\sfrom\s.*$/gm) ?? [];
+    // The `from` must be followed by a QUOTED module specifier, which every
+    // real import has and no prose does: the reference is full of sentences
+    // like "a whole number from 1 to 1000", and a bare `\sfrom\s` called one
+    // of them an import.
+    const imports = code.match(/^\s*(import|export)\s[^;]*?\sfrom\s+['"][^'"]*['"]/gm) ?? [];
     expect(imports.filter((line) => !/^\s*(import|export)\s+type\s/.test(line))).toEqual([]);
+  });
+
+  it('would still catch a real runtime import, on one line or several', () => {
+    const guard = /^\s*(import|export)\s[^;]*?\sfrom\s+['"][^'"]*['"]/gm;
+    expect("import { parse } from '../core/desc/parser';").toMatch(guard);
+    expect("export { RUN_MODES } from '../core/model/template';").toMatch(guard);
+    expect("import {\n  parse,\n  print,\n} from '../core/desc/parser';").toMatch(guard);
+    expect('a whole number from 1 to 1000').not.toMatch(guard);
   });
 
   it('requires nothing at runtime either', () => {

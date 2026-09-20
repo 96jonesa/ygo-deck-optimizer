@@ -69,6 +69,19 @@ export function bruteForceSucceeds(problem: Problem, h: ArrayLike<number>): bool
   return problem.criteria.some((criterion) => bruteForceMeets(criterion, h));
 }
 
+/**
+ * What one hand is WORTH: the highest weight among the criteria it meets, and
+ * 0 when it meets none (PRD §5.6 weighting). Every criterion is asked — there
+ * is no ordering and no short circuit here, which is the whole of what the
+ * engine's weigher does differently.
+ */
+export function bruteForceWeight(problem: Problem, h: ArrayLike<number>): number {
+  let best = 0;
+  for (const criterion of problem.criteria)
+    if (bruteForceMeets(criterion, h)) best = Math.max(best, criterion.weight ?? 1);
+  return best;
+}
+
 /** The exact numerator the slow way: every composition of `H`, judged by brute force. */
 export function referenceNumerator(problem: Problem, n: ArrayLike<number>, H: number): number {
   let sum = 0;
@@ -79,6 +92,31 @@ export function referenceNumerator(problem: Problem, n: ArrayLike<number>, H: nu
       ways *= choose(n[cls]!, held);
     });
     sum += ways;
+  }
+  return sum;
+}
+
+/**
+ * The weighted numerator the slow way, in BigInt: `Σ_h w(h) · Π_c C(n_c, h_c)`
+ * over every composition, `w` being the highest weight of the criteria the
+ * composition meets. It owes nothing to the success set — no storage side, no
+ * complement, no sorting — and nothing to float64, so it is also the check that
+ * the engine's exact integer really is the integer.
+ */
+export function referenceWeightedNumerator(
+  problem: Problem,
+  n: ArrayLike<number>,
+  H: number,
+): bigint {
+  let sum = 0n;
+  for (const h of compositions(problem.classes.length, H)) {
+    const weight = bruteForceWeight(problem, h);
+    if (weight === 0) continue;
+    let ways = 1n;
+    h.forEach((held, cls) => {
+      ways *= BigInt(choose(n[cls]!, held));
+    });
+    sum += BigInt(weight) * ways;
   }
   return sum;
 }

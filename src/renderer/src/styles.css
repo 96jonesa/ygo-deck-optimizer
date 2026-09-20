@@ -1003,11 +1003,11 @@ input.narrow-name {
  * 70 characters, and a control on its row costs it a third of that.
  */
 .line.criterion .line-main {
-  grid-template-columns: 3.5rem minmax(6rem, 1fr) auto;
+  grid-template-columns: 3.5rem minmax(6rem, 1fr) auto auto;
 }
 
 .line.criterion .line-buttons {
-  grid-column: 3;
+  grid-column: 4;
   grid-row: 1;
 }
 
@@ -1020,10 +1020,38 @@ input.narrow-name {
 }
 
 .line.criterion .criterion-when {
-  grid-column: 3;
+  grid-column: 4;
   grid-row: 2;
   margin-top: 2px;
   font-size: var(--fs-sm);
+}
+
+/* What meeting it is worth, beside the hand it is judged for; only while the
+   template weights its criteria, so the column is empty the rest of the time. */
+.line.criterion .criterion-weight {
+  display: flex;
+  grid-column: 3;
+  grid-row: 2;
+  gap: 0.35rem;
+  align-items: center;
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+}
+
+.line.criterion .criterion-weight .count {
+  width: 3.5rem;
+}
+
+/* The switch that turns weighting on, above the criteria it changes. */
+.weighting {
+  margin: 0.5rem 0 0.75rem;
+}
+
+.weighting label {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  font-weight: 600;
 }
 
 /* A criterion the RUN does not judge: still editable, visibly not counted. */
@@ -1266,6 +1294,17 @@ ul.readout {
   font-size: 28px;
   font-weight: 600;
   line-height: 1.2;
+}
+
+/* The probability, under a weighted headline: the same question as ever, and
+   free out of the same success set, so it is shown rather than replaced. */
+.headline-aside {
+  margin: 0.15rem 0 0;
+  font-size: var(--fs-sm);
+}
+
+.headline-aside .exact {
+  margin-left: 0.4rem;
 }
 
 .headline .exact {

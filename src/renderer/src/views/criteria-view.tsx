@@ -187,6 +187,7 @@ const SECTIONS = [
 export function CriteriaView() {
   const criteria = useApp((state) => state.template.criteria);
   const handSize = useApp((state) => state.template.hand.size);
+  const templateWeighted = useApp((state) => state.template.weighted === true);
   const analysis = useApp(selectAnalysis);
   const problem = useApp((state) => state.analysis.problem);
   const addCriterion = useApp((state) => state.addCriterion);
@@ -194,7 +195,13 @@ export function CriteriaView() {
   const setCriterionText = useApp((state) => state.setCriterionText);
   const setCriterionName = useApp((state) => state.setCriterionName);
   const setCriterionWhen = useApp((state) => state.setCriterionWhen);
+  const setCriterionWeight = useApp((state) => state.setCriterionWeight);
+  const setWeighted = useApp((state) => state.setWeighted);
   const moveCriterion = useApp((state) => state.moveCriterion);
+  // Whether weighting is on is the ANALYSIS's answer, like every other
+  // defaulted fact on this panel (TDD §3); the template's own field is what the
+  // switch writes back, and what shows before the first reply.
+  const weighted = analysis?.weighted ?? templateWeighted;
 
   const requirements = requirementRows(analysis);
   const limits = limitRows(analysis);
@@ -212,11 +219,13 @@ export function CriteriaView() {
       found={foundOf(criterion.id)}
       handSize={handSize}
       uncounted={foundOf(criterion.id)?.counted === false}
+      weighted={weighted}
       first={at === 0}
       last={at === criteria.length - 1}
       onText={(text) => setCriterionText(criterion.id, text)}
       onName={(name) => setCriterionName(criterion.id, name)}
       onWhen={(when) => setCriterionWhen(criterion.id, when)}
+      onWeight={(weight) => setCriterionWeight(criterion.id, weight)}
       onMove={(by) => moveCriterion(criterion.id, by)}
       onRemove={() => dropCriterion(criterion.id)}
     />
@@ -232,6 +241,32 @@ export function CriteriaView() {
         is written once.
       </p>
       <SyntaxReference section={CRITERION_SYNTAX} />
+
+      {/*
+        Weighting (PRD §5.6). One switch for the whole template, because it
+        decides what the ANSWER is — a probability, or the expected weight of a
+        hand — and a run cannot report half of each. Off, the weights are not
+        read at all and the template scores exactly as it would have if none
+        had ever been written, which is why turning it off is safe and
+        reversible.
+      */}
+      <div className="weighting">
+        <label htmlFor="criteria-weighted">
+          <input
+            type="checkbox"
+            id="criteria-weighted"
+            data-testid="criteria-weighted"
+            checked={weighted}
+            onChange={(event) => setWeighted(event.target.checked)}
+          />{' '}
+          Weight the criteria
+        </label>
+        <p className="hint flush" data-testid="criteria-weighted-note">
+          {weighted
+            ? 'A hand is worth the HIGHEST weight among the criteria it meets — never their sum — and the run ranks by the expected weight per hand. The plain chance of meeting any criterion is still reported beside it.'
+            : 'Every criterion counts the same, and the run ranks by the chance of meeting any one of them. Turn this on to say that some are worth more than others.'}
+        </p>
+      </div>
 
       {SECTIONS.map((section) => {
         const mine = criteria

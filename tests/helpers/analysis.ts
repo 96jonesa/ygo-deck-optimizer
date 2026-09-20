@@ -21,6 +21,7 @@ export function analysisOf(over: Partial<Analysis> = {}): Analysis {
     deckSize: 40,
     handSize: 5,
     mode: 'first',
+    weighted: false,
     lines: [],
     remainder: {
       id: 'remainder',
@@ -74,6 +75,7 @@ export function criterionOf(id: string, over: Partial<CriterionAnalysis> = {}): 
     id,
     text: `1x ${id}`,
     when: 'both',
+    weight: 1,
     counted: true,
     parsed: { ok: true, canonical: `1x ${id}` },
     alternatives: [`1x ${id}`],

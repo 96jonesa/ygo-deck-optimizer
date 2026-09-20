@@ -8,7 +8,12 @@ const DEN = 658_008;
 function cell(count: number, num: number): SweepCell {
   return {
     count,
-    best: { classTotals: [], score: { parts: [], pDisplay: num / DEN }, blend: { num, den: DEN } },
+    best: {
+      classTotals: [],
+      score: { parts: [], pDisplay: num / DEN },
+      blend: { num, den: DEN },
+      success: { num, den: DEN },
+    },
   };
 }
 
@@ -29,7 +34,7 @@ describe('sweepChart', () => {
         count: 1,
         x: 8,
         y: 10,
-        percent: '41.5744%',
+        value: '41.5744%',
         exact: '273,563 / 658,008',
         best: true,
         title: '1 copy: 273,563 / 658,008 = 41.5744% — the best this template reaches',
@@ -38,7 +43,7 @@ describe('sweepChart', () => {
         count: 2,
         x: 140,
         y: 40.6,
-        percent: '41.3428%',
+        value: '41.3428%',
         exact: '272,039 / 658,008',
         best: false,
         title: '2 copies: 272,039 / 658,008 = 41.3428%',
@@ -47,7 +52,7 @@ describe('sweepChart', () => {
         count: 3,
         x: 272,
         y: 100,
-        percent: '40.8933%',
+        value: '40.8933%',
         exact: '269,081 / 658,008',
         best: false,
         title: '3 copies: 269,081 / 658,008 = 40.8933%',
@@ -127,7 +132,7 @@ describe('sweepChart', () => {
     expect(chart.single).toBe(true);
     expect(chart.segments).toEqual([]);
     expect(chart.points).toHaveLength(1);
-    expect(chart.points[0]?.percent).toBe('7.0189%');
+    expect(chart.points[0]?.value).toBe('7.0189%');
   });
 
   it('draws inside the box it is given', () => {

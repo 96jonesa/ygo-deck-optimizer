@@ -335,13 +335,15 @@ export class TemplateService {
     // at 0 and shown — it is not part of this run at all, and a row of zeroes
     // beside the ones that were judged would read as a result rather than an
     // absence. It is the criteria editor that still shows it, dimmed.
-    const criteria = resolved.resolved.criteria.flatMap(({ id, name, when, alternatives }) => {
-      const mine = parts.map((part) => countsFor(when, part));
-      if (!mine.some(Boolean)) return [];
-      const out: BreakdownCriterion = { id, alternatives, parts: mine };
-      if (name !== undefined) out.name = name;
-      return [out];
-    });
+    const criteria = resolved.resolved.criteria.flatMap(
+      ({ id, name, when, weight, alternatives }) => {
+        const mine = parts.map((part) => countsFor(when, part));
+        if (!mine.some(Boolean)) return [];
+        const out: BreakdownCriterion = { id, alternatives, parts: mine, weight };
+        if (name !== undefined) out.name = name;
+        return [out];
+      },
+    );
     const labels = lineLabels(validated.template, resolved.resolved);
     return {
       ok: true,

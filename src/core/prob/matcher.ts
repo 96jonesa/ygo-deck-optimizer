@@ -184,6 +184,38 @@ export function compileMatcher(problem: Problem, opts: MatcherOptions = {}): Mat
   };
 }
 
+/** What a hand is worth: the highest weight among the criteria it meets, 0 when it meets none. */
+export type Weigher = (h: ArrayLike<number>, H: number) => number;
+
+/**
+ * The WEIGHER for `problem` (PRD §5.6): a hand meeting several criteria is
+ * worth the highest of their weights, never their sum — it is one hand.
+ *
+ * The criteria are sorted by weight, heaviest first, so the FIRST criterion met
+ * is the best one and the loop stops there. That is not an optimization laid on
+ * top of a maximum: it is why weighting costs nothing. An unweighted problem
+ * has one weight throughout, the sort is the identity (`sort` is stable), and
+ * the loop is the matcher's own — stopping at the first criterion met, exactly
+ * as `compileMatcher` does, and answering 1 where it answers `true`.
+ */
+export function compileWeigher(problem: Problem, opts: MatcherOptions = {}): Weigher {
+  validateProblem(problem);
+  const ordered = [...chosen(problem, opts)].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
+  const weights = ordered.map(({ weight }) => weight ?? 1);
+  const criteria = ordered.map(compileCriterion);
+  if (criteria.every(({ capMasks }) => capMasks.length === 0))
+    return (h, H) => {
+      for (let at = 0; at < criteria.length; at++)
+        if (meets(criteria[at]!, h, H)) return weights[at]!;
+      return 0;
+    };
+  return (h, H) => {
+    for (let at = 0; at < criteria.length; at++)
+      if (meets(criteria[at]!, h, H) && withinCeilings(criteria[at]!, h)) return weights[at]!;
+    return 0;
+  };
+}
+
 /** One hand, checked: `h` must hold `H` whole cards over the classes of `problem`. */
 export function handSucceeds(problem: Problem, h: ArrayLike<number>, H: number): boolean {
   const matches = compileMatcher(problem);

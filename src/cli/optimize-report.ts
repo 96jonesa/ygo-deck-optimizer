@@ -110,9 +110,21 @@ export function searchSection(run: OptimizeOutputs, partial: boolean): string {
   return ['Search — every class vector, scored exactly', table(rows)].join('\n');
 }
 
+/**
+ * A score as a number: a percentage where it is a probability, and an EXPECTED
+ * WEIGHT per hand where the criteria are weighted (PRD §5.6) — which can be
+ * anything from 0 to the largest weight, so a percentage would be nonsense.
+ */
+export function value(fraction: Fraction, weighted: boolean): string {
+  return weighted ? (fraction.num / fraction.den).toFixed(4) : percent(fraction.num / fraction.den);
+}
+
 /** `going first: 41.5744% (273,563 / 658,008)` — a part's own exact answer. */
-function partText(part: BlendPart): string {
-  return `going ${part.H === 5 ? 'first' : 'second'}: ${percent(part.num / part.den)} (${fraction(part)})`;
+function partText(part: BlendPart, weighted: boolean): string {
+  const head = `going ${part.H === 5 ? 'first' : 'second'}: ${value(part, weighted)} (${fraction(part)})`;
+  return weighted
+    ? `${head}, P(success) ${percent(part.successNum / part.den)} (${int(part.successNum)} / ${int(part.den)})`
+    : head;
 }
 
 /**
@@ -120,12 +132,14 @@ function partText(part: BlendPart): string {
  * key, and the two hands have DIFFERENT denominators — C(40,5) against
  * C(40,6) — so both are printed whole: one fraction could only be one of them.
  */
-function scoreText({ score, blend }: ScoredVector): string {
-  const head = `${fraction(blend)} = ${percent(score.pDisplay)}`;
-  return score.parts.length === 1 ? head : `${head}\n  ${score.parts.map(partText).join('\n  ')}`;
+function scoreText({ score, blend }: ScoredVector, weighted: boolean): string {
+  const head = `${fraction(blend)} = ${value(blend, weighted)}`;
+  return score.parts.length === 1
+    ? head
+    : `${head}\n  ${score.parts.map((part) => partText(part, weighted)).join('\n  ')}`;
 }
 
-export function bestSection(compiled: Compiled, best: RankedVector): string {
+export function bestSection(compiled: Compiled, best: RankedVector, weighted: boolean): string {
   const expanded = expandClassVector(compiled.classes, best.classTotals);
   const copies = copiesByLine(compiled, best.classTotals);
   const noted = new Set<number>();
@@ -139,8 +153,11 @@ export function bestSection(compiled: Compiled, best: RankedVector): string {
     const cls = expanded.find((c) => c.lines.some((line) => line.id === id))!;
     return [nameOf(id), copies.get(id)!, note(cls)];
   });
+  const headline = weighted
+    ? `Best ratio — expected weight per hand = ${scoreText(best, true)}\n  P(success) = ${fraction(best.success)} = ${percent(best.success.num / best.success.den)}`
+    : `Best ratio — P(success) = ${scoreText(best, false)}`;
   return [
-    `Best ratio — P(success) = ${scoreText(best)}`,
+    headline,
     table([['line', 'copies', ''], ...rows], [1]),
     `  ${formatCount(best.rawRatios)} raw ratio(s) are this deck as far as the criteria can tell`,
   ].join('\n');
@@ -153,8 +170,9 @@ export function rankedSection(compiled: Compiled, run: OptimizeOutputs, top: num
   const blends = run.handSizes.length > 1;
   const header = [
     '#',
-    'P',
+    run.weighted ? 'weight' : 'P',
     'exact',
+    ...(run.weighted ? ['P(success)'] : []),
     ...(blends
       ? run.handSizes.flatMap(({ H }) => [`going ${H === 5 ? 'first' : 'second'}`, `${H} exact`])
       : []),
@@ -166,8 +184,9 @@ export function rankedSection(compiled: Compiled, run: OptimizeOutputs, top: num
     const copies = copiesByLine(compiled, entry.classTotals);
     return [
       String(at + 1),
-      percent(entry.score.pDisplay),
+      value(entry.blend, run.weighted),
       fraction(entry.blend),
+      ...(run.weighted ? [percent(entry.success.num / entry.success.den)] : []),
       ...(blends
         ? entry.score.parts.flatMap((part) => [percent(part.num / part.den), fraction(part)])
         : []),
@@ -205,7 +224,11 @@ export function plateauSection(run: OptimizeOutputs): string {
 }
 
 /** `0: 1.2%   1: 2.4%   2–3: 3.1% *` — neighbouring counts with the same exact score are one entry. */
-function cellsRow(cells: readonly SweepCell[], argmax: readonly number[]): string {
+function cellsRow(
+  cells: readonly SweepCell[],
+  argmax: readonly number[],
+  weighted: boolean,
+): string {
   const runs: SweepCell[][] = [];
   for (const cell of cells) {
     const run = runs.at(-1);
@@ -218,7 +241,7 @@ function cellsRow(cells: readonly SweepCell[], argmax: readonly number[]): strin
     .map((run) => {
       const [first] = run as [SweepCell, ...SweepCell[]];
       const counts = formatCounts(run.map((cell) => cell.count));
-      return `${counts}: ${percent(first.best.score.pDisplay)}${argmax.includes(first.count) ? ' *' : ''}`;
+      return `${counts}: ${value(first.best.blend, weighted)}${argmax.includes(first.count) ? ' *' : ''}`;
     })
     .join('   ');
 }
@@ -237,7 +260,7 @@ export function irrelevantSection(run: OptimizeOutputs): string {
       `  ${nameOf(line.lineId)}: no loss at ${formatCounts(free)}; beyond, its cards crowd out ones that matter`,
     );
     // The remainder can take twenty counts and more: eight to a row.
-    const entries = cellsRow(line.cells!, free).split('   ');
+    const entries = cellsRow(line.cells!, free, run.weighted).split('   ');
     for (let at = 0; at < entries.length; at += 8)
       out.push(`      ${entries.slice(at, at + 8).join('   ')}`);
   }
@@ -247,11 +270,11 @@ export function irrelevantSection(run: OptimizeOutputs): string {
 
 export function sweepsSection(run: OptimizeOutputs): string {
   const out = [
-    'Sweeps — the best P with a line held at each count, everything else re-optimized (* = the best)',
+    `Sweeps — the best ${run.weighted ? 'weighted score' : 'P'} with a line held at each count, everything else re-optimized (* = the best)`,
   ];
   const rows = run.sweeps.map((sweep) => [
     nameOf(sweep.lineId),
-    cellsRow(sweep.cells, sweep.argmax),
+    cellsRow(sweep.cells, sweep.argmax, run.weighted),
   ]);
   out.push(rows.length === 0 ? '  (no line matters)' : table(rows));
   return out.join('\n');
@@ -263,10 +286,11 @@ export function sweepDetailSection(
   argmax: readonly number[],
   fixed: readonly FixedSweepCell[],
   compiled: Compiled,
+  weighted: boolean,
 ): string {
   const held = (count: number): string => {
     const cell = fixed.find((c) => c.count === count);
-    return cell === undefined || !cell.feasible ? '-' : percent(cell.best.score.pDisplay);
+    return cell === undefined || !cell.feasible ? '-' : value(cell.best.blend, weighted);
   };
   const title = `Sweep of \`${nameOf(lineId)}\` — "held" keeps every other line at the best ratio, the remainder absorbing the difference`;
   if (cells === undefined)
@@ -281,7 +305,7 @@ export function sweepDetailSection(
     const copies = copiesByLine(compiled, best.classTotals);
     return [
       `${count}${argmax.includes(count) ? ' *' : ''}`,
-      percent(best.score.pDisplay),
+      value(best.blend, weighted),
       fraction(best.blend),
       held(count),
       others.map((id) => `${nameOf(id)} ${copies.get(id)}`).join(', '),
@@ -293,20 +317,45 @@ export function sweepDetailSection(
   ].join('\n');
 }
 
-export function breakdownSection(rows: readonly CriterionScore[], best: RankedVector): string {
+/**
+ * Each criterion's own PROBABILITY at the best ratio — in a weighted run too,
+ * where the weight is a column beside it rather than something folded into it
+ * (`breakdown`). The total row is therefore P(any of them), which is the
+ * run's `success` and not its weighted headline.
+ */
+export function breakdownSection(
+  rows: readonly CriterionScore[],
+  best: RankedVector,
+  weighted: boolean,
+): string {
   const blends = best.score.parts.length > 1;
   const parts = ({ score }: { score: BlendScore }) =>
-    blends ? score.parts.flatMap((part) => [percent(part.num / part.den), fraction(part)]) : [];
+    blends
+      ? score.parts.flatMap((part) => [percent(part.successNum / part.den), fraction(part)])
+      : [];
   const body = rows.map((row) => [
     row.name === undefined ? row.id : `${row.id} (${row.name})`,
-    percent(row.score.pDisplay),
+    ...(weighted ? [`×${row.weight}`] : []),
+    percent(row.blend.num / row.blend.den),
     fraction(row.blend),
     ...parts(row),
   ]);
-  body.push(['any of them', percent(best.score.pDisplay), fraction(best.blend), ...parts(best)]);
-  return ['Per criterion — at the best ratio, each criterion by itself', table(body, [1])].join(
-    '\n',
-  );
+  body.push([
+    'any of them',
+    ...(weighted ? [''] : []),
+    percent(best.success.num / best.success.den),
+    fraction(best.success),
+    ...(blends
+      ? best.score.parts.flatMap((part) => [
+          percent(part.successNum / part.den),
+          `${int(part.successNum)} / ${int(part.den)}`,
+        ])
+      : []),
+  ]);
+  return [
+    `Per criterion — at the best ratio, each criterion by itself${weighted ? ' (probabilities; × is its weight)' : ''}`,
+    table(body, [1]),
+  ].join('\n');
 }
 
 export interface OptimizeReport {
@@ -335,7 +384,7 @@ export function formatOptimizeReport(report: OptimizeReport): string {
     classesSection(a),
     ...issueSections(a, ['warning', 'notice']),
     searchSection(run, report.partial),
-    bestSection(compiled, run.best),
+    bestSection(compiled, run.best, run.weighted),
     rankedSection(compiled, run, report.top),
     plateauSection(run),
     irrelevantSection(run),
@@ -349,9 +398,10 @@ export function formatOptimizeReport(report: OptimizeReport): string {
             report.sweep.argmax,
             report.sweep.fixed,
             compiled,
+            run.weighted,
           ),
         ]),
-    breakdownSection(report.breakdown, run.best),
+    breakdownSection(report.breakdown, run.best, run.weighted),
   ];
   return `${sections.join('\n\n')}\n`;
 }

@@ -13,7 +13,7 @@ import {
   shortLabel,
 } from '../../../../src/renderer/src/model/results';
 import type { RunDroppedLimit, RunLimit, RunResult, SweepCell } from '../../../../src/shared/types';
-import { motivatingResult } from '../../../helpers/motivating-run';
+import { motivatingResult, motivatingWeighted } from '../../../helpers/motivating-run';
 
 const SQL = await initSqlJs();
 const RESULT = motivatingResult(SQL);
@@ -24,7 +24,12 @@ const DEN = 658_008;
 function cell(count: number, num: number): SweepCell {
   return {
     count,
-    best: { classTotals: [], score: { parts: [], pDisplay: num / DEN }, blend: { num, den: DEN } },
+    best: {
+      classTotals: [],
+      score: { parts: [], pDisplay: num / DEN },
+      blend: { num, den: DEN },
+      success: { num, den: DEN },
+    },
   };
 }
 
@@ -104,6 +109,7 @@ describe('breakdownRows', () => {
         label: 'A, B and any monster',
         percent: '7.0189%',
         exact: '46,185 / 658,008',
+        weight: 1,
         parts: [],
       },
       {
@@ -111,6 +117,7 @@ describe('breakdownRows', () => {
         label: 'A, B and a low-Level monster',
         percent: '2.9995%',
         exact: '19,737 / 658,008',
+        weight: 1,
         parts: [],
       },
     ]);
@@ -126,7 +133,12 @@ describe('breakdownRows', () => {
   });
 
   it('falls back to the id for a criterion the run had no name for', () => {
-    const breakdown = RESULT.breakdown.map(({ blend, id, score }) => ({ id, score, blend }));
+    const breakdown = RESULT.breakdown.map(({ blend, id, score, weight }) => ({
+      id,
+      score,
+      blend,
+      weight,
+    }));
     expect(breakdownRows({ ...RESULT, breakdown }).map((row) => row.label)).toEqual(['c1', 'c2']);
   });
 });
@@ -134,8 +146,8 @@ describe('breakdownRows', () => {
 describe('cellRuns', () => {
   it('joins neighbouring counts of the SAME exact score into one entry', () => {
     expect(cellRuns([cell(1, 10), cell(2, 10), cell(3, 20)], 20)).toEqual([
-      { counts: '1–2', percent: '0.0015%', exact: '10 / 658,008', parts: [], best: false },
-      { counts: '3', percent: '0.0030%', exact: '20 / 658,008', parts: [], best: true },
+      { counts: '1–2', value: '0.0015%', exact: '10 / 658,008', parts: [], best: false },
+      { counts: '3', value: '0.0030%', exact: '20 / 658,008', parts: [], best: true },
     ]);
   });
 
@@ -164,13 +176,13 @@ describe('irrelevantRows', () => {
     expect(row?.lineId).toBe('remainder');
     expect(row?.free).toBe('13–23');
     expect(row?.cells.slice(0, 3)).toEqual([
-      { counts: '13–23', percent: '7.0189%', exact: '46,185 / 658,008', parts: [], best: true },
-      { counts: '24', percent: '6.6410%', exact: '43,698 / 658,008', parts: [], best: false },
-      { counts: '25', percent: '6.2302%', exact: '40,995 / 658,008', parts: [], best: false },
+      { counts: '13–23', value: '7.0189%', exact: '46,185 / 658,008', parts: [], best: true },
+      { counts: '24', value: '6.6410%', exact: '43,698 / 658,008', parts: [], best: false },
+      { counts: '25', value: '6.2302%', exact: '40,995 / 658,008', parts: [], best: false },
     ]);
     expect(row?.cells.at(-1)).toEqual({
       counts: '32–33',
-      percent: '0.0000%',
+      value: '0.0000%',
       exact: '0 / 658,008',
       parts: [],
       best: false,
@@ -300,5 +312,37 @@ describe('the results of a whole run', () => {
     expect(plateauView(partial)).toEqual(plateauView(RESULT));
     expect(breakdownRows(partial)).toEqual(breakdownRows(RESULT));
     expect(irrelevantRows(partial)).toEqual(irrelevantRows(RESULT));
+  });
+});
+
+/**
+ * The per-criterion table under a weighted run (PRD §5.6). Each row keeps its
+ * own PROBABILITY and gains its weight: a weighted score is the highest weight a
+ * hand reaches, not a sum, so no criterion has a share of it to report, and a
+ * column of `weight × probability` would add up to a number the run never
+ * computed.
+ */
+describe('breakdownRows under weighting', () => {
+  const WEIGHTED = motivatingResult(SQL, motivatingWeighted({ c1: 4, c2: 2 }));
+
+  it('reports each criterion’s weight beside its own unscaled probability', () => {
+    const rows = breakdownRows(WEIGHTED);
+    expect(rows.map((row) => row.weight)).toEqual([4, 2]);
+    // The same probabilities the unweighted run reports: the weight is not folded in.
+    expect(rows.map((row) => row.percent)).toEqual(breakdownRows(RESULT).map((row) => row.percent));
+    expect(rows.map((row) => row.exact)).toEqual(breakdownRows(RESULT).map((row) => row.exact));
+  });
+
+  it('reports every criterion as worth 1 when nothing is weighted', () => {
+    expect(breakdownRows(RESULT).map((row) => row.weight)).toEqual([1, 1]);
+  });
+
+  it('shows the sweep cells as expected weights, not percentages', () => {
+    const firstCell = (result: typeof RESULT) =>
+      irrelevantRows(result).filter((row) => !row.flat)[0]!.cells[0]!.value;
+    expect(firstCell(WEIGHTED)).not.toContain('%');
+    expect(firstCell(WEIGHTED)).toBe('0.2808');
+    // And as percentages again with nothing weighted.
+    expect(firstCell(RESULT)).toBe('7.0189%');
   });
 });

@@ -306,6 +306,7 @@ export const CRITERION_SYNTAX: ExampleSection = {
   notes: [
     'A hand succeeds if it meets ANY ONE criterion: between criteria it is always `or`.',
     'Which hand a criterion is judged for — going first, going second, either hand — is the control on the row, not something written in its text.',
+    'What a criterion is WORTH is a control too, not text: turn on “Weight the criteria” and every row gets a number. See “What weighting the criteria does”.',
   ],
 };
 
@@ -341,6 +342,52 @@ export const RUN_MODE_REFERENCE: FactSection<ModeFact> = {
   notes: [
     'Average reports the two probabilities as well as the mean: the denominators genuinely differ, so one figure cannot stand for both.',
     'A criterion the run does not judge is dimmed rather than hidden, and the lines only it needed stop splitting the search.',
+  ],
+};
+
+/**
+ * Weighting the criteria (PRD §5.6), beside the switch that turns it on. Not an
+ * `ExampleSection`, because weighting adds NOTHING a user types: the switch is
+ * a checkbox and a weight is a number on the row, so there is no grammar here
+ * for the executable reference to run. The criteria section points at this by
+ * name rather than explaining half of it.
+ */
+export const WEIGHTING_REFERENCE: FactSection = {
+  id: 'weighting',
+  title: 'What weighting the criteria does',
+  blurb:
+    'Off, every criterion counts the same and a run reports the chance of meeting any one of them. On, the run reports what a hand is worth.',
+  rows: [
+    {
+      label: 'A weight',
+      means:
+        'A whole number from 1 to 1000 on each criterion, saying what meeting it is worth. A criterion you leave alone is worth 1.',
+    },
+    {
+      label: 'What a hand is worth',
+      means:
+        'The HIGHEST weight among the criteria it meets — never their sum. One hand does one thing, and the best thing it can do is what it is worth.',
+    },
+    {
+      label: 'What the run reports',
+      means:
+        'The expected weight per hand: every hand’s worth, averaged over all of them. It is a number from 0 to the largest weight, not a percentage, and the ranked table, the plateau and the sweeps all follow it.',
+    },
+    {
+      label: 'The plain chance, still',
+      means:
+        'P(at least one criterion) is reported beside it, and every criterion’s own probability is still in the per-criterion table. Nothing is taken away.',
+    },
+    {
+      label: 'Turning it off',
+      means:
+        'Gives back exactly the answer the template had before: the weights stay where you set them and are simply not read.',
+    },
+  ],
+  notes: [
+    'Only the ORDER and the ratios of the weights matter. Doubling every weight doubles the score and changes no ranking; 3 : 1 and 30 : 10 are the same run.',
+    'Weights are whole numbers because the score is exact: there is no rounding anywhere in it, and two decks tie only when they truly tie.',
+    'A criterion’s weight does not scale its own probability in the per-criterion table — a weighted score is a maximum, not a sum, so no single criterion has a share of it.',
   ],
 };
 
@@ -381,7 +428,7 @@ export const EXPORT_REFERENCE: FactSection = {
     {
       label: 'Ranked table — .csv',
       means:
-        'One row per ranked ratio: its rank, the probability as an exact numerator and denominator, how many concrete ratios the row stands for, and a column per line.',
+        'One row per ranked ratio: its rank, the score it was ranked by as an exact numerator and denominator, P(at least one criterion) over that same denominator, how many concrete ratios the row stands for, and a column per line.',
     },
     {
       label: 'Everything — .json',
@@ -396,6 +443,7 @@ export const EXPORT_REFERENCE: FactSection = {
 
 export const FACT_SECTIONS: readonly FactSection[] = [
   RUN_MODE_REFERENCE,
+  WEIGHTING_REFERENCE,
   FILE_REFERENCE,
   EXPORT_REFERENCE,
 ];

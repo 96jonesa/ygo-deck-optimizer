@@ -13,6 +13,7 @@ import {
   partLines,
   percentText,
   type ScoreLine,
+  scoreText,
 } from './run-format';
 import { deltaToPoints } from './settings-form';
 
@@ -116,8 +117,16 @@ export interface BreakdownRow {
   id: string;
   /** The name the RUN had for it, else its id — never what the editor calls it NOW. */
   label: string;
+  /**
+   * Its own PROBABILITY, in a weighted run as in any other: the row answers
+   * "how often does this happen", and `breakdown` deliberately does not fold
+   * the weight into it — a weighted total is a maximum, not a sum, and does not
+   * decompose criterion by criterion.
+   */
   percent: string;
   exact: string;
+  /** What the run counts a hand meeting it as being worth; 1 when nothing is weighted. */
+  weight: number;
   /**
    * Each hand on its own; empty for a run of one hand. A criterion judged
    * going second only scores 0 going first, and says so rather than being
@@ -134,11 +143,12 @@ export interface BreakdownRow {
  * `id` here too, never by its position.
  */
 export function breakdownRows(result: RunResult): BreakdownRow[] {
-  return result.breakdown.map(({ id, name, score, blend }: CriterionScore) => ({
+  return result.breakdown.map(({ id, name, score, blend, weight }: CriterionScore) => ({
     id,
     label: name ?? id,
     percent: percentText(blend),
     exact: exactText(blend),
+    weight,
     parts: partLines(score),
   }));
 }
@@ -146,7 +156,8 @@ export function breakdownRows(result: RunResult): BreakdownRow[] {
 export interface CellRun {
   /** `13–23`: the counts this one score covers. */
   counts: string;
-  percent: string;
+  /** The score as shown: a percentage, or an expected weight when the run is weighted. */
+  value: string;
   exact: string;
   /** Each hand on its own; empty for a run of one hand. */
   parts: ScoreLine[];
@@ -159,7 +170,11 @@ export interface CellRun {
  * score are one entry. A gap — a count no valid deck can hold — starts a new
  * entry rather than being swallowed into the run beside it.
  */
-export function cellRuns(cells: readonly SweepCell[], bestNum: number): CellRun[] {
+export function cellRuns(
+  cells: readonly SweepCell[],
+  bestNum: number,
+  weighted = false,
+): CellRun[] {
   const runs: SweepCell[][] = [];
   for (const cell of cells) {
     const last = runs.at(-1)?.at(-1);
@@ -175,9 +190,9 @@ export function cellRuns(cells: readonly SweepCell[], bestNum: number): CellRun[
     const [first] = run as [SweepCell, ...SweepCell[]];
     return {
       counts: countsLabel(run.map((cell) => cell.count)),
-      percent: percentText(first.best.blend),
+      value: scoreText(first.best.blend, weighted),
       exact: exactText(first.best.blend),
-      parts: partLines(first.best.score),
+      parts: partLines(first.best.score, weighted),
       best: first.best.blend.num === bestNum,
     };
   });
@@ -214,7 +229,7 @@ export function irrelevantRows(result: RunResult): IrrelevantRow[] {
       flat: false,
       range,
       free: countsLabel(free.map((cell) => cell.count)),
-      cells: cellRuns(line.cells, bestNum),
+      cells: cellRuns(line.cells, bestNum, result.weighted),
     };
   });
 }

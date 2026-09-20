@@ -240,3 +240,90 @@ describe('successSet', () => {
     );
   });
 });
+
+/**
+ * Weighted criteria (PRD §5.6). The set is the same enumeration over the same
+ * compositions; what changes is that a stored row carries what the composition
+ * is WORTH. The complement generalizes through
+ * `Σ w · ways = W · C(N,H) − Σ (W − w) · ways`, so the two storages are two
+ * encodings of one number, exactly as they were for a probability.
+ */
+describe('successSet with weighted criteria', () => {
+  /** `1x A` worth 5, `1x B` worth 2; a hand holding both is worth 5. */
+  const WEIGHTED = problemOf(3, [
+    { slots: [A], limits: [], weight: 5 },
+    { slots: [B], limits: [], weight: 2 },
+  ]);
+
+  it('stores what each composition is WORTH, the highest weight of the criteria it meets', () => {
+    const set = successSet(WEIGHTED, 2, { storage: 'successes' });
+    expect(set.maxWeight).toBe(5);
+    const worth = new Map(rowsOf(set).map((row, at) => [row.join(''), set.values[at]!]));
+    // [blank, A, B]: any A is 5, a B without an A is 2, blanks alone are worth nothing.
+    expect(worth.get('200')).toBeUndefined();
+    expect(worth.get('110')).toBe(5);
+    expect(worth.get('101')).toBe(2);
+    expect(worth.get('011')).toBe(5);
+    expect(worth.get('020')).toBe(5);
+    expect(worth.get('002')).toBe(2);
+    expect(set.successes).toBe(5);
+    expect(set.count).toBe(5);
+  });
+
+  it('stores `maxWeight - worth` on the other side, leaving out the rows already worth the most', () => {
+    const set = successSet(WEIGHTED, 2, { storage: 'complement' });
+    expect(set.complemented).toBe(true);
+    const value = new Map(rowsOf(set).map((row, at) => [row.join(''), set.values[at]!]));
+    // The rows worth 5 are gone; a failure is worth 5 − 0, a B-only hand 5 − 2.
+    expect(value.get('110')).toBeUndefined();
+    expect(value.get('020')).toBeUndefined();
+    expect(value.get('200')).toBe(5);
+    expect(value.get('101')).toBe(3);
+    expect(value.get('002')).toBe(3);
+    expect(set.count).toBe(3);
+    // `successes` still counts the compositions worth anything, whichever side is stored.
+    expect(set.successes).toBe(5);
+  });
+
+  it('carries a 1 on every stored row when nothing is weighted, either side', () => {
+    const plain = problemOf(3, [{ slots: [A], limits: [] }]);
+    for (const storage of ['successes', 'complement'] as const) {
+      const set = successSet(plain, 2, { storage });
+      expect(set.maxWeight).toBe(1);
+      expect([...set.values]).toEqual(new Array<number>(set.count).fill(1));
+    }
+  });
+
+  it('takes the maxWeight of the WHOLE problem, not of the criteria this set judges', () => {
+    // Judged by the light criterion alone, the heavy one still sets the bound:
+    // the two sides of a store, and the parts of a blend, must agree on one W.
+    const one = successSet(WEIGHTED, 2, { criterion: 1, storage: 'successes' });
+    expect(one.maxWeight).toBe(5);
+    expect([...one.values]).toEqual(new Array<number>(one.count).fill(2));
+  });
+
+  it('picks the smaller side by counting STORED ROWS, which weights and successes part company over', () => {
+    // `1x B` worth 1, `2x A` worth 5. Of the six compositions of two cards over
+    // three classes, four succeed and five are worth less than 5 — so the side
+    // to keep is the successes, though most hands succeed. Counting successes
+    // against failures, as an unweighted set may, would keep the larger side.
+    const criteria: CompiledCriterion[] = [
+      { slots: [B], limits: [], weight: 1 },
+      { slots: [A, A], limits: [], weight: 5 },
+    ];
+    const auto = successSet(problemOf(3, criteria), 2);
+    expect({ total: auto.total, successes: auto.successes }).toEqual({ total: 6, successes: 4 });
+    expect(auto.complemented).toBe(false);
+    expect(auto.count).toBe(4);
+    // The same criteria unweighted: four of six succeed, so the failures are kept.
+    const unweighted = successSet(
+      problemOf(
+        3,
+        criteria.map(({ slots, limits }) => ({ slots, limits })),
+      ),
+      2,
+    );
+    expect(unweighted.complemented).toBe(true);
+    expect(unweighted.count).toBe(2);
+  });
+});

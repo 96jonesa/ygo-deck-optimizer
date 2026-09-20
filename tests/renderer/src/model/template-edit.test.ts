@@ -13,6 +13,7 @@ import {
   withCriterion,
   withCriterionName,
   withCriterionText,
+  withCriterionWeight,
   withCriterionWhen,
   withDeckSize,
   withDescriptionLine,
@@ -31,6 +32,7 @@ import {
   withoutLine,
   withRenamedGroup,
   withSuggestedLine,
+  withWeighted,
 } from '../../../../src/renderer/src/model/template-edit';
 import type { CardHit, Template, TemplateCriterion } from '../../../../src/shared/types';
 import { motivatingContext } from '../../../helpers/motivating';
@@ -890,5 +892,139 @@ describe('withCriterionWhen', () => {
   it('tags a criterion back to `both`, which is written out rather than removed', () => {
     const tagged = withCriterionWhen(template, 'c1', 'first');
     expect(withCriterionWhen(tagged, 'c1', 'both').criteria[0]!.when).toBe('both');
+  });
+});
+
+/**
+ * Weighting the criteria (PRD §5.6): one switch for the template, a number on
+ * each criterion, and the two kept apart on purpose — the switch decides
+ * whether the numbers are read, so turning it off must not destroy them.
+ */
+describe('withWeighted', () => {
+  const weighted = {
+    ...EMPTY_TEMPLATE,
+    criteria: [{ id: 'c1', text: '1x monster', weight: 4 }],
+  };
+
+  it('turns weighting on and off', () => {
+    expect(withWeighted(EMPTY_TEMPLATE, true).weighted).toBe(true);
+    expect(withWeighted(withWeighted(EMPTY_TEMPLATE, true), false).weighted).toBe(false);
+  });
+
+  it('leaves every weight exactly where it was, so the switch is reversible', () => {
+    const off = withWeighted(withWeighted(weighted, true), false);
+    expect(off.criteria).toEqual(weighted.criteria);
+    expect(withWeighted(off, true).criteria).toEqual(weighted.criteria);
+  });
+
+  it('gives back the SAME template when the switch is already there, absent included', () => {
+    expect(withWeighted(EMPTY_TEMPLATE, false)).toBe(EMPTY_TEMPLATE);
+    const on = withWeighted(EMPTY_TEMPLATE, true);
+    expect(withWeighted(on, true)).toBe(on);
+  });
+});
+
+describe('withCriterionWeight', () => {
+  const template: Template = {
+    ...EMPTY_TEMPLATE,
+    weighted: true,
+    criteria: [
+      {
+        id: 'c1',
+        text: '1x spell',
+        name: 'a spell',
+        when: 'first' as const,
+        expr: {
+          op: 'req',
+          n: 1,
+          desc: { anyOf: [{ t: 'clause', clause: { kinds: ['spell'] } }] },
+        } as const,
+      },
+      { id: 'c2', text: '1x trap' },
+    ],
+  };
+
+  it('weighs the criterion it names, and no other', () => {
+    const next = withCriterionWeight(template, 'c2', 7);
+    expect(next.criteria.map((criterion) => criterion.weight)).toEqual([undefined, 7]);
+  });
+
+  /** A weight says what meeting it is WORTH, not what it asks for: the AST stands. */
+  it('keeps the stored AST, the name and the tag', () => {
+    const next = withCriterionWeight(template, 'c1', 3);
+    expect(next.criteria[0]).toEqual({ ...template.criteria[0], weight: 3 });
+  });
+
+  it('stores a weight of 1 as no weight at all: one criterion, one spelling', () => {
+    const three = withCriterionWeight(template, 'c1', 3);
+    expect(withCriterionWeight(three, 'c1', 1).criteria[0]).not.toHaveProperty('weight');
+    expect(withCriterionWeight(three, 'c1', 1).criteria[0]).toEqual(template.criteria[0]);
+  });
+
+  it('gives back the SAME template when the weight does not move, 1 included', () => {
+    expect(withCriterionWeight(template, 'c1', 1)).toBe(template);
+    const three = withCriterionWeight(template, 'c1', 3);
+    expect(withCriterionWeight(three, 'c1', 3)).toBe(three);
+    expect(withCriterionWeight(template, 'nobody', 3)).toBe(template);
+  });
+});
+
+/**
+ * The half of the authoritative-AST rule that had gone wrong: an edit to a
+ * criterion's TEXT drops the parsed form beside it (TDD §14) and NOTHING else.
+ * These transforms used to rebuild the criterion out of `id`, `text` and
+ * `name`, which silently reset the `when` tag of every criterion whose text was
+ * typed into — and would have thrown the weight away with it.
+ */
+describe('a criterion keeps everything but its parsed form', () => {
+  const tagged: Template = {
+    ...EMPTY_TEMPLATE,
+    weighted: true,
+    groups: [{ id: 'g1', name: 'starter', cards: [] }],
+    criteria: [
+      {
+        id: 'c1',
+        text: '1x {starter}',
+        name: 'the opener',
+        when: 'second' as const,
+        weight: 6,
+        expr: {
+          op: 'req',
+          n: 1,
+          desc: { anyOf: [{ t: 'group', groupId: 'g1' }] },
+        } as const,
+      },
+    ],
+  };
+
+  it('keeps the tag and the weight through a text edit, and drops only the AST', () => {
+    const next = withCriterionText(tagged, 'c1', '1x trap');
+    expect(next.criteria[0]).toEqual({
+      id: 'c1',
+      text: '1x trap',
+      name: 'the opener',
+      when: 'second',
+      weight: 6,
+    });
+  });
+
+  it('keeps the tag, the weight and the AST through a name edit', () => {
+    const next = withCriterionName(tagged, 'c1', 'renamed');
+    expect(next.criteria[0]).toEqual({ ...tagged.criteria[0], name: 'renamed' });
+    const cleared = withCriterionName(tagged, 'c1', '  ');
+    expect(cleared.criteria[0]).not.toHaveProperty('name');
+    expect(cleared.criteria[0]).toMatchObject({ when: 'second', weight: 6 });
+    expect(cleared.criteria[0]!.expr).toEqual(tagged.criteria[0]!.expr);
+  });
+
+  it('keeps the tag and the weight when a deleted group takes the AST', () => {
+    const next = withoutGroup(tagged, 'g1');
+    expect(next.criteria[0]).toEqual({
+      id: 'c1',
+      text: '1x {starter}',
+      name: 'the opener',
+      when: 'second',
+      weight: 6,
+    });
   });
 });

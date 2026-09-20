@@ -375,7 +375,13 @@ describe('optimize', () => {
       expect(result.best.classTotals).toEqual([34, 3, 3]);
       // P(an a and a b in 5 of 40) at 3 and 3: 1 − 2·C(37,5)/C(40,5) + C(34,5)/C(40,5).
       expect(result.best.score.parts).toEqual([
-        { H: 5, weight: 1, num: 658008 - 2 * 435897 + 278256, den: 658008 },
+        {
+          H: 5,
+          weight: 1,
+          num: 658008 - 2 * 435897 + 278256,
+          den: 658008,
+          successNum: 658008 - 2 * 435897 + 278256,
+        },
       ]);
       expect(result.best.blend).toEqual({ num: 64470, den: 658008 });
       expect(result.best.rawRatios).toBe(3);
@@ -402,8 +408,8 @@ describe('optimize', () => {
     it('reports a line of the blank class as irrelevant, in one line and without a table', () => {
       const result = run(compiled(smallInput()));
       expect(result.sweeps.map((sweep) => sweep.lineId)).toEqual(['a', 'b']);
-      const { classTotals, score, blend } = result.best;
-      const best = { classTotals, score, blend };
+      const { classTotals, score, blend, success } = result.best;
+      const best = { classTotals, score, blend, success };
       const [junk, remainder] = result.irrelevant;
       expect(junk).toEqual({ lineId: 'junk', flat: true, min: 0, max: 2, best });
       // The remainder matches nothing either, but it is what every other card trades WITH: past
@@ -805,7 +811,7 @@ describe('breakdown', () => {
   it('scores a criterion that lost every alternative to the hand size as 0', () => {
     const c = compiled(smallInput());
     const [row] = breakdown(c, [{ id: 'never', alternatives: [] }], [34, 3, 3]);
-    expect(row!.score.parts).toEqual([{ H: 5, weight: 1, num: 0, den: 658008 }]);
+    expect(row!.score.parts).toEqual([{ H: 5, weight: 1, num: 0, den: 658008, successNum: 0 }]);
   });
 
   /**
@@ -828,8 +834,9 @@ describe('breakdown', () => {
       const both = breakdown(c, only([true, true]), [34, 3, 3])[0]!.score.parts;
       const firstOnly = breakdown(c, only([true, false]), [34, 3, 3])[0]!.score.parts;
       const secondOnly = breakdown(c, only([false, true]), [34, 3, 3])[0]!.score.parts;
-      expect(firstOnly).toEqual([both[0], { ...both[1]!, num: 0 }]);
-      expect(secondOnly).toEqual([{ ...both[0]!, num: 0 }, both[1]]);
+      const nothing = (part: (typeof both)[number]) => ({ ...part, num: 0, successNum: 0 });
+      expect(firstOnly).toEqual([both[0], nothing(both[1]!)]);
+      expect(secondOnly).toEqual([nothing(both[0]!), both[1]]);
       expect(both[0]!.num).toBeGreaterThan(0);
       expect(both[1]!.num).toBeGreaterThan(0);
     });
@@ -1154,5 +1161,150 @@ describe('the motivating example (oracle O4, TDD §11.1)', async () => {
             successes += choose(3, a) * choose(3, b) * choose(3, low) * choose(31, 5 - a - b - low);
     expect(rows[1]!.blend).toEqual({ num: successes, den: 658008 });
     expect(rows[1]!.blend.num).toBeLessThan(46185);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Weighted criteria (PRD §5.6): the run ranks by the EXPECTED WEIGHT per hand,
+// and the plain probability travels beside it. The check that matters is that
+// weighting changes the ANSWER — a template whose best deck under weighting is
+// not the best deck under the probability — since a case where it changes
+// nothing proves nothing.
+// ---------------------------------------------------------------------------
+
+describe('optimize with weighted criteria', () => {
+  /**
+   * Two lines that compete for twenty deck slots, and two criteria that want
+   * different amounts of them:
+   *
+   *   `2x combo` at weight 3   — the payoff, and it needs two cards
+   *   `1x backup` at weight 1  — the fallback, and one card does it
+   *
+   * A deck of 40 with the remainder holding at least 20, so `combo + backup`
+   * is at most 20 and every extra combo is one fewer backup.
+   */
+  function competing(weights: [number, number]): CompileInput {
+    return {
+      deckSize: 40,
+      handSize: 5,
+      weighted: weights[0] !== weights[1],
+      lines: [
+        { id: 'combo', isRemainder: false, min: 0, max: 20 },
+        { id: 'backup', isRemainder: false, min: 0, max: 20 },
+        { id: REMAINDER_ID, isRemainder: true, min: 20, max: null },
+      ],
+      matrix: [
+        [true, false],
+        [false, true],
+        [false, false],
+      ],
+      flat: [
+        {
+          reqs: [{ n: 2, desc: 0 }],
+          limits: [],
+          weight: weights[0],
+        },
+        { reqs: [{ n: 1, desc: 1 }], limits: [], weight: weights[1] },
+      ],
+    };
+  }
+
+  const copiesOf = (result: Finished) => result.best.classTotals;
+
+  it('finds a DIFFERENT best deck than the probability does, with the exact numbers', () => {
+    const weighted = run(compiled(competing([3, 1])));
+    const plain = run(compiled(competing([1, 1])));
+
+    // Twenty combo pieces and no backup: three times the chance of the payoff.
+    // [blank, combo, backup] — the remainder is the blank class here.
+    expect(copiesOf(weighted)).toEqual([20, 20, 0]);
+    // Twenty backups and no combo: the likeliest way to meet SOMETHING.
+    expect(copiesOf(plain)).toEqual([20, 0, 20]);
+    expect(weighted.weighted).toBe(true);
+    expect(plain.weighted).toBe(false);
+
+    // By hand, at a hand of five from forty. Hands holding two of the twenty:
+    //   C(40,5) − C(20,5) − 20·C(20,4) = 658,008 − 15,504 − 96,900 = 545,604
+    const twoOfTwenty = 658_008 - 15_504 - 20 * 4845;
+    expect(twoOfTwenty).toBe(545_604);
+    // Hands holding one of the twenty: C(40,5) − C(20,5) = 642,504.
+    const oneOfTwenty = 658_008 - 15_504;
+    expect(oneOfTwenty).toBe(642_504);
+
+    expect(weighted.best.blend).toEqual({ num: 3 * twoOfTwenty, den: 658_008 });
+    expect(weighted.best.success).toEqual({ num: twoOfTwenty, den: 658_008 });
+    expect(plain.best.blend).toEqual({ num: oneOfTwenty, den: 658_008 });
+    expect(plain.best.success).toEqual(plain.best.blend);
+
+    // Each deck is the better one on its OWN objective and the worse on the
+    // other, which is what makes the two answers genuinely different.
+    const at = (result: Finished, totals: number[]) =>
+      result.ranked.find((vector) => vector.classTotals.join() === totals.join())!;
+    expect(at(weighted, [20, 0, 20]).blend.num).toBe(oneOfTwenty);
+    expect(oneOfTwenty).toBeLessThan(3 * twoOfTwenty);
+    expect(at(plain, [20, 20, 0]).blend.num).toBe(twoOfTwenty);
+    expect(twoOfTwenty).toBeLessThan(oneOfTwenty);
+  });
+
+  it('is the plain run again when the weights are turned off', () => {
+    // The SAME weights, with `weighted` false: not read at all, and the result
+    // is the unweighted one byte for byte.
+    const off = { ...competing([3, 1]), weighted: false };
+    const stripped = competing([1, 1]);
+    // Everything but the wall clock, which is the one field a rerun may move.
+    const withoutTiming = ({ elapsedMs: _elapsed, ...rest }: Finished) => rest;
+    expect(withoutTiming(run(compiled(off)))).toEqual(withoutTiming(run(compiled(stripped))));
+  });
+
+  it('reports the largest weight, and the plain probability of every kept row', () => {
+    const result = run(compiled(competing([3, 1])));
+    expect(result.maxWeight).toBe(3);
+    for (const vector of result.ranked) {
+      // A hand is worth between 0 and 3, so the weighted numerator is between
+      // the plain count and three times it.
+      expect(vector.blend.num).toBeGreaterThanOrEqual(vector.success.num);
+      expect(vector.blend.num).toBeLessThanOrEqual(3 * vector.success.num);
+      expect(Number.isSafeInteger(vector.blend.num)).toBe(true);
+    }
+  });
+
+  it('weighs the sweeps and the plateau by the same number it ranks by', () => {
+    const result = run(compiled(competing([3, 1])));
+    const combo = result.sweeps.find((sweep) => sweep.lineId === 'combo')!;
+    // More combo is monotonically better under weighting: the argmax is the cap.
+    expect(combo.argmax).toEqual([20]);
+    expect(combo.cells.at(-1)!.best.blend.num).toBe(result.best.blend.num);
+    const backup = result.sweeps.find((sweep) => sweep.lineId === 'backup')!;
+    expect(backup.argmax).toEqual([0]);
+    // The plateau is cut on the weighted score, so its vectors are the heavy ones.
+    for (const vector of result.plateau.vectors)
+      expect(vector.classTotals[1]).toBeGreaterThan(vector.classTotals[2]!);
+  });
+
+  it('gives each criterion its own PROBABILITY and its weight, never a share of the total', () => {
+    const c = compiled(competing([3, 1]));
+    const rows = breakdown(
+      c,
+      [
+        { id: 'combo', alternatives: [{ reqs: [{ n: 2, desc: 0 }], limits: [] }], weight: 3 },
+        { id: 'backup', alternatives: [{ reqs: [{ n: 1, desc: 1 }], limits: [] }], weight: 1 },
+      ],
+      [20, 20, 0],
+    );
+    expect(rows.map((row) => row.weight)).toEqual([3, 1]);
+    // The heavy criterion's row is its own probability — 545,604 — and NOT
+    // three times it, which is what the run's headline is.
+    expect(rows[0]!.blend).toEqual({ num: 545_604, den: 658_008 });
+    expect(rows[1]!.blend).toEqual({ num: 0, den: 658_008 });
+    const result = run(c);
+    expect(result.best.blend.num).toBe(3 * rows[0]!.blend.num);
+    expect(result.best.success.num).toBe(rows[0]!.blend.num);
+  });
+
+  it('refuses a weight it cannot score exactly, rather than rounding', () => {
+    const over = compileProblem(competing([13_688_586_241, 1]));
+    expect(over.ok).toBe(false);
+    if (over.ok) throw new Error('expected the weight to be refused');
+    expect(over.errors.join('\n')).toMatch(/past 2\^53/);
   });
 });

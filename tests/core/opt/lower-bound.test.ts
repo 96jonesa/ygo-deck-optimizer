@@ -340,7 +340,7 @@ describe('the lower-bound guarantee (oracle O3, PRD §6.3)', () => {
     };
     // Reported: the 2 traps the template knows of. True: those, and the 14 it did not.
     expect(reported).toEqual({ num: atLeastASpellAtMostATrap(2), den: 658008 });
-    expect(truth).toEqual({ num: atLeastASpellAtMostATrap(16), den: 658008 });
+    expect(truth).toMatchObject({ num: atLeastASpellAtMostATrap(16), den: 658008 });
     expect(truth.num).toBeLessThan(reported.num);
     console.info(
       `O3, adversarial: reported ${reported.num}/${reported.den} = ${(reported.num / reported.den).toFixed(4)}, ` +

@@ -1079,3 +1079,82 @@ describe('analyze never throws (oracle A5)', () => {
     expect(seen.infeasible).toBeGreaterThan(500);
   });
 });
+
+/**
+ * Weighting, as the editor sees it (PRD §5.6). The analysis is where the two
+ * defaults live — the switch off, a criterion worth 1 — so the editor reads the
+ * number that is in force rather than working one out for itself (TDD §3).
+ */
+describe('analyze: weighted criteria', () => {
+  const weighted = (weights: (number | undefined)[], on = true): Template => {
+    const base = templateOf(
+      [line('mon', 'monster', 0, 10), line('sp', 'spell', 0, 10)],
+      ['1x monster', '1x spell'],
+    );
+    return {
+      ...base,
+      weighted: on,
+      criteria: base.criteria.map((criterion, at) =>
+        weights[at] === undefined ? criterion : { ...criterion, weight: weights[at] },
+      ),
+    };
+  };
+
+  it('says whether the run is weighted, and what each criterion is worth', () => {
+    const a = analyze(weighted([6, undefined]), ctx);
+    expect(a.weighted).toBe(true);
+    expect(a.criteria.map((criterion) => criterion.weight)).toEqual([6, 1]);
+    expect(a.ok).toBe(true);
+  });
+
+  it('reports every criterion as worth 1 while the switch is off, whatever it says', () => {
+    // The number the editor shows is the one in force: a weight nobody reads is
+    // not a weight, and showing it as one would be the readout inventing a rule.
+    const a = analyze(weighted([6, 2], false), ctx);
+    expect(a.weighted).toBe(false);
+    expect(a.criteria.map((criterion) => criterion.weight)).toEqual([1, 1]);
+  });
+
+  it('is the analysis of the unweighted template, field for field, with the switch off', () => {
+    const off = analyze(weighted([6, 2], false), ctx);
+    const never = analyze(weighted([undefined, undefined], false), ctx);
+    expect(off).toEqual(never);
+  });
+
+  it('carries the weights into the work estimate, since the success set changes with them', () => {
+    // `2x monster` at weight 5 beside `1x spell` at weight 1: the stored side of
+    // the success set is chosen by counting ROWS, and a weight moves that count.
+    const base = templateOf(
+      [line('mon', 'monster', 0, 10), line('sp', 'spell', 0, 10)],
+      ['2x monster', '1x spell'],
+    );
+    const on = analyze(
+      {
+        ...base,
+        weighted: true,
+        criteria: [{ ...base.criteria[0]!, weight: 5 }, base.criteria[1]!],
+      },
+      ctx,
+    );
+    const off = analyze(base, ctx);
+    expect(on.work.hands).not.toBeNull();
+    expect(off.work.hands).not.toBeNull();
+    // Both sides store the COMPLEMENT here, but not the same complement: a
+    // weighted set leaves out the rows already worth the most (the hands with
+    // two monsters) rather than only the failures, so it stores 11 rows where
+    // the unweighted one stores 2. Weighting changes what a score COSTS, and
+    // an estimate that did not carry the weights would be of the wrong search.
+    expect([on.work.hands![0]!.complemented, on.work.hands![0]!.terms]).toEqual([true, 11]);
+    expect([off.work.hands![0]!.complemented, off.work.hands![0]!.terms]).toEqual([true, 2]);
+    expect(on.work.estimatedMs).toBeGreaterThan(off.work.estimatedMs!);
+  });
+
+  it('reports a weight it cannot score exactly as a compile error, never as a throw', () => {
+    const a = analyze(weighted([13_688_586_241, undefined]), ctx);
+    expect(a.ok).toBe(false);
+    expect(codes(a.issues)).toContain('!compile');
+    expect(a.issues.map((issue) => issue.message).join('\n')).toMatch(/past 2\^53/);
+    // And it is the COMPILE guard that caught it, not the "never throws" net.
+    expect(codes(a.issues)).not.toContain('!internal');
+  });
+});

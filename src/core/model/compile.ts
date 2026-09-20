@@ -29,6 +29,7 @@ import {
   type RunMode,
   type Template,
   type TemplateGroup,
+  weightOf,
   whenOf,
 } from './template';
 
@@ -83,6 +84,17 @@ export interface ResolvedRange extends ResolvedCounted {
 export interface ResolvedFlat {
   reqs: ResolvedRange[];
   limits: ResolvedCounted[];
+  /**
+   * What a hand meeting this alternative is WORTH (PRD §5.6). Absent is 1, and
+   * is what every alternative of a template that does not weight its criteria
+   * carries — such a template compiles to the problem it always did.
+   *
+   * An alternative that several criteria produced is worth the HIGHEST of their
+   * weights: meeting it means meeting each of them, and a hand is worth the best
+   * thing it does. `expandAll` merges duplicates across criteria and says which
+   * criteria each one came from, which is where this comes from.
+   */
+  weight?: number;
 }
 
 export interface ResolvedCriterion {
@@ -92,6 +104,11 @@ export interface ResolvedCriterion {
   expr: Expr;
   /** Which hand it is judged for, defaulted: `both` unless the template says otherwise. */
   when: CriterionWhen;
+  /**
+   * What meeting it is worth, defaulted: 1 unless the template weights its
+   * criteria and gives this one a weight of its own (`weightOf`).
+   */
+  weight: number;
   /** Canonical text of `expr`. */
   canonical: string;
   /** This criterion's own expansion, for the reader; `flat` is what is judged. */
@@ -123,6 +140,8 @@ export interface ResolvedTemplate {
   flatSources: number[][];
   /** Alternatives left out of `flat` for needing more cards than the hand holds. */
   dropped: number;
+  /** Whether the template weights its criteria at all (`criterionWeights`). */
+  weighted: boolean;
   warnings: string[];
 }
 
@@ -142,14 +161,45 @@ export type ColumnOf = (desc: Description, role: 'inRequirement' | 'inLimit') =>
  * differently, so the indexing is the caller's and the carrying is not: a
  * second copy of this is how a ceiling goes missing between the two.
  */
-export function indexFlat(flat: readonly FlatCriterion[], columnOf: ColumnOf): ResolvedFlat[] {
-  return flat.map(({ reqs, limits }) => ({
-    reqs: reqs.map(({ n, max, desc }) => {
-      const at = columnOf(desc, 'inRequirement');
-      return max === undefined ? { n, desc: at } : { n, max, desc: at };
-    }),
-    limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc, 'inLimit') })),
-  }));
+export function indexFlat(
+  flat: readonly FlatCriterion[],
+  columnOf: ColumnOf,
+  /** What alternative `at` is worth; the default leaves every one unweighted. */
+  weightOf: (at: number) => number | undefined = () => undefined,
+): ResolvedFlat[] {
+  return flat.map(({ reqs, limits }, at) => {
+    const indexed: ResolvedFlat = {
+      reqs: reqs.map(({ n, max, desc }) => {
+        const column = columnOf(desc, 'inRequirement');
+        return max === undefined ? { n, desc: column } : { n, max, desc: column };
+      }),
+      limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc, 'inLimit') })),
+    };
+    const weight = weightOf(at);
+    // Left out when it is 1, so an unweighted template is byte for byte what it was.
+    if (weight !== undefined && weight !== 1) indexed.weight = weight;
+    return indexed;
+  });
+}
+
+/**
+ * What the criteria of `template` weigh, by index (PRD §5.6).
+ *
+ * Weighting is a template-wide SWITCH, and it is the whole of the difference:
+ * with it off the weights are not read at all, so a template that once weighted
+ * its criteria and no longer does scores exactly as it would have if they had
+ * never been written — and one that never did is untouched by any of this. With
+ * it on, a criterion that says nothing about its weight is worth 1.
+ *
+ * The switch decides how the answer READS as well, and that is why it is a
+ * switch and not "some weight differs": with weighting on, the headline is an
+ * expected weight per hand, even where every criterion happens to be worth 1
+ * and that expectation is the probability. One setting, one reading.
+ */
+export function criterionWeights(template: Pick<Template, 'weighted' | 'criteria'>): number[] {
+  return template.criteria.map((criterion) =>
+    template.weighted === true ? weightOf(criterion) : 1,
+  );
 }
 
 export function groupLookupOf(groups: readonly TemplateGroup[]): GroupLookup {
@@ -248,28 +298,34 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
   });
 
   const handSize = template.hand.size;
+  const weights = criterionWeights(template);
+  const weighted = template.weighted === true;
   const parsedCriteria: {
     id: string;
     name?: string;
     text: string;
     expr: Expr;
     when: CriterionWhen;
+    weight: number;
   }[] = [];
-  for (const criterion of template.criteria) {
+  // Parsing may drop a criterion, so the weights are carried on the entries
+  // that survive rather than looked up by position afterwards.
+  template.criteria.forEach((criterion, at) => {
     const { id, name, text } = criterion;
     const meant = criterionMeaning(criterion, descCtx);
     if (!meant.ok) {
       errors.push(`criterion ${JSON.stringify(id)}: ${located(meant.message, text, meant.span)}`);
-      continue;
+      return;
     }
     if (meant.stale !== null) warnings.push(`criterion ${JSON.stringify(id)}: ${meant.stale}`);
     const when = whenOf(criterion);
+    const weight = weights[at]!;
     parsedCriteria.push(
       name === undefined
-        ? { id, text, expr: meant.expr, when }
-        : { id, name, text, expr: meant.expr, when },
+        ? { id, text, expr: meant.expr, when, weight }
+        : { id, name, text, expr: meant.expr, when, weight },
     );
-  }
+  });
 
   const descriptions: ResolvedDescription[] = [];
   const columnOf = new Map<string, number>();
@@ -316,7 +372,11 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
     { maxHandSize: handSize },
   );
   if (!all.ok) return { ok: false, errors: [all.message] };
-  const flat = indexed(all.flat);
+  // An alternative several criteria produced is worth the HIGHEST of their
+  // weights: a hand meeting it meets each of them at once.
+  const flat = indexFlat(all.flat, column, (at) =>
+    all.sources[at]!.reduce((most, who) => Math.max(most, parsedCriteria[who]!.weight), 0),
+  );
 
   const impliesCtx = { cards: ctx.cards, groups: members };
   const matrix = lines.map((line) =>
@@ -349,6 +409,7 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
       flat,
       flatSources: all.sources,
       dropped: all.dropped,
+      weighted,
       warnings,
     },
   };
@@ -403,12 +464,21 @@ export interface CompileInput {
   /** `matrix[line][description]`, one row per entry of `lines`. */
   matrix: readonly (readonly boolean[])[];
   flat: readonly FlatAlternative[];
+  /**
+   * Whether this run's score is a WEIGHTED score rather than a probability
+   * (PRD §5.6). Carried through compilation because the answer has to say which
+   * of the two it is wherever it is read, and a finished run's readout is a
+   * pure function of its result (TDD §3). Absent is false.
+   */
+  weighted?: boolean;
 }
 
 /** What `compileCriterion` reads of one flat alternative; `ResolvedFlat` satisfies it. */
 export interface FlatAlternative {
   reqs: readonly ResolvedRange[];
   limits: readonly ResolvedCounted[];
+  /** What meeting it is worth; absent is 1 (PRD §5.6). */
+  weight?: number;
 }
 
 /** A member line of a class: its index in `CompileInput.lines`, and its range with `max: null` clamped. */
@@ -485,7 +555,7 @@ interface CompiledAlternative {
  * - a limit becomes a mask, dropped on the same two grounds.
  */
 export function compileCriterion(
-  { reqs, limits }: FlatAlternative,
+  { reqs, limits, weight }: FlatAlternative,
   maskOf: (desc: number) => number,
   largestHand: number,
 ): CompiledAlternative {
@@ -512,6 +582,9 @@ export function compileCriterion(
   // Left out when nothing is left to say: `slots` alone is the criterion the
   // language had before ranges, and the matcher's old path judges it.
   if (compiled.some(({ max }) => max !== null)) criterion.reqs = compiled;
+  // Left out at 1 for the same reason: the weigher then answers exactly what
+  // the matcher answered, and the success set carries the 1s it always did.
+  if (weight !== undefined && weight !== 1) criterion.weight = weight;
   return { criterion, droppedLimits, droppedCeilings };
 }
 
@@ -519,6 +592,8 @@ export type CompileResult =
   | {
       ok: true;
       problem: Problem;
+      /** Whether the run's score is a weighted score rather than a probability (PRD §5.6). */
+      weighted: boolean;
       /** Parallel to `problem.classes`. */
       classes: CompiledClassInfo[];
       /** The class of each entry of `CompileInput.lines`, the remainder last. */
@@ -677,8 +752,14 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
   // holds no alternative no hand is ever held against: the parts' indices are
   // remapped onto it below, and `criterion` in the dropped lists is an index
   // into it too.
+  // The switch is applied HERE as well as where the weights come from, so that
+  // it is the whole of the difference and a compiled problem cannot carry
+  // weights the run is not meant to read. Off, every alternative is worth 1 and
+  // the problem is the one this template always compiled to.
+  const weighted = input.weighted === true;
   const criteria = judged.map((at, criterion) => {
-    const compiled = compileCriterion(flat[at]!, maskOf, largestHand);
+    const alternative = weighted ? flat[at]! : { ...flat[at]!, weight: 1 };
+    const compiled = compileCriterion(alternative, maskOf, largestHand);
     for (const dropped of compiled.droppedLimits) droppedLimits.push({ criterion, ...dropped });
     for (const dropped of compiled.droppedCeilings) droppedCeilings.push({ criterion, ...dropped });
     return compiled.criterion;
@@ -706,7 +787,15 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
     if (!(failure instanceof RangeError)) throw failure;
     return { ok: false, errors: [failure.message] };
   }
-  return { ok: true, problem, classes, classOfLine, droppedLimits, droppedCeilings };
+  return {
+    ok: true,
+    problem,
+    weighted,
+    classes,
+    classOfLine,
+    droppedLimits,
+    droppedCeilings,
+  };
 }
 
 /** One class of a class-total vector, as the raw line counts it stands for (TDD §11.2). */

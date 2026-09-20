@@ -72,3 +72,23 @@ export function commitDeckSize(text: string, current: number): number {
 export function isHandSize(size: number): size is HandSize {
   return HAND_SIZES.includes(size as HandSize);
 }
+
+/**
+ * What a criterion may be worth when the template weights its criteria (PRD
+ * §5.6). Written out rather than imported, as everything else here is, since
+ * the renderer takes no code from `core`; a test holds the two equal.
+ */
+export const CRITERION_WEIGHT_MIN = 1;
+export const CRITERION_WEIGHT_MAX = 1000;
+
+/**
+ * The weight after the field was typed into. An unreadable field leaves it as
+ * it was — the same rule `commitDeckSize` follows — and anything outside the
+ * bounds is clamped: a criterion worth nothing is a criterion that is not
+ * there, which is what deleting it is for.
+ */
+export function commitWeight(text: string, current: number): number {
+  const value = parseCount(text);
+  if (value === null) return current;
+  return Math.min(Math.max(value, CRITERION_WEIGHT_MIN), CRITERION_WEIGHT_MAX);
+}

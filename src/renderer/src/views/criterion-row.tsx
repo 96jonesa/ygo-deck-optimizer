@@ -1,7 +1,13 @@
 import type { CriterionAnalysis, TemplateCriterion } from '../../../shared/types';
 import { issuesToList, parseFailureOf, worstSeverity } from '../model/analysis-view';
 import { canonicalText, expansionPreview } from '../model/criteria-readout';
-import { CRITERION_WHENS, type CriterionWhen, WHEN_LABELS } from '../model/deck-form';
+import {
+  CRITERION_WEIGHT_MAX,
+  CRITERION_WHENS,
+  type CriterionWhen,
+  commitWeight,
+  WHEN_LABELS,
+} from '../model/deck-form';
 import { CompletingInput } from './completing-input';
 import { useField } from './fields';
 import { IssueList, ParseFailure } from './line-row';
@@ -19,11 +25,14 @@ export interface CriterionRowProps {
   handSize: number;
   /** The run does not judge this criterion: its tag is for the other hand. */
   uncounted: boolean;
+  /** The template weights its criteria (PRD §5.6): the weight is a control rather than a fact. */
+  weighted: boolean;
   first: boolean;
   last: boolean;
   onText: (text: string) => void;
   onName: (name: string) => void;
   onWhen: (when: CriterionWhen) => void;
+  onWeight: (weight: number) => void;
   onMove: (by: number) => void;
   onRemove: () => void;
 }
@@ -33,17 +42,23 @@ export function CriterionRow({
   found,
   handSize,
   uncounted,
+  weighted,
   first,
   last,
   onText,
   onName,
   onWhen,
+  onWeight,
   onMove,
   onRemove,
 }: CriterionRowProps) {
   const { id } = criterion;
   const [text, setText] = useField(criterion.text);
   const [name, setName] = useField(criterion.name ?? '');
+  // The weight the ANALYSIS reports, which is where the default lives (TDD §3),
+  // exactly as the tag below it is.
+  const weight = found?.weight ?? criterion.weight ?? 1;
+  const [weightText, setWeightText] = useField(String(weight));
   const failure = parseFailureOf(found);
   const canonical = canonicalText(found);
   const preview = expansionPreview(found, handSize);
@@ -98,6 +113,34 @@ export function CriterionRow({
             onName(event.target.value);
           }}
         />
+        {/* What meeting it is worth (PRD §5.6). Only while the template
+            weights its criteria: off, the number would be a control that
+            changes nothing, and the panel's switch is where to say so. */}
+        {weighted && (
+          <label className="criterion-weight" htmlFor={`criterion-weight-${id}`}>
+            <span className="dim">worth</span>
+            <input
+              type="text"
+              id={`criterion-weight-${id}`}
+              className="count"
+              value={weightText}
+              inputMode="numeric"
+              aria-label={`What meeting criterion ${id} is worth, 1 to ${CRITERION_WEIGHT_MAX}`}
+              data-testid={`criterion-weight-${id}`}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => setWeightText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') event.currentTarget.blur();
+              }}
+              onBlur={() => {
+                const next = commitWeight(weightText, weight);
+                setWeightText(String(next));
+                if (next !== weight) onWeight(next);
+              }}
+            />
+          </label>
+        )}
         {/* Which hand judges it (PRD §5.5). A select rather than toggles: it
             sits on the row beside a 70-character criterion, and three buttons
             would not fit; the section it is filed under is the visible half
