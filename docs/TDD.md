@@ -252,6 +252,15 @@ Two corrections to the obvious design, both found while building it:
 
 `src/renderer/src/model/listbox.ts` is the keyboard model the card picker (§16) and the completion share; the picker's public API is unchanged. The popup's own state is a pure reducer in `model/completion.ts`, so the component holds only the markup, the keys, the one `window.api` call, and the two measurements — caret position and text width — that only the DOM can answer.
 
+Four behaviours that are not obvious from the above, each one a decision:
+
+- **Escape dismisses until the TEXT changes, not until the name does.** Keying dismissal on the typed name looks right and is wrong: the prefix is what has been typed *up to the caret*, so one ArrowLeft inside a name changes the prefix and the popup springs back. `close` records the field text instead, and the popup reopens on the next keystroke and on nothing else. Found by the CDP run, not by a unit test.
+- **A stale site refuses the pick rather than misapplying it** (`completionFits`). Between a keystroke and main's reply the site is one keystroke old and its offsets would cut the new text in the wrong place. The reply lands in well under a millisecond, so the cost is a keypress nobody notices, and `desc:complete` is sequenced like `desc:parse` so an overtaken answer is dropped rather than drawn.
+- **The popup anchors at the start of the name, not at the caret** — anchored at the caret it creeps right with every character — and is clamped against the window rather than the field, so it may be wider than the field, as the card picker's is.
+- **No trailing space is inserted after a pick**, which keeps `applyCompletion` a pure span replacement and keeps stored template text free of trailing whitespace. The cost is that ` spell` after `[Some Card]` is typed by hand.
+
+Completion marks two groups sharing a display name `ambiguous`, which is currently **the only place in the app that says so**: `validateTemplate` checks group *ids* for duplicates (`duplicates('groups', …)`) but not names, so two groups both called `starter` validate with no issue at all and `{starter}` silently resolves to whichever comes first. That is a template-model gap, not a completion one, and is tracked separately.
+
 ## 6. Implication
 
 `implies(L, q)` is the single matching relation (principle 1). It is **logical** — a function of the two descriptions and fixed game-rule axioms, never of the card pool (PRD §6.2).
