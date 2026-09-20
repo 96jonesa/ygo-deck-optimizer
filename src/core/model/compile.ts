@@ -21,7 +21,16 @@ import {
   validateProblem,
 } from './problem';
 import { countSums, type IntRange } from './ranges';
-import { NAMED_CARD_MAX, type Template, type TemplateGroup } from './template';
+import {
+  type CriterionWhen,
+  countsFor,
+  NAMED_CARD_MAX,
+  partsOfMode,
+  type RunMode,
+  type Template,
+  type TemplateGroup,
+  whenOf,
+} from './template';
 
 /** What resolving a template looks things up in; the real `CardIndex` and `SetnameTable` satisfy it. */
 export interface ResolveContext {
@@ -81,6 +90,8 @@ export interface ResolvedCriterion {
   name?: string;
   text: string;
   expr: Expr;
+  /** Which hand it is judged for, defaulted: `both` unless the template says otherwise. */
+  when: CriterionWhen;
   /** Canonical text of `expr`. */
   canonical: string;
   /** This criterion's own expansion, for the reader; `flat` is what is judged. */
@@ -103,6 +114,13 @@ export interface ResolvedTemplate {
   criteria: ResolvedCriterion[];
   /** Every criterion expanded together, duplicates removed: a hand succeeds if it meets any one. */
   flat: ResolvedFlat[];
+  /**
+   * Parallel to `flat`: the `criteria` each alternative came from
+   * (`expandAll`'s `sources`). `handSizesForMode` selects a part's
+   * alternatives by it — the union is what CLASSES are built from, and this is
+   * what says which of it each hand is judged against.
+   */
+  flatSources: number[][];
   /** Alternatives left out of `flat` for needing more cards than the hand holds. */
   dropped: number;
   warnings: string[];
@@ -230,7 +248,13 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
   });
 
   const handSize = template.hand.size;
-  const parsedCriteria: { id: string; name?: string; text: string; expr: Expr }[] = [];
+  const parsedCriteria: {
+    id: string;
+    name?: string;
+    text: string;
+    expr: Expr;
+    when: CriterionWhen;
+  }[] = [];
   for (const criterion of template.criteria) {
     const { id, name, text } = criterion;
     const meant = criterionMeaning(criterion, descCtx);
@@ -239,8 +263,11 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
       continue;
     }
     if (meant.stale !== null) warnings.push(`criterion ${JSON.stringify(id)}: ${meant.stale}`);
+    const when = whenOf(criterion);
     parsedCriteria.push(
-      name === undefined ? { id, text, expr: meant.expr } : { id, name, text, expr: meant.expr },
+      name === undefined
+        ? { id, text, expr: meant.expr, when }
+        : { id, name, text, expr: meant.expr, when },
     );
   }
 
@@ -320,10 +347,45 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
       matrix,
       criteria,
       flat,
+      flatSources: all.sources,
       dropped: all.dropped,
       warnings,
     },
   };
+}
+
+/**
+ * The hand sizes a MODE scores, each with the flat alternatives it is judged
+ * against (PRD §5.5) — the whole of what tells the three modes apart.
+ *
+ * - `first`   — a hand of five over the criteria tagged `first` or `both`;
+ * - `second`  — a hand of six over those tagged `second` or `both`;
+ * - `average` — both, weighted 1 : 1.
+ *
+ * `weights` overrides the 1 : 1 of an average (the CLI's `--blend 3:2`).
+ *
+ * The CLASSES are not touched, and that is the design: they come from the
+ * union of every criterion the template has, whichever mode is run, so that
+ * one class vector means one deck — in both parts of an average, and in all
+ * three modes, which is what makes their answers comparable at all. What a
+ * mode changes is which alternatives count, and nothing else.
+ */
+export function handSizesForMode(
+  resolved: Pick<ResolvedTemplate, 'criteria' | 'flatSources'>,
+  mode: RunMode,
+  weights: readonly number[] = [],
+): HandSize[] {
+  return partsOfMode(mode).map(
+    (part, at): HandSize => ({
+      H: part === 'first' ? 5 : 6,
+      weight: weights[at] ?? 1,
+      criteria: resolved.flatSources.flatMap((sources, alternative) =>
+        sources.some((criterion) => countsFor(resolved.criteria[criterion]!.when, part))
+          ? [alternative]
+          : [],
+      ),
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------

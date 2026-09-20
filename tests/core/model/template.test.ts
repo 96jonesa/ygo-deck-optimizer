@@ -1,6 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { validateTemplate } from '../../../src/core/model/template';
+import {
+  countsFor,
+  handSizeForMode,
+  modeOf,
+  partsOfMode,
+  validateTemplate,
+  whenOf,
+} from '../../../src/core/model/template';
 import { motivatingTemplate } from '../../helpers/motivating';
 
 /** A small valid template file, as parsed JSON; tests break one thing at a time. */
@@ -349,5 +356,102 @@ describe('validateTemplate', () => {
     expect(errorsOf(withField('cardSnapshot', []))).toEqual([
       '`cardSnapshot` must be an object, not []',
     ]);
+  });
+});
+
+/**
+ * Which hand a criterion is judged for, and which hands a run scores (PRD
+ * §5.5). `mode` is what a template MEANS; `hand.size` is how a file written
+ * before modes existed said the same thing, and the two may not disagree.
+ */
+describe('modes and criterion tags', () => {
+  describe('handSizeForMode', () => {
+    it('is five going first and six otherwise: an average must score the larger hand', () => {
+      expect(handSizeForMode('first')).toBe(5);
+      expect(handSizeForMode('second')).toBe(6);
+      expect(handSizeForMode('average')).toBe(6);
+    });
+  });
+
+  describe('partsOfMode', () => {
+    it('is the one part of a single mode, and both of an average, in that order', () => {
+      expect(partsOfMode('first')).toEqual(['first']);
+      expect(partsOfMode('second')).toEqual(['second']);
+      expect(partsOfMode('average')).toEqual(['first', 'second']);
+    });
+  });
+
+  describe('countsFor', () => {
+    it('counts a tagged criterion in its own part, and `both` in either', () => {
+      expect([countsFor('first', 'first'), countsFor('first', 'second')]).toEqual([true, false]);
+      expect([countsFor('second', 'first'), countsFor('second', 'second')]).toEqual([false, true]);
+      expect([countsFor('both', 'first'), countsFor('both', 'second')]).toEqual([true, true]);
+    });
+  });
+
+  describe('whenOf', () => {
+    it('reads an untagged criterion as `both`: written once, counted either way', () => {
+      expect(whenOf({})).toBe('both');
+      expect(whenOf({ when: 'second' })).toBe('second');
+    });
+  });
+
+  describe('modeOf', () => {
+    it("is the template's own mode when it states one", () => {
+      expect(modeOf({ mode: 'average', hand: { size: 6 } })).toBe('average');
+      expect(modeOf({ mode: 'second', hand: { size: 6 } })).toBe('second');
+    });
+
+    it('reads a file that predates modes off its hand size, which always meant this', () => {
+      expect(modeOf({ hand: { size: 5 } })).toBe('first');
+      expect(modeOf({ hand: { size: 6 } })).toBe('second');
+    });
+  });
+
+  describe('validateTemplate', () => {
+    it('accepts a mode and a criterion tag, and hands both back', () => {
+      const json = {
+        ...withField('mode', 'average'),
+        hand: { size: 6 },
+        criteria: [
+          { id: 'c1', text: '1x {starter}', when: 'first' },
+          { id: 'c2', text: '1x {starter}', when: 'both' },
+          { id: 'c3', text: '1x {starter}' },
+        ],
+      };
+      const result = validateTemplate(json);
+      expect(result.ok && result.template.mode).toBe('average');
+      expect(result.ok && result.template.criteria.map((c) => c.when)).toEqual([
+        'first',
+        'both',
+        undefined,
+      ]);
+    });
+
+    it('leaves `mode` out when the file does, so an older file is unchanged', () => {
+      const result = validateTemplate(valid());
+      expect(result.ok && 'mode' in result.template).toBe(false);
+    });
+
+    it('refuses a mode it does not know, and a tag it does not know', () => {
+      expect(errorsOf(withField('mode', 'coinflip'))).toEqual([
+        '`mode` is "coinflip"; a run goes first, second, average',
+      ]);
+      expect(
+        errorsOf(withField('criteria', [{ id: 'c1', text: '1x spell', when: 'either' }])),
+      ).toEqual([
+        'criteria[0] ("c1"): `when` is "either"; a criterion is judged going first, second, both',
+      ]);
+    });
+
+    it('refuses a file whose mode and hand size disagree, naming both', () => {
+      expect(errorsOf({ ...withField('mode', 'average'), hand: { size: 5 } })).toEqual([
+        '`mode` is "average", which is judged at a hand of 6, but `hand.size` is 5',
+      ]);
+      expect(errorsOf({ ...withField('mode', 'second'), hand: { size: 5 } })).toEqual([
+        '`mode` is "second", which is judged at a hand of 6, but `hand.size` is 5',
+      ]);
+      expect(errorsOf({ ...withField('mode', 'first'), hand: { size: 5 } })).toEqual([]);
+    });
   });
 });

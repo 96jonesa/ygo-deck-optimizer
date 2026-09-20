@@ -21,7 +21,7 @@ import {
   type ScoredVector,
   sweepFixed,
 } from '../../../src/core/opt/optimizer';
-import { createScorer } from '../../../src/core/prob/scorer';
+import { type BlendPart, createScorer } from '../../../src/core/prob/scorer';
 import { same } from '../../helpers/assert';
 import { columnOf } from '../../helpers/gen-problem';
 import { genRangedProblem, lineIdOf, type RangedProblem } from '../../helpers/gen-ranged-problem';
@@ -806,6 +806,53 @@ describe('breakdown', () => {
     const c = compiled(smallInput());
     const [row] = breakdown(c, [{ id: 'never', alternatives: [] }], [34, 3, 3]);
     expect(row!.score.parts).toEqual([{ H: 5, weight: 1, num: 0, den: 658008 }]);
+  });
+
+  /**
+   * A criterion tagged for one hand (PRD §5.5) is judged in that part and
+   * scores 0 in the other, so its share of an average really is half of its
+   * own number — said, rather than hidden by leaving the row out.
+   */
+  describe('a criterion that only one part judges', () => {
+    const HANDS = [
+      { H: 5, weight: 1 },
+      { H: 6, weight: 1 },
+    ];
+    /** Blank, A, B; `1x A` is the only criterion, and it counts at one hand. */
+    const only = (parts: boolean[]) => [
+      { id: 'a', alternatives: [{ reqs: [{ n: 1, desc: 0 }], limits: [] }], parts },
+    ];
+
+    it('scores 0 in a part it is not in, and its own number in the one it is', () => {
+      const c = compiled(smallInput({ handSize: 6 }), HANDS);
+      const both = breakdown(c, only([true, true]), [34, 3, 3])[0]!.score.parts;
+      const firstOnly = breakdown(c, only([true, false]), [34, 3, 3])[0]!.score.parts;
+      const secondOnly = breakdown(c, only([false, true]), [34, 3, 3])[0]!.score.parts;
+      expect(firstOnly).toEqual([both[0], { ...both[1]!, num: 0 }]);
+      expect(secondOnly).toEqual([{ ...both[0]!, num: 0 }, both[1]]);
+      expect(both[0]!.num).toBeGreaterThan(0);
+      expect(both[1]!.num).toBeGreaterThan(0);
+    });
+
+    it('halves its share of the average, exactly', () => {
+      const c = compiled(smallInput({ handSize: 6 }), HANDS);
+      const both = breakdown(c, only([true, true]), [34, 3, 3])[0]!;
+      const firstOnly = breakdown(c, only([true, false]), [34, 3, 3])[0]!;
+      // (p + 0) / 2 against (p + q) / 2: the first part's half, on one denominator.
+      const [a, b] = both.score.parts as unknown as [BlendPart, BlendPart];
+      expect(BigInt(firstOnly.blend.num) * BigInt(b.den) * 2n * BigInt(a.den)).toBe(
+        BigInt(a.num) * BigInt(b.den) * BigInt(firstOnly.blend.den),
+      );
+      expect(firstOnly.blend.den).toBe(both.blend.den);
+    });
+
+    it('counts for every part when it says nothing, which is what an untagged one means', () => {
+      const c = compiled(smallInput({ handSize: 6 }), HANDS);
+      const untagged = [{ id: 'a', alternatives: only([true])[0]!.alternatives }];
+      expect(breakdown(c, untagged, [34, 3, 3])[0]!.score.parts).toEqual(
+        breakdown(c, only([true, true]), [34, 3, 3])[0]!.score.parts,
+      );
+    });
   });
 });
 

@@ -1,6 +1,7 @@
 import type { CriterionAnalysis, TemplateCriterion } from '../../../shared/types';
 import { issuesToList, parseFailureOf, worstSeverity } from '../model/analysis-view';
 import { canonicalText, expansionPreview } from '../model/criteria-readout';
+import { CRITERION_WHENS, type CriterionWhen, WHEN_LABELS } from '../model/deck-form';
 import { CompletingInput } from './completing-input';
 import { useField } from './fields';
 import { IssueList, ParseFailure } from './line-row';
@@ -16,10 +17,13 @@ export interface CriterionRowProps {
   found: CriterionAnalysis | null;
   /** The hand the alternatives were expanded for, which is what a drop is measured against. */
   handSize: number;
+  /** The run does not judge this criterion: its tag is for the other hand. */
+  uncounted: boolean;
   first: boolean;
   last: boolean;
   onText: (text: string) => void;
   onName: (name: string) => void;
+  onWhen: (when: CriterionWhen) => void;
   onMove: (by: number) => void;
   onRemove: () => void;
 }
@@ -28,10 +32,12 @@ export function CriterionRow({
   criterion,
   found,
   handSize,
+  uncounted,
   first,
   last,
   onText,
   onName,
+  onWhen,
   onMove,
   onRemove,
 }: CriterionRowProps) {
@@ -43,10 +49,18 @@ export function CriterionRow({
   const preview = expansionPreview(found, handSize);
   const issues = issuesToList(found);
   const severity = worstSeverity(found?.issues ?? []);
+  // The tag comes off the ANALYSIS, which is where the default lives (TDD
+  // §3); the template's own field is only what the picker writes back.
+  const when = found?.when ?? criterion.when ?? 'both';
 
   return (
     <li
-      className={severity === 'error' ? 'line criterion bad' : 'line criterion'}
+      className={[
+        severity === 'error' ? 'line criterion bad' : 'line criterion',
+        uncounted ? 'off' : '',
+      ]
+        .join(' ')
+        .trim()}
       data-testid={`criterion-${id}`}
     >
       <div className="line-main">
@@ -84,6 +98,23 @@ export function CriterionRow({
             onName(event.target.value);
           }}
         />
+        {/* Which hand judges it (PRD §5.5). A select rather than toggles: it
+            sits on the row beside a 70-character criterion, and three buttons
+            would not fit; the section it is filed under is the visible half
+            of the same fact. */}
+        <select
+          className="criterion-when"
+          value={when}
+          aria-label={`Which hand criterion ${id} is judged for`}
+          data-testid={`criterion-when-${id}`}
+          onChange={(event) => onWhen(event.target.value as CriterionWhen)}
+        >
+          {CRITERION_WHENS.map((option) => (
+            <option key={option} value={option}>
+              {WHEN_LABELS[option]}
+            </option>
+          ))}
+        </select>
         <span className="line-buttons">
           {/* `aria-disabled` rather than `disabled`, for the reason `LineRow` gives. */}
           <button
@@ -120,6 +151,11 @@ export function CriterionRow({
       </div>
 
       <div className="line-readout" data-testid={`criterion-readout-${id}`}>
+        {uncounted && (
+          <p className="line-echo dim" data-testid={`criterion-uncounted-${id}`}>
+            This run does not judge it: it is for {WHEN_LABELS[when]}.
+          </p>
+        )}
         {failure !== null ? (
           <ParseFailure
             text={criterion.text}

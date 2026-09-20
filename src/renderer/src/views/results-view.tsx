@@ -19,6 +19,7 @@ import {
   confirmationLine,
   exactText,
   formatCount,
+  partLines,
   percentText,
   progressLine,
   runStatsText,
@@ -59,11 +60,15 @@ const COLUMN_CHARS = 16;
 
 function BestRatio({ result }: { result: RunResult }) {
   const labels = lineLabels(result);
+  const parts = partLines(result.best.score);
   return (
     <div className="headline" data-testid="run-headline">
       <p className="headline-label">
         {result.partial ? 'Best of what was scored' : 'Best ratio'}
-        <span className="dim"> — P(at least one criterion)</span>
+        <span className="dim">
+          {' '}
+          — P(at least one criterion){parts.length > 0 ? ', averaged over the two hands' : ''}
+        </span>
       </p>
       <p className="headline-value">
         <strong className="big tabular" data-testid="run-best-percent">
@@ -73,6 +78,22 @@ function BestRatio({ result }: { result: RunResult }) {
           {exactText(result.best.blend)} exactly
         </span>
       </p>
+      {/* Over both hands the headline is the AVERAGE, and the two hands are
+          given whole beneath it: their denominators differ — C(N,5) against
+          C(N,6) — so neither fraction is the other's, and the mean is neither. */}
+      {parts.length > 0 && (
+        <table className="rows tight headline-parts" data-testid="run-best-parts">
+          <tbody>
+            {parts.map((part) => (
+              <tr key={part.label} data-testid={`run-best-part-${part.hand}`}>
+                <th>{part.label}</th>
+                <td className="num">{part.percent}</td>
+                <td className="num dim">{part.exact}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       <table className="rows tight best-lines" data-testid="best-lines">
         <tbody>
           {bestRatioRows(result).map((row) => (
@@ -124,6 +145,10 @@ function Ranked({ result }: { result: RunResult }) {
   const rows = topRows(result, all ? kept : TOP_ROWS);
   const blank = new Set(result.lines.filter((line) => line.cls === 0).map((line) => line.id));
   const labels = lineLabels(result);
+  // The columns each hand adds: its own probability and its own exact
+  // fraction. Read off the first row, since every row of a run has the same
+  // parts in the same order.
+  const parts = rows[0] === undefined ? [] : rows[0].parts;
 
   return (
     <>
@@ -135,8 +160,16 @@ function Ranked({ result }: { result: RunResult }) {
           <thead>
             <tr>
               <th>#</th>
-              <th>P</th>
+              <th title={parts.length > 0 ? 'the average of the two hands' : undefined}>
+                {parts.length > 0 ? 'average' : 'P'}
+              </th>
               <th>exact</th>
+              {/* One column per hand, its percentage over its own exact
+                  fraction: four columns here pushed the deck ratio — the
+                  thing being chosen — off the panel entirely. */}
+              {parts.map((part) => (
+                <th key={part.hand}>{part.label}</th>
+              ))}
               {result.lines.map((line) => (
                 // A column cannot widen — the table sizes to its contents —
                 // so the name is cut here rather than by CSS, and kept whole,
@@ -167,6 +200,12 @@ function Ranked({ result }: { result: RunResult }) {
                 </td>
                 <td className="num">{row.percent}</td>
                 <td className="num">{row.exact}</td>
+                {row.parts.map((part) => (
+                  <td key={part.hand} className="num stacked">
+                    {part.percent}
+                    <span className="dim">{part.exact}</span>
+                  </td>
+                ))}
                 {result.lines.map((line, column) => (
                   <td key={line.id} className={blank.has(line.id) ? 'num dim' : 'num'}>
                     {row.example[column]}
@@ -269,6 +308,7 @@ function Plateau({ result, onRun }: { result: RunResult; onRun: () => void }) {
       <div className="readout" data-testid="plateau">
         <p className="tabular" data-testid="plateau-size">
           {view.size} within <strong>{view.points}</strong> percentage points
+          {result.handSizes.length > 1 && <span className="dim"> of the average</span>}
         </p>
         {view.truncated !== null && (
           <p className="dim" data-testid="plateau-truncated">
@@ -296,20 +336,47 @@ function Plateau({ result, onRun }: { result: RunResult; onRun: () => void }) {
 }
 
 function Breakdown({ rows, result }: { rows: BreakdownRow[]; result: RunResult }) {
+  const parts = partLines(result.best.score);
   return (
     <table className="rows tight breakdown" data-testid="breakdown">
+      {parts.length > 0 && (
+        <thead>
+          <tr>
+            <th />
+            <th className="num">average</th>
+            <th className="num">exact</th>
+            {parts.map((part) => (
+              <th key={part.hand} className="num">
+                {part.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+      )}
       <tbody>
         {rows.map((row) => (
           <tr key={row.id} data-testid={`breakdown-${row.id}`}>
             <th>{row.label}</th>
             <td className="num">{row.percent}</td>
             <td className="num dim">{row.exact}</td>
+            {row.parts.map((part) => (
+              <td key={part.hand} className="num stacked">
+                {part.percent}
+                <span className="dim">{part.exact}</span>
+              </td>
+            ))}
           </tr>
         ))}
         <tr className="total" data-testid="breakdown-any">
           <th>any of them</th>
           <td className="num">{percentText(result.best.blend)}</td>
           <td className="num dim">{exactText(result.best.blend)}</td>
+          {partLines(result.best.score).map((part) => (
+            <td key={part.hand} className="num stacked">
+              {part.percent}
+              <span className="dim">{part.exact}</span>
+            </td>
+          ))}
         </tr>
       </tbody>
     </table>
@@ -360,7 +427,14 @@ function Irrelevant({
           </p>
           <p className="chart-values tabular">
             {row.cells.map((cell) => (
-              <span key={cell.counts} className={cell.best ? 'cell best' : 'cell'}>
+              <span
+                key={cell.counts}
+                className={cell.best ? 'cell best' : 'cell'}
+                title={[
+                  cell.exact,
+                  ...cell.parts.map((part) => `${part.label}: ${part.exact} = ${part.percent}`),
+                ].join(' — ')}
+              >
                 <span className="dim">{cell.counts}:</span> {cell.percent}
               </span>
             ))}
@@ -450,7 +524,13 @@ function RunResultReadout({
       </Heading>
       <SweepCharts sweeps={result.sweeps} labels={lineLabels(result)} />
 
-      <Heading note="Each criterion on its own, at the best ratio. They overlap, so they do not add up.">
+      <Heading
+        note={
+          result.handSizes.length > 1
+            ? 'Each criterion on its own, at the best ratio, in each hand. They overlap, so they do not add up — and a criterion for one hand scores 0 in the other, which halves its share of the average rather than hiding it.'
+            : 'Each criterion on its own, at the best ratio. They overlap, so they do not add up.'
+        }
+      >
         Per criterion
       </Heading>
       <Breakdown rows={breakdownRows(result)} result={result} />

@@ -998,19 +998,46 @@ input.narrow-name {
 /*
  * A criterion row is the line row's grid with the copy range taken out — the
  * id, the text and the buttons line up with the template's down the same left
- * column — and the optional name placed on a row of its own beneath the text.
- * The text needs the width: the example's shortest criterion is 70 characters.
+ * column — and the optional name and the hand it is judged for on a second row
+ * beneath. The TEXT keeps the whole width: the example's shortest criterion is
+ * 70 characters, and a control on its row costs it a third of that.
  */
 .line.criterion .line-main {
   grid-template-columns: 3.5rem minmax(6rem, 1fr) auto;
 }
 
+.line.criterion .line-buttons {
+  grid-column: 3;
+  grid-row: 1;
+}
+
 .line.criterion .criterion-name {
-  grid-column: 2 / -1;
+  grid-column: 2;
   grid-row: 2;
   max-width: 22rem;
   margin-top: 2px;
   font-size: var(--fs-sm);
+}
+
+.line.criterion .criterion-when {
+  grid-column: 3;
+  grid-row: 2;
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+}
+
+/* A criterion the RUN does not judge: still editable, visibly not counted. */
+.line.criterion.off .line-main > *:not(.criterion-when) {
+  opacity: 0.55;
+}
+
+/* The three headings the criteria are filed under: quieter than a panel's. */
+.criteria-heading {
+  margin-bottom: 0;
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
 }
 
 /*
@@ -1247,6 +1274,37 @@ ul.readout {
 
 .headline .best-lines {
   margin-bottom: var(--sp-2);
+}
+
+/*
+ * The two hands under the average (PRD §5.5). Both in full, because their
+ * denominators differ — C(N,5) against C(N,6) — so the mean above them is
+ * neither one, and one of them alone would be the wrong one.
+ */
+.headline-parts {
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.headline .headline-parts th {
+  padding-right: var(--sp-3);
+  color: var(--text-dim);
+  font-weight: 400;
+  text-align: left;
+}
+
+/*
+ * A cell holding one hand's two figures, its percentage over its own exact
+ * fraction. One column rather than two: the ranked table sizes to its
+ * contents, and four extra columns pushed the deck ratio off the panel.
+ */
+.rows td.stacked {
+  line-height: 1.25;
+}
+
+.rows td.stacked span {
+  display: block;
+  font-size: var(--fs-sm);
 }
 
 /* The limits footnote (PRD §6.3): a caveat, not a warning — quiet on purpose. */

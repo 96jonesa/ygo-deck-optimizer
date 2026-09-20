@@ -14,6 +14,15 @@ export type ExpandResult =
   | {
       ok: true;
       flat: FlatCriterion[];
+      /**
+       * Parallel to `flat`: for each alternative, the `exprs` it came from,
+       * ascending. Two criteria that expand to the SAME alternative share one
+       * entry of `flat` — that is the point of the deduplication — so this is
+       * the only thing that can still say which criteria a hand meeting it
+       * would be meeting. A run that judges a SUBSET of the criteria (going
+       * first, going second) selects its alternatives by it.
+       */
+      sources: number[][];
       /** Distinct alternatives left out of `flat` because they need more cards than a hand holds. */
       dropped: number;
     }
@@ -113,6 +122,33 @@ function* flatMapped(exprs: readonly Expr[]): Iterable<Draft> {
   for (const expr of exprs) yield* alternativesOf(expr);
 }
 
+/**
+ * `distinct` over the criteria at the ROOT, remembering which of them each
+ * surviving alternative came from. The cap is enforced exactly as `distinct`
+ * enforces it — on the distinct count, as it grows — and a criterion whose
+ * every alternative another criterion already had adds no entry, only a source.
+ */
+function distinctWithSources(exprs: readonly Expr[]): { drafts: Draft[]; sources: number[][] } {
+  const at = new Map<string, number>();
+  const drafts: Draft[] = [];
+  const sources: number[][] = [];
+  exprs.forEach((expr, source) => {
+    for (const draft of alternativesOf(expr)) {
+      const identity = identityOf(draft);
+      let index = at.get(identity);
+      if (index === undefined) {
+        index = drafts.length;
+        at.set(identity, index);
+        drafts.push(draft);
+        sources.push([]);
+        if (drafts.length > MAX_FLAT_CRITERIA) throw new TooMany();
+      }
+      if (!sources[index]!.includes(source)) sources[index]!.push(source);
+    }
+  });
+  return { drafts, sources };
+}
+
 /** `and` distributed over `or`: the alternatives of `expr`, each merged, none repeated. */
 function alternativesOf(expr: Expr): Draft[] {
   switch (expr.op) {
@@ -165,8 +201,9 @@ function alternativesOf(expr: Expr): Draft[] {
  */
 export function expandAll(exprs: readonly Expr[], opts: ExpandOptions): ExpandResult {
   let drafts: Draft[];
+  let from: number[][];
   try {
-    drafts = distinct(flatMapped(exprs));
+    ({ drafts, sources: from } = distinctWithSources(exprs));
   } catch (failure) {
     if (!(failure instanceof TooMany)) throw failure;
     return {
@@ -175,7 +212,8 @@ export function expandAll(exprs: readonly Expr[], opts: ExpandOptions): ExpandRe
     };
   }
   const flat: FlatCriterion[] = [];
-  for (const { reqs, limits } of drafts) {
+  const sources: number[][] = [];
+  for (const [index, { reqs, limits }] of drafts.entries()) {
     // Only the LOWER bounds need cards: `0-2x A` asks for none.
     const slots = [...reqs.values()].reduce((sum, { n }) => sum + n, 0);
     if (slots > opts.maxHandSize) continue;
@@ -190,11 +228,12 @@ export function expandAll(exprs: readonly Expr[], opts: ExpandOptions): ExpandRe
         message: `this alternative has ${ranges} range requirements that can bind; the engine judges at most ${MAX_RANGES} — widen a range past the hand size, or write plain \`nx\` requirements`,
       };
     flat.push({ reqs: [...reqs.values()], limits: [...limits.values()] });
+    sources.push(from[index]!);
   }
-  return { ok: true, flat, dropped: drafts.length - flat.length };
+  return { ok: true, flat, sources, dropped: drafts.length - flat.length };
 }
 
-/** `expandAll` of one criterion. */
+/** `expandAll` of one criterion; every alternative's source is then that one. */
 export function expand(expr: Expr, opts: ExpandOptions): ExpandResult {
   return expandAll([expr], opts);
 }

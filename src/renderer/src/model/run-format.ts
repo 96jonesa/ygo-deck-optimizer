@@ -1,5 +1,6 @@
 import type {
   Analysis,
+  BlendScore,
   Count,
   Fraction,
   Issue,
@@ -114,6 +115,37 @@ export function bestRatioRows(result: RunResult): BestRatioRow[] {
   });
 }
 
+/** One hand of a blended score, as it reads: `going first  41.5744%  273,563 / 658,008`. */
+export interface ScoreLine {
+  /** `going first`, or `going first × 3` when the weights are uneven. */
+  label: string;
+  /** The hand size, for a test or a tooltip that wants the number itself. */
+  hand: number;
+  percent: string;
+  exact: string;
+}
+
+/**
+ * The hands behind a blended score, in the order the engine reports them —
+ * EMPTY for a run of one hand, whose single number IS the headline.
+ *
+ * Both are shown in full because their DENOMINATORS DIFFER: going first is
+ * over C(N,5) and going second over C(N,6), so there is no one fraction that
+ * says both, and picking one would be quietly showing the wrong one. The mean
+ * beside them is the run's own exact `blend` — never an average worked out
+ * here (TDD §3): nothing in the renderer computes a probability.
+ */
+export function partLines(score: BlendScore): ScoreLine[] {
+  if (score.parts.length < 2) return [];
+  const even = score.parts.every((part) => part.weight === score.parts[0]!.weight);
+  return score.parts.map((part) => ({
+    label: `going ${part.H === 5 ? 'first' : 'second'}${even ? '' : ` × ${part.weight}`}`,
+    hand: part.H,
+    percent: percentText(part),
+    exact: exactText(part),
+  }));
+}
+
 export interface TopRow {
   /** The vector's class totals, joined: what tells one row from another, since a tied rank does not. */
   key: string;
@@ -121,8 +153,11 @@ export interface TopRow {
   rank: number;
   /** How many kept rows hold this same exact score; 1 when it stands alone. */
   tiedWith: number;
+  /** The score the row is RANKED by: the average, when there are two hands. */
   percent: string;
   exact: string;
+  /** Each hand on its own; empty for a run of one hand. */
+  parts: ScoreLine[];
   /** One deck behind the row: a count per line, in the order of `result.lines`. */
   example: number[];
   /** How many raw line ratios are this row, as far as the criteria can tell. */
@@ -151,6 +186,7 @@ export function topRows(result: RunResult, rows: number): TopRow[] {
     tiedWith: tied.get(vector.blend.num) ?? 1,
     percent: percentText(vector.blend),
     exact: exactText(vector.blend),
+    parts: partLines(vector.score),
     example: result.rankedRatios[at]?.example ?? [],
     rawRatios: formatCount(vector.rawRatios),
   }));

@@ -5,6 +5,7 @@ import {
   MAX_DECK_SIZE,
   MAX_HAND_SIZE,
   type Problem,
+  partProblem,
   validateProblem,
 } from '../../../src/core/model/problem';
 
@@ -243,6 +244,104 @@ describe('validateProblem', () => {
         max: 1,
       }));
       expect(() => validateProblem(problem)).toThrow(new RegExp(String(MAX_RANGES)));
+    });
+  });
+});
+
+/**
+ * ONE part of a blend as a problem of its own (PRD §5.5): the same deck, the
+ * SAME classes, and only the criteria that part is judged against.
+ */
+describe('partProblem', () => {
+  /** Two criteria, so a part can have one of them. */
+  function twoCriteria(): Problem {
+    return {
+      ...valid(),
+      handSizes: [
+        { H: 5, weight: 1, criteria: [0] },
+        { H: 6, weight: 2, criteria: [1] },
+      ],
+      criteria: [
+        { slots: [0b010], limits: [] },
+        { slots: [0b100], limits: [] },
+      ],
+    };
+  }
+
+  it('keeps only the criteria the part names, in the order it names them', () => {
+    const problem = twoCriteria();
+    expect(partProblem(problem, problem.handSizes[0]!).criteria).toEqual([problem.criteria[0]]);
+    expect(partProblem(problem, problem.handSizes[1]!).criteria).toEqual([problem.criteria[1]]);
+  });
+
+  /**
+   * The load-bearing one. A class vector is meaningless without the class list
+   * that says what a total counts, so two parts built from two lists would be
+   * averaging two different decks and nothing downstream could tell. Sharing
+   * the array makes that unsayable rather than merely untrue.
+   */
+  it('shares the very same `classes` array, so a vector cannot mean two decks', () => {
+    const problem = twoCriteria();
+    for (const hand of problem.handSizes)
+      expect(partProblem(problem, hand).classes).toBe(problem.classes);
+  });
+
+  it('keeps the deck size, and reduces the part to a hand of weight 1', () => {
+    const problem = twoCriteria();
+    const part = partProblem(problem, problem.handSizes[1]!);
+    expect(part.deckSize).toBe(problem.deckSize);
+    expect(part.handSizes).toEqual([{ H: 6, weight: 1 }]);
+  });
+
+  it('is every criterion when the part names none: a plain problem is unchanged', () => {
+    const problem = valid();
+    expect(partProblem(problem, problem.handSizes[0]!).criteria).toBe(problem.criteria);
+  });
+
+  it('gives a part that names no criterion an empty list, which scores 0', () => {
+    const problem = twoCriteria();
+    expect(partProblem(problem, { H: 5, weight: 1, criteria: [] }).criteria).toEqual([]);
+  });
+
+  it('throws rather than silently drop a criterion the problem does not have', () => {
+    expect(() => partProblem(valid(), { H: 5, weight: 1, criteria: [3] })).toThrow(
+      /no criterion 3/,
+    );
+  });
+});
+
+describe('validateProblem', () => {
+  describe('a hand size that names its own criteria', () => {
+    function withCriteria(criteria: number[]): Problem {
+      const problem = valid();
+      return {
+        ...problem,
+        handSizes: [{ H: 5, weight: 1, criteria }],
+        criteria: [problem.criteria[0]!, { slots: [0b100], limits: [] }],
+      };
+    }
+
+    it('accepts indices into the problem’s criteria, and an empty list', () => {
+      expect(() => validateProblem(withCriteria([0, 1]))).not.toThrow();
+      expect(() => validateProblem(withCriteria([1]))).not.toThrow();
+      expect(() => validateProblem(withCriteria([]))).not.toThrow();
+    });
+
+    it('refuses an index the problem has no criterion for', () => {
+      expect(() => validateProblem(withCriteria([0, 2]))).toThrow(
+        'hand size 5: `criteria` holds 2, which is not one of the problem’s 2 criteria'.replace(
+          '’',
+          "'",
+        ),
+      );
+      expect(() => validateProblem(withCriteria([-1]))).toThrow(/holds -1/);
+      expect(() => validateProblem(withCriteria([0.5]))).toThrow(/holds 0.5/);
+    });
+
+    it('refuses the same criterion twice: a hand is judged against a SET', () => {
+      expect(() => validateProblem(withCriteria([1, 1]))).toThrow(
+        'hand size 5: criterion 1 appears twice',
+      );
     });
   });
 });

@@ -621,6 +621,14 @@ export interface BreakdownCriterion {
   name?: string;
   /** Its own flat alternatives; the descriptions are columns of the match matrix `compiled` was built from. */
   alternatives: readonly FlatAlternative[];
+  /**
+   * Parallel to `compiled.problem.handSizes`: whether this criterion counts
+   * for that part. Absent: every part, which is what an untagged criterion
+   * means and what a single-part run always is. A part this criterion is not
+   * in scores 0 there — a criterion for going second contributes nothing to
+   * going first, and its share of an average is halved rather than hidden.
+   */
+  parts?: readonly boolean[];
 }
 
 export interface CriterionScore {
@@ -654,12 +662,22 @@ export function breakdown(
   // The same ceiling and limit dropping the whole problem got, so a criterion
   // alone is judged exactly as it is judged among the others.
   const largestHand = Math.max(...compiled.problem.handSizes.map(({ H }) => H));
-  return criteria.map(({ id, name, alternatives }) => {
+  return criteria.map(({ id, name, alternatives, parts }) => {
+    const own = alternatives.map(
+      (alternative) => compileCriterion(alternative, maskOf, largestHand).criterion,
+    );
+    // Every one of its own alternatives in the parts it counts for, none in
+    // the others — the same shape of blend the run has, so its numbers sit
+    // under the run's and mean the same thing.
+    const all = own.map((_, at) => at);
     const alone: Problem = {
       ...compiled.problem,
-      criteria: alternatives.map(
-        (alternative) => compileCriterion(alternative, maskOf, largestHand).criterion,
-      ),
+      handSizes: compiled.problem.handSizes.map((hand, at) => ({
+        H: hand.H,
+        weight: hand.weight,
+        criteria: (parts?.[at] ?? true) ? all : [],
+      })),
+      criteria: own,
     };
     const { score, blend } = createRanker(alone).scored(classTotals);
     return name === undefined ? { id, score, blend } : { id, name, score, blend };

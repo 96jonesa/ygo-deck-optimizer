@@ -8,7 +8,7 @@ import {
   DEFAULT_COST,
   SAMPLE_SIZE,
 } from '../../../src/core/model/analyze';
-import { compileProblem, resolveTemplate } from '../../../src/core/model/compile';
+import { compileProblem, handSizesForMode, resolveTemplate } from '../../../src/core/model/compile';
 import { CardService } from '../../../src/main/services/cards';
 import {
   COMPLETION_LIMIT,
@@ -19,7 +19,7 @@ import {
   runLimits,
   TemplateService,
 } from '../../../src/main/services/templates';
-import type { TemplateGroup } from '../../../src/shared/types';
+import type { Template, TemplateGroup } from '../../../src/shared/types';
 import { ControllableLoader, immediateLoader, loadedCards } from '../../helpers/card-loader';
 import { CODE, FIXTURE_ROWS } from '../../helpers/fixture-cards';
 import {
@@ -504,20 +504,100 @@ describe('TemplateService', () => {
       const result = templates.compileTemplate(JSON.parse(readFileSync(MOTIVATING_PATH, 'utf8')));
       if (!result.ok) throw new Error(`expected a compiled template, got ${result.reason}`);
       expect(result.analysis.ok).toBe(true);
-      expect(result.compiled).toEqual(compileProblem(resolved.resolved));
+      // The motivating example is a going-first template whose criteria are
+      // untagged, so its one part is judged against every alternative.
+      expect(result.compiled).toEqual(
+        compileProblem(resolved.resolved, {
+          handSizes: handSizesForMode(resolved.resolved, 'first'),
+        }),
+      );
+      expect(result.compiled.problem.handSizes).toEqual([{ H: 5, weight: 1, criteria: [0, 1] }]);
       expect(result.compiled.classes).toHaveLength(5);
       expect(result.criteria).toEqual([
         {
           id: 'c1',
           name: 'A, B and any monster',
+          parts: [true],
           alternatives: resolved.resolved.criteria[0]?.alternatives,
         },
         {
           id: 'c2',
           name: 'A, B and a low-Level monster',
+          parts: [true],
           alternatives: resolved.resolved.criteria[1]?.alternatives,
         },
       ]);
+    });
+
+    /**
+     * The mode decides which hands are scored and which criteria judge each
+     * of them (PRD §5.5). Decided HERE, in main, and posted to the worker as
+     * plain numbers: the worker is given no template and no card data.
+     */
+    describe('the run mode', () => {
+      /** The motivating example, in a mode, with its two criteria split. */
+      function tagged(mode: 'first' | 'second' | 'average'): Template {
+        const template = motivatingTemplate();
+        return {
+          ...template,
+          mode,
+          hand: { size: mode === 'first' ? 5 : 6 },
+          criteria: [
+            { ...template.criteria[0]!, when: 'first' },
+            { ...template.criteria[1]!, when: 'second' },
+          ],
+        };
+      }
+
+      it('compiles a going-first run as one hand of five over its own criteria', async () => {
+        const { templates } = await readyServices();
+        const result = templates.compileTemplate(tagged('first'));
+        if (!result.ok) throw new Error(`expected a compiled template, got ${result.reason}`);
+        expect(result.compiled.problem.handSizes).toEqual([{ H: 5, weight: 1, criteria: [0] }]);
+        expect(result.criteria.map((criterion) => criterion.parts)).toEqual([[true], [false]]);
+      });
+
+      it('compiles an average as both hands, each over its own criteria', async () => {
+        const { templates } = await readyServices();
+        const result = templates.compileTemplate(tagged('average'));
+        if (!result.ok) throw new Error(`expected a compiled template, got ${result.reason}`);
+        expect(result.compiled.problem.handSizes).toEqual([
+          { H: 5, weight: 1, criteria: [0] },
+          { H: 6, weight: 1, criteria: [1] },
+        ]);
+        expect(result.criteria.map((criterion) => criterion.parts)).toEqual([
+          [true, false],
+          [false, true],
+        ]);
+      });
+
+      it('builds the same classes in all three modes: a class vector is one deck', async () => {
+        const { templates } = await readyServices();
+        const classes = (['first', 'second', 'average'] as const).map((mode) => {
+          const result = templates.compileTemplate(tagged(mode));
+          if (!result.ok) throw new Error(`expected a compiled template, got ${result.reason}`);
+          return JSON.stringify(result.compiled.problem.classes);
+        });
+        expect(new Set(classes).size).toBe(1);
+      });
+
+      it('reads a template that predates modes off its hand size', async () => {
+        const { templates } = await readyServices();
+        const template = motivatingTemplate();
+        const first = templates.compileTemplate(template);
+        const second = templates.compileTemplate({ ...template, hand: { size: 6 } });
+        if (!first.ok || !second.ok) throw new Error('both compile');
+        expect(first.analysis.mode).toBe('first');
+        expect(second.analysis.mode).toBe('second');
+        expect(first.compiled.problem.handSizes.map(({ H }) => H)).toEqual([5]);
+        expect(second.compiled.problem.handSizes.map(({ H }) => H)).toEqual([6]);
+      });
+
+      it('is still plain data over IPC with the criteria tagged', async () => {
+        const { templates } = await readyServices();
+        const result = templates.compileTemplate(tagged('average'));
+        expect(structuredClone(result)).toEqual(result);
+      });
     });
 
     it('is plain data: what it returns can be posted to a worker as it is', async () => {

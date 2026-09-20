@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "deckSize": 40,
+  "hand": { "size": 6 },
+  "mode": "average",
+  "groups": [],
+  "lines": [
+    { "id": "starter", "text": "[Sage with Eyes of Blue]", "min": 0, "max": 3 },
+    { "id": "engine", "text": "level 4 or lower monster", "min": 6, "max": 18 },
+    { "id": "breaker", "text": "spell", "min": 6, "max": 18 },
+    { "id": "trap", "text": "trap", "min": 0, "max": 8 }
+  ],
+  "remainder": { "min": 0, "max": 6 },
+  "criteria": [
+    {
+      "id": "c1",
+      "name": "going first: combo off the starter",
+      "when": "first",
+      "text": "1x [Sage with Eyes of Blue] and 1x level 4 or lower monster"
+    },
+    {
+      "id": "c2",
+      "name": "going second: two breakers and a body",
+      "when": "second",
+      "text": "2x spell and 1x level 4 or lower monster"
+    },
+    {
+      "id": "c3",
+      "name": "either way: a body and a trap",
+      "when": "both",
+      "text": "1x level 4 or lower monster and 1x trap"
+    }
+  ]
+}

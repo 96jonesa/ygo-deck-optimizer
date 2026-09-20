@@ -1,5 +1,5 @@
 import type { Fraction, LineSweep, SweepCell } from '../../../shared/types';
-import { countsLabel, exactText, fractionText, percentText } from './run-format';
+import { countsLabel, exactText, fractionText, partLines, percentText } from './run-format';
 
 // The geometry of one line's sweep (PRD §5.6): copies across, the best
 // probability reachable at that count up. Inline SVG, so there is no charting
@@ -43,7 +43,11 @@ export interface ChartPoint {
   exact: string;
   /** The engine's argmax: a count at which the overall best is reached. */
   best: boolean;
-  /** `3 copies: 40.8933% — 269,081 / 658,008`. */
+  /**
+   * `3 copies: 269,081 / 658,008 = 40.8933%` — and, over both hands, each
+   * hand's own fraction after it: the two denominators differ, so the mean
+   * alone would not say what either hand was.
+   */
   title: string;
 }
 
@@ -147,7 +151,13 @@ export function sweepChart(sweep: LineSweep, box: ChartBox = CHART_BOX): SweepCh
       percent,
       exact,
       best,
-      title: `${copies(cell.count)}: ${fractionText(cell.best.blend)}${best ? ' — the best this template reaches' : ''}`,
+      title: [
+        `${copies(cell.count)}: ${fractionText(cell.best.blend)}`,
+        ...partLines(cell.best.score).map(
+          (part) => `${part.label}: ${part.exact} = ${part.percent}`,
+        ),
+        ...(best ? ['the best this template reaches'] : []),
+      ].join(' — '),
     };
   });
 

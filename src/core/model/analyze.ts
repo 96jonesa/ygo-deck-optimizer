@@ -28,14 +28,22 @@ import {
   REMAINDER_ID,
 } from './compile';
 import { criterionMeaning, lineMeaning } from './meaning';
-import { MAX_DECK_SIZE } from './problem';
+import { type HandSize, MAX_DECK_SIZE, partProblem } from './problem';
 import { achievableRange, countSums, type IntRange } from './ranges';
 import {
+  type CriterionWhen,
+  countsFor,
   DECK_SIZE_MAX,
   DECK_SIZE_MIN,
   HAND_SIZES,
+  handSizeForMode,
+  modeOf,
   NAMED_CARD_MAX,
+  type Part,
+  partsOfMode,
+  type RunMode,
   type Template,
+  whenOf,
 } from './template';
 
 /**
@@ -210,6 +218,14 @@ export interface CriterionAnalysis {
   id: string;
   name?: string;
   text: string;
+  /**
+   * Which hand it is judged for, defaulted (`whenOf`). The editor groups the
+   * criteria by it: which criteria belong to which part is decided here and
+   * read there, never worked out from the template a second time.
+   */
+  when: CriterionWhen;
+  /** Whether the template's MODE judges it at all: false for a going-second criterion in a going-first run. */
+  counted: boolean;
   parsed: ParsedText;
   /** The expansion preview: canonical text of each flat alternative, in order. */
   alternatives: string[];
@@ -301,8 +317,8 @@ export interface WorkAnalysis {
   rawRatios: Count | null;
   /** Class-total vectors the optimizer would score; `null` when the template does not compile. */
   classVectors: Count | null;
-  /** Per hand size, the products summed per score: `createScorer(...).terms`. */
-  hands: { H: number; terms: number; complemented: boolean }[] | null;
+  /** Per part of the mode, the products summed per score: `createScorer(...).terms`. */
+  hands: { H: number; part: Part; weight: number; terms: number; complemented: boolean }[] | null;
   estimatedMs: number | null;
   cost: CostModel;
 }
@@ -312,6 +328,8 @@ export interface Analysis {
   ok: boolean;
   deckSize: number;
   handSize: number;
+  /** What the run ranks by (`modeOf`): going first, going second, or their average. */
+  mode: RunMode;
   lines: LineAnalysis[];
   remainder: RemainderAnalysis;
   groups: GroupAnalysis[];
@@ -446,6 +464,8 @@ function summarize(desc: Description, members: Groups, ctx: AnalyzeContext): Mat
 function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostModel): Analysis {
   const { deckSize } = template;
   const handSize = template.hand.size;
+  const mode = modeOf(template);
+  const parts = partsOfMode(mode);
   const members = groupMembersOf(template.groups);
   const descCtx: DescContext = {
     cards: ctx.cards,
@@ -469,6 +489,13 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       error(
         'hand-size',
         `the hand size is ${handSize}; an opening hand is ${HAND_SIZES.join(' or ')} cards`,
+      ),
+    );
+  else if (handSize !== handSizeForMode(mode))
+    issues.push(
+      error(
+        'hand-size',
+        `going ${mode === 'average' ? 'first and second' : mode} is judged at a hand of ${handSizeForMode(mode)}, but the hand size is ${handSize}`,
       ),
     );
 
@@ -714,9 +741,12 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
 
   const parsedCriteria: (ParsedCriterion | null)[] = [];
   const criteria = template.criteria.map((criterion): CriterionAnalysis => {
+    const when = whenOf(criterion);
     const out: CriterionAnalysis = {
       id: criterion.id,
       text: criterion.text,
+      when,
+      counted: parts.some((part) => countsFor(when, part)),
       parsed: { ok: true, canonical: '' },
       alternatives: [],
       dropped: 0,
@@ -759,6 +789,20 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
   });
   if (template.criteria.length === 0)
     issues.push(warning('no-criteria', 'there is no criterion: every hand fails'));
+  else
+    for (const part of parts) {
+      if (template.criteria.some((criterion) => countsFor(whenOf(criterion), part))) continue;
+      const half =
+        mode === 'average'
+          ? ', so that half of the average is 0'
+          : ': every hand fails, whatever the ratio';
+      issues.push(
+        warning(
+          'no-criteria',
+          `no criterion is judged going ${part} (a hand of ${part === 'first' ? 5 : 6})${half}`,
+        ),
+      );
+    }
 
   // --- requirements and limits -----------------------------------------------------------
   const fillers = (col: Column) => rows.filter((_, i) => col.fills[i]).map((row) => row.id);
@@ -1035,7 +1079,19 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
         // `compile`'s own, not a copy of it: the bounds cross this boundary once.
         flat: indexFlat(all.flat, (desc) => columnAt(desc)),
       };
-      const compiled = compileProblem(input);
+      // The same rule `handSizesForMode` states, over the analysis's own
+      // indices: the classes come from the union of every criterion, and each
+      // part is judged against the alternatives ITS criteria produced.
+      const handSizes: HandSize[] = parts.map((part) => ({
+        H: part === 'first' ? 5 : 6,
+        weight: 1,
+        criteria: all.sources.flatMap((sources, alternative) =>
+          sources.some((at) => countsFor(whenOf(template.criteria[at]!), part))
+            ? [alternative]
+            : [],
+        ),
+      }));
+      const compiled = compileProblem(input, { handSizes });
       if (!compiled.ok) issues.push(...compiled.errors.map((message) => error('compile', message)));
       else {
         classes = {
@@ -1061,9 +1117,17 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
           })),
         };
         work.classVectors = toCount(countSums(compiled.problem.classes, deckSize));
-        work.hands = compiled.problem.handSizes.map(({ H }) => {
-          const { count, complemented } = successSet(compiled.problem, H);
-          return { H, terms: count, complemented };
+        work.hands = compiled.problem.handSizes.map((hand, at) => {
+          // Each part costs what ITS success set costs: the classes are the
+          // union's, but the hands that succeed are only its own criteria's.
+          const { count, complemented } = successSet(partProblem(compiled.problem, hand), hand.H);
+          return {
+            H: hand.H,
+            part: parts[at]!,
+            weight: hand.weight,
+            terms: count,
+            complemented,
+          };
         });
         const perVectorUs = work.hands.reduce(
           (sum, { terms }) => sum + cost.perVectorUs + (cost.perTermNs / 1000) * terms,
@@ -1085,6 +1149,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     ok: !everyIssue.some((issue) => issue.severity === 'error'),
     deckSize,
     handSize,
+    mode,
     lines,
     remainder: {
       id: REMAINDER_ID,
@@ -1139,6 +1204,7 @@ export function analyze(
       ok: false,
       deckSize: template.deckSize,
       handSize: template.hand.size,
+      mode: modeOf(template),
       lines: [],
       remainder: {
         id: REMAINDER_ID,

@@ -13,6 +13,7 @@ import {
   withCriterion,
   withCriterionName,
   withCriterionText,
+  withCriterionWhen,
   withDeckSize,
   withDescriptionLine,
   withGroup,
@@ -21,6 +22,7 @@ import {
   withImportedDeck,
   withLineRange,
   withLineText,
+  withMode,
   withMovedCriterion,
   withMovedLine,
   withoutCriterion,
@@ -795,5 +797,98 @@ describe('an edited template', () => {
     const after = withLineRange(EXAMPLE_TEMPLATE, 'monster', { min: 4, max: 4 });
     expect(after.lines).not.toBe(before);
     expect(before.find((line) => line.id === 'monster')).toMatchObject({ min: 5, max: 5 });
+  });
+});
+
+/**
+ * The run mode and the criterion tags (PRD §5.5). `mode` is what the template
+ * MEANS and `hand.size` is the size its criteria are expanded at; `core`
+ * refuses a template whose two disagree, so the editor sets them together.
+ */
+describe('withMode', () => {
+  it('sets the mode and the hand size that goes with it', () => {
+    expect(withMode(EMPTY_TEMPLATE, 'second')).toMatchObject({
+      mode: 'second',
+      hand: { size: 6 },
+    });
+    expect(withMode(EMPTY_TEMPLATE, 'average')).toMatchObject({
+      mode: 'average',
+      hand: { size: 6 },
+    });
+    expect(withMode(withMode(EMPTY_TEMPLATE, 'average'), 'first')).toMatchObject({
+      mode: 'first',
+      hand: { size: 5 },
+    });
+  });
+
+  it('gives back the SAME template when nothing moves', () => {
+    const template = withMode(EMPTY_TEMPLATE, 'average');
+    expect(withMode(template, 'average')).toBe(template);
+  });
+
+  it('sets the mode on a template that only stated a hand size', () => {
+    // A file written before modes existed says `first` with `hand.size: 5`.
+    expect(withMode({ ...EMPTY_TEMPLATE, hand: { size: 5 } }, 'first')).toMatchObject({
+      mode: 'first',
+      hand: { size: 5 },
+    });
+  });
+
+  it('changes nothing else', () => {
+    const before = { ...EMPTY_TEMPLATE, deckSize: 47, criteria: [{ id: 'c1', text: '1x spell' }] };
+    const after = withMode(before, 'second');
+    expect({ ...after, mode: undefined, hand: undefined }).toEqual({
+      ...before,
+      mode: undefined,
+      hand: undefined,
+    });
+  });
+});
+
+describe('withCriterionWhen', () => {
+  const template: Template = {
+    ...EMPTY_TEMPLATE,
+    criteria: [
+      {
+        id: 'c1',
+        text: '1x spell',
+        expr: {
+          op: 'req',
+          n: 1,
+          desc: { anyOf: [{ t: 'clause', clause: { kinds: ['spell'] } }] },
+        } as const,
+      },
+      { id: 'c2', text: '1x trap', name: 'a trap' },
+    ],
+  };
+
+  it('tags the criterion it names, and no other', () => {
+    const next = withCriterionWhen(template, 'c2', 'second');
+    expect(next.criteria.map((criterion) => criterion.when)).toEqual([undefined, 'second']);
+    expect(next.criteria[1]).toMatchObject({ id: 'c2', text: '1x trap', name: 'a trap' });
+  });
+
+  /**
+   * The other half of the authoritative-AST rule (TDD §14): every edit that
+   * changes what a criterion SAYS drops the parsed form beside it. A tag says
+   * when the criterion is asked, not what it asks, so the two still agree and
+   * the AST stays — otherwise re-tagging a criterion would quietly re-read it.
+   */
+  it('keeps the stored AST: the tag does not change what the criterion says', () => {
+    expect(withCriterionWhen(template, 'c1', 'first').criteria[0]!.expr).toEqual(
+      template.criteria[0]!.expr,
+    );
+  });
+
+  it('gives back the SAME template when the tag does not move, `both` included', () => {
+    expect(withCriterionWhen(template, 'c1', 'both')).toBe(template);
+    const tagged = withCriterionWhen(template, 'c1', 'first');
+    expect(withCriterionWhen(tagged, 'c1', 'first')).toBe(tagged);
+    expect(withCriterionWhen(template, 'nobody', 'first')).toBe(template);
+  });
+
+  it('tags a criterion back to `both`, which is written out rather than removed', () => {
+    const tagged = withCriterionWhen(template, 'c1', 'first');
+    expect(withCriterionWhen(tagged, 'c1', 'both').criteria[0]!.when).toBe('both');
   });
 });

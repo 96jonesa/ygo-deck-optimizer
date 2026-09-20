@@ -7,6 +7,7 @@ import {
   compileProblem,
   countRawRatios,
   expandClassVector,
+  handSizesForMode,
   lineInterval,
   REMAINDER_ID,
   type ResolvedTemplate,
@@ -991,6 +992,143 @@ describe('compileProblem', () => {
       const result = compileProblem(inputOf(rows, flat), { handSizes: [{ H: 5, weight: 0.5 }] });
       expect(result).toEqual({ ok: false, errors: [expect.stringMatching(/weight/)] });
     });
+  });
+});
+
+/**
+ * Which hands a run scores, and which criteria each of them is judged against
+ * (PRD §5.5) — the whole of what tells the three modes apart.
+ *
+ * The CLASSES are not among it. They come from the union of every criterion
+ * the template has, in every mode, so that one class vector means one deck:
+ * in both halves of an average (which is what makes the mean an average of
+ * anything), and across the three modes (which is what makes their answers
+ * comparable). What a mode changes is which ALTERNATIVES count.
+ */
+describe('handSizesForMode', () => {
+  /** Three criteria, one of each tag; `c1` and `c3` differ, so the parts differ. */
+  function tagged(overrides: Partial<Template> = {}): Template {
+    return templateOf(
+      [
+        { id: 'A', text: `#${STRATOS}`, min: 0, max: 3 },
+        { id: 'B', text: `#${ROTA}`, min: 0, max: 3 },
+        { id: 'm', text: 'monster', min: 0, max: 20 },
+      ],
+      [],
+      {
+        hand: { size: 6 },
+        mode: 'average',
+        criteria: [
+          { id: 'c1', text: `1x #${STRATOS}`, when: 'first' },
+          { id: 'c2', text: '1x monster' },
+          { id: 'c3', text: `1x #${ROTA}`, when: 'second' },
+        ],
+        ...overrides,
+      },
+    );
+  }
+
+  const resolvedOf = (template: Template): ResolvedTemplate => {
+    const resolved = resolveTemplate(template, ctx);
+    if (!resolved.ok) throw new Error(resolved.errors.join('\n'));
+    return resolved.resolved;
+  };
+
+  it('carries every criterion’s tag onto the resolved criterion, defaulted', () => {
+    expect(resolvedOf(tagged()).criteria.map((criterion) => criterion.when)).toEqual([
+      'first',
+      'both',
+      'second',
+    ]);
+  });
+
+  it('says which criteria each alternative of the union came from', () => {
+    const resolved = resolvedOf(tagged());
+    expect(resolved.flatSources).toEqual([[0], [1], [2]]);
+    expect(resolved.flat).toHaveLength(3);
+  });
+
+  it('gives a single mode one part, at its own hand, over its own criteria', () => {
+    const resolved = resolvedOf(tagged({ mode: 'first', hand: { size: 5 } }));
+    expect(handSizesForMode(resolved, 'first')).toEqual([{ H: 5, weight: 1, criteria: [0, 1] }]);
+    expect(handSizesForMode(resolved, 'second')).toEqual([{ H: 6, weight: 1, criteria: [1, 2] }]);
+  });
+
+  it('gives an average both parts, weighted evenly, each over its own criteria', () => {
+    expect(handSizesForMode(resolvedOf(tagged()), 'average')).toEqual([
+      { H: 5, weight: 1, criteria: [0, 1] },
+      { H: 6, weight: 1, criteria: [1, 2] },
+    ]);
+  });
+
+  it('takes the weights of an uneven blend, in the order of the parts', () => {
+    expect(handSizesForMode(resolvedOf(tagged()), 'average', [3, 2])).toEqual([
+      { H: 5, weight: 3, criteria: [0, 1] },
+      { H: 6, weight: 2, criteria: [1, 2] },
+    ]);
+  });
+
+  it('gives every alternative to every part when nothing is tagged', () => {
+    const plain = tagged({
+      criteria: [
+        { id: 'c1', text: '1x monster' },
+        { id: 'c2', text: `1x #${ROTA}` },
+      ],
+    });
+    expect(handSizesForMode(resolvedOf(plain), 'average')).toEqual([
+      { H: 5, weight: 1, criteria: [0, 1] },
+      { H: 6, weight: 1, criteria: [0, 1] },
+    ]);
+  });
+
+  it('gives an alternative TWO criteria wrote to both parts', () => {
+    // The same criterion, tagged each way: `expandAll` merges them into one
+    // alternative, and its sources are what still say both parts want it.
+    const shared = tagged({
+      criteria: [
+        { id: 'c1', text: '1x monster', when: 'first' },
+        { id: 'c2', text: '1x monster', when: 'second' },
+      ],
+    });
+    const resolved = resolvedOf(shared);
+    expect(resolved.flat).toHaveLength(1);
+    expect(resolved.flatSources).toEqual([[0, 1]]);
+    expect(handSizesForMode(resolved, 'average')).toEqual([
+      { H: 5, weight: 1, criteria: [0] },
+      { H: 6, weight: 1, criteria: [0] },
+    ]);
+  });
+
+  it('gives a part with no criteria of its own an EMPTY list, not every alternative', () => {
+    const oneSided = tagged({
+      criteria: [{ id: 'c1', text: '1x monster', when: 'first' }],
+    });
+    expect(handSizesForMode(resolvedOf(oneSided), 'average')).toEqual([
+      { H: 5, weight: 1, criteria: [0] },
+      { H: 6, weight: 1, criteria: [] },
+    ]);
+  });
+
+  it('builds the SAME classes whatever the mode: a vector means one deck', () => {
+    const template = tagged();
+    const resolved = resolvedOf(template);
+    const compiled = (['first', 'second', 'average'] as const).map((mode) => {
+      const result = compileProblem(resolved, { handSizes: handSizesForMode(resolved, mode) });
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      return result;
+    });
+    const classes = compiled.map((result) => JSON.stringify(result.problem.classes));
+    expect(new Set(classes).size).toBe(1);
+    expect(new Set(compiled.map((result) => result.classOfLine.join(','))).size).toBe(1);
+  });
+
+  it('is what compileProblem validates: an index out of range is an error, not a guess', () => {
+    const resolved = resolvedOf(tagged());
+    const result = compileProblem(resolved, {
+      handSizes: [{ H: 6, weight: 1, criteria: [0, 99] }],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.ok ? [] : result.errors[0]).toMatch(/not one of the problem's 3 criteria/);
   });
 });
 

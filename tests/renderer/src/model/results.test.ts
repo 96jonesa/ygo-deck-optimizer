@@ -99,12 +99,19 @@ describe('plateauView', () => {
 describe('breakdownRows', () => {
   it('gives each TEMPLATE criterion its own exact probability at the best ratio', () => {
     expect(breakdownRows(RESULT)).toEqual([
-      { id: 'c1', label: 'A, B and any monster', percent: '7.0189%', exact: '46,185 / 658,008' },
+      {
+        id: 'c1',
+        label: 'A, B and any monster',
+        percent: '7.0189%',
+        exact: '46,185 / 658,008',
+        parts: [],
+      },
       {
         id: 'c2',
         label: 'A, B and a low-Level monster',
         percent: '2.9995%',
         exact: '19,737 / 658,008',
+        parts: [],
       },
     ]);
   });
@@ -127,8 +134,8 @@ describe('breakdownRows', () => {
 describe('cellRuns', () => {
   it('joins neighbouring counts of the SAME exact score into one entry', () => {
     expect(cellRuns([cell(1, 10), cell(2, 10), cell(3, 20)], 20)).toEqual([
-      { counts: '1–2', percent: '0.0015%', exact: '10 / 658,008', best: false },
-      { counts: '3', percent: '0.0030%', exact: '20 / 658,008', best: true },
+      { counts: '1–2', percent: '0.0015%', exact: '10 / 658,008', parts: [], best: false },
+      { counts: '3', percent: '0.0030%', exact: '20 / 658,008', parts: [], best: true },
     ]);
   });
 
@@ -157,14 +164,15 @@ describe('irrelevantRows', () => {
     expect(row?.lineId).toBe('remainder');
     expect(row?.free).toBe('13–23');
     expect(row?.cells.slice(0, 3)).toEqual([
-      { counts: '13–23', percent: '7.0189%', exact: '46,185 / 658,008', best: true },
-      { counts: '24', percent: '6.6410%', exact: '43,698 / 658,008', best: false },
-      { counts: '25', percent: '6.2302%', exact: '40,995 / 658,008', best: false },
+      { counts: '13–23', percent: '7.0189%', exact: '46,185 / 658,008', parts: [], best: true },
+      { counts: '24', percent: '6.6410%', exact: '43,698 / 658,008', parts: [], best: false },
+      { counts: '25', percent: '6.2302%', exact: '40,995 / 658,008', parts: [], best: false },
     ]);
     expect(row?.cells.at(-1)).toEqual({
       counts: '32–33',
       percent: '0.0000%',
       exact: '0 / 658,008',
+      parts: [],
       best: false,
     });
   });

@@ -4,9 +4,11 @@ import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
 import {
   compileProblem,
+  handSizesForMode,
   type ResolveContext,
   resolveTemplate,
 } from '../../../src/core/model/compile';
+import { modeOf } from '../../../src/core/model/template';
 import { optimize } from '../../../src/core/opt/optimizer';
 import { CardService } from '../../../src/main/services/cards';
 import { DeckService } from '../../../src/main/services/decks';
@@ -379,5 +381,84 @@ describe('a deck imported, saved and opened again', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(opened.template);
 
     expect(numeratorOf(opened.template, ready)).toEqual(before);
+  });
+});
+
+/**
+ * A template with a MODE and tagged criteria, saved and opened again (PRD
+ * §5.5). The tags and the mode are the run itself — they say which hands are
+ * scored and which criteria judge each — so a file that lost either would open
+ * as a different run. The check is the one that matters: the same exact
+ * numerator, not merely a template that looks the same.
+ */
+describe('a template with a mode and tagged criteria, saved and opened again', () => {
+  /** The exact blended fraction of the template's one ratio, in its own mode. */
+  function blendOf(template: Template, cards: ResolveContext) {
+    const mode = modeOf(template);
+    const resolved = resolveTemplate(template, cards);
+    if (!resolved.ok) throw new Error(resolved.errors.join('\n'));
+    const compiled = compileProblem(resolved.resolved, {
+      handSizes: handSizesForMode(resolved.resolved, mode),
+    });
+    if (!compiled.ok) throw new Error(compiled.errors.join('\n'));
+    const run = optimize(compiled, { force: true });
+    if (run.status !== 'done') throw new Error(`expected a whole run, got ${run.status}`);
+    return { blend: run.best.blend, parts: run.best.score.parts };
+  }
+
+  it('runs to the identical exact numerator, part by part', async () => {
+    const { files, dialogs, cards, dir } = await services();
+    const ready = cards.ready();
+    if (ready === null) throw new Error('expected a card index');
+
+    const template: Template = {
+      ...motivatingTemplate(),
+      mode: 'average',
+      hand: { size: 6 },
+      criteria: [
+        { id: 'c1', text: `1x #${STRATOS}`, when: 'first' },
+        { id: 'c2', text: '1x monster', when: 'second' },
+        { id: 'c3', text: '1x spell', when: 'both' },
+      ],
+    };
+    const before = blendOf(template, ready);
+    // The two hands really are judged differently, so a lost tag would show.
+    expect(before.parts).toHaveLength(2);
+    expect(before.parts[0]!.num).not.toBe(before.parts[1]!.num);
+
+    const file = path.join(dir, 'tagged.json');
+    dialogs.willSave(file);
+    expect(await files.saveTemplate(template)).toMatchObject({ ok: true });
+
+    dialogs.willOpen(file);
+    const opened = await files.openTemplate();
+    if (!opened.ok) throw new Error(JSON.stringify(opened));
+
+    expect(opened.template.mode).toBe('average');
+    expect(opened.template.hand).toEqual({ size: 6 });
+    expect(opened.template.criteria.map((criterion) => criterion.when)).toEqual([
+      'first',
+      'second',
+      'both',
+    ]);
+    expect(blendOf(opened.template, ready)).toEqual(before);
+  });
+
+  it('opens a file that predates modes as the run it always was', async () => {
+    const { files, dialogs, cards, dir } = await services();
+    const ready = cards.ready();
+    if (ready === null) throw new Error('expected a card index');
+
+    // Written by hand, with no `mode` and no `when`: a hand of five has always
+    // meant going first, and an untagged criterion has always been judged.
+    const file = path.join(dir, 'old.json');
+    const old: Template = motivatingTemplate();
+    writeFileSync(file, JSON.stringify(old));
+    dialogs.willOpen(file);
+    const opened = await files.openTemplate();
+    if (!opened.ok) throw new Error(JSON.stringify(opened));
+    expect('mode' in opened.template).toBe(false);
+    expect(modeOf(opened.template)).toBe('first');
+    expect(blendOf(opened.template, ready)).toEqual(blendOf(old, ready));
   });
 });

@@ -486,6 +486,41 @@ describe('createAppStore', () => {
     });
   });
 
+  describe('setMode', () => {
+    it('sets the mode, and the hand size that goes with it', () => {
+      const store = createAppStore();
+      store.getState().setMode('average');
+      expect(store.getState().template).toMatchObject({ mode: 'average', hand: { size: 6 } });
+      store.getState().setMode('first');
+      expect(store.getState().template).toMatchObject({ mode: 'first', hand: { size: 5 } });
+    });
+
+    it('holds the template still when the mode is the one it has', () => {
+      const store = createAppStore();
+      store.getState().setMode('second');
+      const before = store.getState().template;
+      store.getState().setMode('second');
+      expect(store.getState().template).toBe(before);
+    });
+  });
+
+  describe('setCriterionWhen', () => {
+    it('tags the criterion with the hand it is judged for', () => {
+      const store = createAppStore();
+      store.getState().addCriterion();
+      store.getState().setCriterionWhen('c1', 'second');
+      expect(store.getState().template.criteria[0]).toMatchObject({ when: 'second' });
+    });
+
+    it('holds the template still when the tag does not move', () => {
+      const store = createAppStore();
+      store.getState().addCriterion();
+      const before = store.getState().template;
+      store.getState().setCriterionWhen('c1', 'both');
+      expect(store.getState().template).toBe(before);
+    });
+  });
+
   describe('addGroup', () => {
     it('adds a named group the descriptions can reach', () => {
       const store = createAppStore();
