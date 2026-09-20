@@ -19,7 +19,7 @@ combinatorial probability plus a card-database lookup layer.
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done (in review)**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | **Done (in review)**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts) |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote) |
 | M3 — polish | Not started |
 | M4 — release | Not started |
 
@@ -61,9 +61,24 @@ under-specified cards it ignores with their total range (`at most 1x trap` ignor
 unspecified cards) — a limit counts only cards a line is specific enough to be *known* to match.
 A criterion with an error blocks a run exactly as a broken line does.
 
-The full results view — ranked table, plateau, sweep chart, per-criterion breakdown — is M2f,
-and template open/save is M2g; until then those live in the
-[command-line harness](#command-line-harness).
+**And you can read the answer.** Run scores every valid ratio exactly, saying first what that
+will cost (`128 class vectors over 4,096 raw ratios, about 12 ms`); a long search reports
+done/total, percent, elapsed and ETA and can be **cancelled**, keeping what it scored and marking
+it plainly as partial; a search over the time threshold asks before it starts. The best ratio
+leads — the percentage, the exact fraction it is (`46,185 / 658,008`), and the copies per line,
+with a range wherever a class is free to split. Then the **ranked table**, where equal scores are
+exact ties and share one rank rather than being ordered by accident; the **plateau**, every ratio
+within δ of the best as a range of copies per line ("2 or 3 copies are equally fine"), with δ
+editable in percentage points beside it; a **copies-vs-odds chart per line** — inline SVG, the
+argmax marked, gaps where a count is impossible, each scaled to its own range and labelled with
+it, and every figure printed under the chart so it can be quoted; the **per-criterion breakdown**
+at the best ratio; and the lines **no criterion can see**, said as free only where the engine says
+every count really does tie — where it does not, what each count costs is shown instead. Where a
+criterion carries a limit, a quiet footnote says the number is exact under the tool's one
+matching rule and names the cards that rule cannot see.
+
+Template open/save is M2g; until then a template is written in the editors or loaded from the
+example, and export lives in the [command-line harness](#command-line-harness).
 
 ## Description language
 

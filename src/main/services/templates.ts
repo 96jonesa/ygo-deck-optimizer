@@ -7,6 +7,7 @@ import {
   compileProblem,
   groupLookupOf,
   groupMembersOf,
+  type ResolvedTemplate,
   resolveTemplate,
 } from '../../core/model/compile';
 import { type Template, type TemplateGroup, validateTemplate } from '../../core/model/template';
@@ -17,6 +18,8 @@ import type {
   DescParseResult,
   InvalidRequest,
   NotReady,
+  RunDroppedLimit,
+  RunLimit,
   TemplateErrors,
 } from '../../shared/types';
 import type { ReadyCards } from './cards';
@@ -37,6 +40,67 @@ export interface CardSource {
  * is what keeps a day-long session flat. An analysis refills what it needs.
  */
 export const MEMO_LIMIT = 5000;
+
+/** What the template editor calls the computed line, so the results call it the same thing. */
+export const REMAINDER_LABEL = 'Unspecified cards';
+
+/**
+ * What each line is CALLED on screen, by line id: the answer to "how many
+ * copies of X?" has to name X, and an internal id like `line3` does not
+ * (PRD §5.6).
+ *
+ * A picker-chosen line is its card's name. A description line is **the text
+ * the user typed**, not the canonical form — `resolveTemplate` rewrites a
+ * `[Name]` as `#89631139`, which nobody would recognise — and not the echo,
+ * which is the tool's reading rather than their words. The remainder is what
+ * the editor calls it. A line with nothing to say keeps its id, so a label is
+ * never blank.
+ *
+ * Read off the template that was COMPILED for the run, so a result keeps the
+ * names it was produced with however the editor moves on afterwards.
+ */
+export function lineLabels(template: Template, resolved: ResolvedTemplate): Record<string, string> {
+  const own = new Map<string, string>();
+  for (const line of template.lines)
+    own.set(line.id, ('card' in line ? line.card.name : line.text).trim());
+  const labels: Record<string, string> = {};
+  for (const line of resolved.lines) {
+    const label = line.isRemainder ? REMAINDER_LABEL : (own.get(line.id) ?? '');
+    labels[line.id] = label === '' ? line.id : label;
+  }
+  return labels;
+}
+
+/**
+ * What the run's criteria limited, for PRD §6.3's footnote — the counts each
+ * limit appears under, and the under-specified lines it cannot see, named the
+ * way the results name every other line.
+ *
+ * Attached to the RESULT rather than looked up later: the footnote says what
+ * a number does and does not account for, so it has to be the number's own,
+ * however the template has moved on by the time anyone reads it.
+ */
+export function runLimits(analysis: Analysis, labels: Record<string, string>): RunLimit[] {
+  return analysis.limits.map((limit) => ({
+    text: limit.text,
+    counts: [...new Set(limit.appearsIn.map((appearance) => appearance.n))].sort((a, b) => a - b),
+    blind: limit.ignored.map(({ line, min, max }) => ({
+      label: labels[line] ?? line,
+      min,
+      max,
+    })),
+    blindRange: limit.ignoredRange === null ? null : { ...limit.ignoredRange },
+  }));
+}
+
+/** The limits the engine left out because they hold of every hand, pinned to the run the same way. */
+export function runDroppedLimits(analysis: Analysis): RunDroppedLimit[] {
+  return (analysis.classes?.droppedLimits ?? []).map(({ text, n, reason }) => ({
+    text,
+    n,
+    reason,
+  }));
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -74,6 +138,12 @@ export type CompileTemplateResult =
       compiled: Compiled;
       /** The template's criteria, for the per-criterion breakdown. */
       criteria: BreakdownCriterion[];
+      /** What each line is called on screen, by line id: `lineLabels`. */
+      labels: Record<string, string>;
+      /** What the criteria limited, for the honesty footnote: `runLimits`. */
+      criterionLimits: RunLimit[];
+      /** Limits left out for holding of every hand: `runDroppedLimits`. */
+      droppedLimits: RunDroppedLimit[];
     }
   | NotReady
   | InvalidRequest
@@ -169,7 +239,16 @@ export class TemplateService {
       ({ id, name, alternatives }): BreakdownCriterion =>
         name === undefined ? { id, alternatives } : { id, name, alternatives },
     );
-    return { ok: true, analysis, compiled, criteria };
+    const labels = lineLabels(validated.template, resolved.resolved);
+    return {
+      ok: true,
+      analysis,
+      compiled,
+      criteria,
+      labels,
+      criterionLimits: runLimits(analysis, labels),
+      droppedLimits: runDroppedLimits(analysis),
+    };
   }
 
   private analysisOf(template: Template, ready: ReadyCards): Analysis {

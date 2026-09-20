@@ -2,19 +2,57 @@ import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
 import {
   bestRatioRows,
+  bestReachText,
   confirmationLine,
+  countsLabel,
+  exactText,
   formatCount,
   formatDuration,
   fractionText,
+  percentText,
   progressLine,
+  readyText,
+  runStatsText,
   startFailureLines,
   topRows,
 } from '../../../../src/renderer/src/model/run-format';
-import type { Analysis, RunStartResult } from '../../../../src/shared/types';
+import type { Analysis, RunStartResult, Template } from '../../../../src/shared/types';
 import { motivatingResult } from '../../../helpers/motivating-run';
 
 const SQL = await initSqlJs();
 const RESULT = motivatingResult(SQL);
+
+/** A template whose only interesting fields are the three the sentence counts. */
+function templateOf(lines: number, criteria: number, deckSize = 40): Template {
+  return {
+    version: 1,
+    deckSize,
+    hand: { size: 5 },
+    groups: [],
+    lines: Array.from({ length: lines }, (_, at) => ({
+      id: `l${at}`,
+      text: 'spell',
+      min: 0,
+      max: 3,
+    })),
+    remainder: { min: 0, max: null },
+    criteria: Array.from({ length: criteria }, (_, at) => ({ id: `c${at}`, text: '1x spell' })),
+  };
+}
+
+/** Only `work` is read; the rest of an `Analysis` never reaches the sentence. */
+function workOf(work: Partial<Analysis['work']>): Analysis {
+  return {
+    work: {
+      rawRatios: null,
+      classVectors: null,
+      hands: null,
+      estimatedMs: null,
+      cost: { perVectorUs: 0, perTermNs: 7 },
+      ...work,
+    },
+  } as unknown as Analysis;
+}
 
 describe('formatCount', () => {
   it('groups the digits of a number, and rounds exact digits past 2^53 to three figures', () => {
@@ -35,10 +73,49 @@ describe('formatDuration', () => {
   });
 });
 
+describe('percentText', () => {
+  it('turns an exact fraction into the percentage beside it, to four places', () => {
+    expect(percentText({ num: 46_185, den: 658_008 })).toBe('7.0189%');
+    expect(percentText({ num: 0, den: 658_008 })).toBe('0.0000%');
+  });
+
+  it('gives two exactly tied scores the same text, and two unequal ones different text', () => {
+    expect(percentText({ num: 43_698, den: 658_008 })).toBe(
+      percentText({ num: 43_698, den: 658_008 }),
+    );
+    expect(percentText({ num: 273_563, den: 658_008 })).not.toBe(
+      percentText({ num: 272_039, den: 658_008 }),
+    );
+  });
+});
+
+describe('exactText', () => {
+  it('is the fraction the ranking is actually done in', () => {
+    expect(exactText({ num: 46_185, den: 658_008 })).toBe('46,185 / 658,008');
+  });
+});
+
 describe('fractionText', () => {
   it('shows the exact fraction and the percentage it is', () => {
     expect(fractionText({ num: 46_185, den: 658_008 })).toBe('46,185 / 658,008 = 7.0189%');
     expect(fractionText({ num: 0, den: 658_008 })).toBe('0 / 658,008 = 0.0000%');
+  });
+});
+
+describe('countsLabel', () => {
+  it('collapses a run of neighbouring counts', () => {
+    expect(countsLabel([3])).toBe('3');
+    expect(countsLabel([1, 2])).toBe('1–2');
+    expect(countsLabel([13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23])).toBe('13–23');
+  });
+
+  it('keeps a gap a gap rather than spanning it', () => {
+    expect(countsLabel([0, 2, 3])).toBe('0, 2–3');
+    expect(countsLabel([1, 3, 5])).toBe('1, 3, 5');
+  });
+
+  it('says nothing of no counts at all', () => {
+    expect(countsLabel([])).toBe('');
   });
 });
 
@@ -135,7 +212,9 @@ describe('topRows', () => {
     const rows = topRows(RESULT, 5);
     expect(rows).toHaveLength(5);
     expect(rows[0]).toEqual({
+      key: '23-3-3-8-3',
       rank: 1,
+      tiedWith: 1,
       percent: '7.0189%',
       exact: '46,185 / 658,008',
       example: [3, 3, 5, 3, 3, 7, 3, 13],
@@ -150,8 +229,85 @@ describe('topRows', () => {
     ]);
   });
 
+  it('keys a row by the vector it is, since a tied rank no longer tells two rows apart', () => {
+    const keys = topRows(RESULT, 8).map((row) => row.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('gives exactly tied rows ONE rank, so a tie is never shown as an ordering', () => {
+    const rows = topRows(RESULT, 5);
+    expect(rows.map((row) => row.rank)).toEqual([1, 2, 2, 4, 4]);
+    expect(rows.map((row) => row.tiedWith)).toEqual([1, 2, 2, 2, 2]);
+  });
+
+  it('counts a tie across the whole kept table, not only the rows on screen', () => {
+    // Rows 2 and 3 tie; asking for two rows must still say the second is tied.
+    expect(topRows(RESULT, 2).map((row) => row.tiedWith)).toEqual([1, 2]);
+  });
+
+  it('ties on the exact numerator, not on the rounded percentage', () => {
+    // Two scores that round to the same four places but are NOT a tie.
+    const ranked = [
+      { ...RESULT.ranked[0]!, blend: { num: 10_000_001, den: 65_800_800 } },
+      { ...RESULT.ranked[1]!, blend: { num: 10_000_000, den: 65_800_800 } },
+    ];
+    const rows = topRows({ ...RESULT, ranked }, 2);
+    expect(rows.map((row) => row.percent)).toEqual(['15.1974%', '15.1974%']);
+    expect(rows.map((row) => row.rank)).toEqual([1, 2]);
+    expect(rows.map((row) => row.tiedWith)).toEqual([1, 1]);
+  });
+
   it('lists what there is when that is less', () => {
     expect(topRows({ ...RESULT, ranked: RESULT.ranked.slice(0, 2) }, 5)).toHaveLength(2);
+  });
+});
+
+describe('runStatsText', () => {
+  it('says what was scored, over how many raw ratios, in how long, for which hand', () => {
+    expect(runStatsText(RESULT)).toBe('128 of 128 class vectors · 4,096 raw ratios · hand of 5');
+  });
+
+  it('says how far a cancelled run got', () => {
+    expect(runStatsText({ ...RESULT, status: 'cancelled', done: 37, partial: true })).toBe(
+      '37 of 128 class vectors · 4,096 raw ratios · hand of 5',
+    );
+  });
+});
+
+describe('bestReachText', () => {
+  it('says how many raw ratios the best class vector stands for', () => {
+    expect(bestReachText(RESULT)).toBe(
+      '32 raw ratios are this deck, as far as the criteria can tell',
+    );
+  });
+
+  it('says one of them in the singular', () => {
+    const best = { ...RESULT.best, rawRatios: 1 };
+    expect(bestReachText({ ...RESULT, best })).toBe(
+      '1 raw ratio is this deck, as far as the criteria can tell',
+    );
+  });
+});
+
+describe('readyText', () => {
+  it('says what the template is when the analysis has not sized it yet', () => {
+    expect(readyText(templateOf(7, 2), null)).toBe(
+      'Ready to score: 7 lines, 2 criteria, deck of 40.',
+    );
+  });
+
+  it('adds the size and the estimate `analyze` worked out, rather than working them out again', () => {
+    expect(
+      readyText(templateOf(7, 2), workOf({ classVectors: 128, rawRatios: 4096, estimatedMs: 12 })),
+    ).toBe(
+      'Ready to score: 7 lines, 2 criteria, deck of 40. 128 class vectors over 4,096 raw ratios, about 12 ms.',
+    );
+  });
+
+  it('leaves out an estimate the analysis does not have', () => {
+    expect(readyText(templateOf(1, 1, 60), workOf({ classVectors: 9, rawRatios: 9 }))).toBe(
+      'Ready to score: 1 lines, 1 criteria, deck of 60. 9 class vectors over 9 raw ratios.',
+    );
   });
 });
 

@@ -100,7 +100,14 @@ button.primary {
   font-weight: 600;
 }
 
+/*
+ * The accent has to be repeated, not only brightened: `button:hover:not(:disabled)`
+ * above is (0,2,1) and `button.primary` only (0,1,1), so without this the
+ * generic hover paints `--bg-soft` under the primary's white label and the
+ * word disappears. Found in M2f's screenshots, where the pointer rests on Run.
+ */
 button.primary:hover:not(:disabled) {
+  background: var(--accent);
   filter: brightness(1.08);
 }
 
@@ -123,6 +130,15 @@ button.quiet:hover:not(:disabled) {
 
 button[aria-pressed="true"] {
   border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/*
+ * The same specificity clash as `button.primary` below: `button:hover` is
+ * (0,2,1) and this is (0,1,1), so without a hover rule of its own the pressed
+ * segment loses its tint under the pointer and reads as unpressed.
+ */
+button[aria-pressed="true"]:hover:not(:disabled) {
   background: var(--accent-soft);
 }
 
@@ -1162,4 +1178,289 @@ ul.readout {
 .progress {
   margin: var(--sp-3) 0 0;
   font-variant-numeric: tabular-nums;
+}
+
+/* --- the results panel --------------------------------------------------- */
+
+/*
+ * The answer the tool exists to give (PRD §5.6), so it is the one thing on
+ * screen allowed to be large. The exact fraction sits beside the percentage
+ * rather than under it: at four decimal places the two are read together.
+ */
+.headline {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+  background: var(--bg-sunken);
+}
+
+.headline-label {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.headline-value {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin: 0 0 var(--sp-2);
+}
+
+.headline .big {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.headline .exact {
+  color: var(--text-dim);
+}
+
+.headline .best-lines {
+  margin-bottom: var(--sp-2);
+}
+
+/* The limits footnote (PRD §6.3): a caveat, not a warning — quiet on purpose. */
+.foot {
+  margin-top: var(--sp-2);
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--line);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.foot p {
+  margin: 0 0 var(--sp-1);
+  max-width: 72ch;
+}
+
+.foot p:last-child {
+  margin-bottom: 0;
+}
+
+/* A cancelled run's results: true of what it reached, and of nothing else. */
+.readout.warn-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  border-left: 3px solid var(--warn);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+}
+
+.readout.warn-row .tag {
+  flex: none;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-pill);
+  background: var(--warn);
+  color: light-dark(#ffffff, #10131a);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* A row headed by what the line IS. It gives way before the numbers beside it. */
+.rows th.line-name {
+  max-width: 18rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+/* An exact tie shares one rank; the `=` says the row is not simply below the last. */
+.rows .tie {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.rows.breakdown .total th,
+.rows.breakdown .total td {
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--line);
+}
+
+.rows.breakdown .total th {
+  color: var(--text);
+}
+
+/* δ belongs beside the plateau it widens, not only in the settings panel. */
+.plateau-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-4) 0 var(--sp-2);
+}
+
+.plateau-head h3 {
+  margin: 0 var(--sp-2) 0 0;
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.plateau-head label {
+  color: var(--text-dim);
+}
+
+.hint .bad {
+  color: var(--bad);
+}
+
+/* --- the sweep charts ---------------------------------------------------- */
+
+/*
+ * Small multiples: every line's answer to "how many copies?" at one glance.
+ * Two to a row in the results column, which is what the values row under each
+ * chart needs to stay on one line.
+ */
+.charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.chart {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+  background: var(--bg-sunken);
+  min-width: 0;
+}
+
+.chart figcaption {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+}
+
+/* The line's NAME heads its chart; a long card name gives way rather than
+   widening the small multiple, and the whole of it is in the tooltip. */
+.chart-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.chart figcaption .dim {
+  flex: none;
+}
+
+.chart-body {
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-2);
+}
+
+/* The two ends of THIS chart's axis: the whole disclosure that it is its own scale. */
+.chart-axis {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 2px 0 14px;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-align: right;
+}
+
+.chart svg.sweep {
+  display: block;
+  /* `flex: 1 1 0` with `min-width: 0`, not `width: 100%`: a percentage width
+     inside a flex row is of the WHOLE row, so the axis column's width pushed
+     the last count and its tick label off the right edge. */
+  flex: 1 1 0;
+  min-width: 0;
+  height: 96px;
+  overflow: visible;
+}
+
+.sweep .rule {
+  stroke: var(--line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.sweep .trend {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.sweep .dot {
+  fill: var(--accent);
+}
+
+.sweep .dot.best {
+  fill: var(--ok);
+  stroke: var(--bg-sunken);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.sweep .tick {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+/* A count no valid deck can hold: the axis keeps its place and says it is empty. */
+.sweep .tick.missing {
+  stroke-dasharray: 2 2;
+}
+
+.sweep .tick-label {
+  fill: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.sweep .tick-label.missing {
+  opacity: 0.45;
+}
+
+.chart-single {
+  margin: var(--sp-2) 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+/*
+ * The figures themselves: a shape is not something anyone can quote. A line
+ * free to take forty counts would otherwise bury its own chart, so the list
+ * scrolls past a few rows rather than being cut short — every count stays
+ * citable.
+ */
+.chart-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-2);
+  margin: var(--sp-1) 0 0;
+  max-height: 4.8em;
+  overflow-y: auto;
+  font-size: var(--fs-sm);
+}
+
+.chart-values .cell {
+  white-space: nowrap;
+}
+
+.chart-values .cell.best {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.chart-values .cell.best .dim {
+  color: inherit;
+  font-weight: 400;
 }

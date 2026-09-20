@@ -52,6 +52,16 @@ export type WorkerRequest = RunRequest;
 /** A line of the template as the search saw it: template order, the remainder last. */
 export interface RunLine {
   id: string;
+  /**
+   * What the line is CALLED on screen — a card's name, a description's own
+   * text — so that a chart can answer "how many copies of X?" by naming X.
+   *
+   * The worker writes the `id` here and the run service replaces it with the
+   * name before the result leaves main (`lineLabels`): the worker is given no
+   * card data and must stay that way (TDD §3). The id is therefore also the
+   * fallback, so this is never blank.
+   */
+  label: string;
   /** Its class: the index into a vector's `classTotals`. Class 0 is the blank class. */
   cls: number;
   min: number;

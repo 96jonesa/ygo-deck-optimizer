@@ -74,6 +74,79 @@ describe('RunService', () => {
     expect(resultOf(events.at(-1)).best.blend).toEqual({ num: 46_185, den: 658_008 });
   });
 
+  /**
+   * The worker is given no card data (TDD §3), so it can only echo the line
+   * ids; main compiled the template and knows what each line is CALLED. A
+   * result that reached the renderer with `line3` in it could not answer the
+   * question the sweep chart exists to answer (PRD §5.6).
+   */
+  it('puts the NAME of every line back on the result the worker sends', async () => {
+    const { workers, events, start } = await harness();
+    start();
+    workers.worker(0).answer(0);
+    const result = resultOf(events.at(-1));
+    const labels = Object.fromEntries(result.lines.map((line) => [line.id, line.label]));
+    expect(labels).toEqual({
+      A: '[Elemental HERO Stratos]',
+      B: '[Reinforcement of the Army]',
+      monster: 'monster',
+      level4: 'level 4 monster',
+      'fire-bw': 'level 7 FIRE beast-warrior monster',
+      spell: 'spell',
+      'normal-spell': 'normal spell',
+      remainder: 'Unspecified cards',
+    });
+  });
+
+  /**
+   * PRD §6.3's footnote qualifies a NUMBER, so it travels with that number.
+   * The motivating example carries no limit, and the result says so rather
+   * than the renderer having to ask an analysis that has since moved on.
+   */
+  it('attaches what the criteria limited, so the honesty footnote is the run’s own', async () => {
+    const { workers, events, start } = await harness();
+    start();
+    workers.worker(0).answer(0);
+    const result = resultOf(events.at(-1));
+    expect(result.criterionLimits).toEqual([]);
+    expect(result.droppedLimits).toEqual([]);
+  });
+
+  it('attaches the limits a limited run DID carry, so the footnote can name them', async () => {
+    const { workers, events, runs } = await harness();
+    const template = motivatingTemplate();
+    const started = runs.start({
+      ...template,
+      criteria: [...template.criteria, { id: 'c3', text: '1x monster and at most 1x spell' }],
+    });
+    if (!started.ok) throw new Error(`expected the run to start, got ${started.reason}`);
+    workers.worker(0).answer(0);
+    const result = resultOf(events.at(-1));
+    expect(result.criterionLimits.map((limit) => limit.text)).toEqual(['spell']);
+    expect(result.criterionLimits[0]?.counts).toEqual([1]);
+    // The remainder can hold spells nobody said were spells: that is the footnote.
+    expect(result.criterionLimits[0]?.blindRange).not.toBeNull();
+    expect(result.criterionLimits[0]?.blind.map((line) => line.label)).toContain(
+      'Unspecified cards',
+    );
+  });
+
+  it('labels a cancelled run’s partial result too: it is read exactly like a whole one', async () => {
+    const { workers, events, start, runs } = await harness();
+    const runId = start();
+    const worker = workers.worker(0);
+    const whole = realResult(worker.request(0));
+    if (whole.status !== 'done') throw new Error('expected a scored result');
+    const stopping = runs.cancel(runId, { graceful: true });
+    worker.result(runId, { ...whole, status: 'cancelled', partial: true });
+    await stopping;
+    const event = events.at(-1);
+    if (event?.type !== 'cancelled' || event.result === null)
+      throw new Error(`expected a cancelled result, got ${event?.type}`);
+    expect(event.result.lines.map((line) => line.label)).toContain('level 4 monster');
+    expect(event.result.criterionLimits).toEqual([]);
+  });
+
   it('ends every run in exactly one terminal event: what the worker says after it is dropped', async () => {
     const { workers, events, start, runs } = await harness();
     const runId = start();

@@ -255,10 +255,38 @@ export interface RunCancelRequest {
   graceful?: boolean;
 }
 
+/**
+ * One `at most n× q` the run's criteria carried, as PRD §6.3's footnote needs
+ * it. Pinned to the RUN rather than read back off the analysis: a result stays
+ * on screen while the template is edited, and a caveat about a number has to
+ * be true of the number it sits under.
+ */
+export interface RunLimit {
+  /** The limit's canonical description: `#89631139`, `trap`. */
+  text: string;
+  /** The counts it appears under, ascending; `0` is `no trap`. */
+  counts: number[];
+  /** Lines that might hold matching cards and are NOT counted, labelled as the run labels them. */
+  blind: { label: string; min: number; max: number }[];
+  /** What those lines hold together; `null` when every line is specific enough. */
+  blindRange: { min: number; max: number } | null;
+}
+
+/** A limit the engine left out of the scoring because it holds of every hand. */
+export interface RunDroppedLimit {
+  text: string;
+  n: number;
+  reason: 'counts-nothing' | 'never-binds';
+}
+
 /** A search that scored something — all of it, or (`partial`) what it got to — with the caps it ran under. */
 export type RunResult = Extract<WorkerResult, { status: 'done' | 'cancelled' }> & {
   /** What the run service held the result to, so that it can cross IPC: see `plateau.truncated`. */
   limits: { topK: number; plateauCap: number };
+  /** What the run's CRITERIA limited (PRD §6.3) — not to be confused with `limits`, which are the caps. */
+  criterionLimits: RunLimit[];
+  /** Limits the engine left out because they hold of every hand; one entry per flat alternative reached. */
+  droppedLimits: RunDroppedLimit[];
 };
 
 /** Why a run waits to be confirmed: `optimize`'s refusal, without its status. */

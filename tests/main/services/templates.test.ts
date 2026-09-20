@@ -10,11 +10,23 @@ import {
 } from '../../../src/core/model/analyze';
 import { compileProblem, resolveTemplate } from '../../../src/core/model/compile';
 import { CardService } from '../../../src/main/services/cards';
-import { MEMO_LIMIT, TemplateService } from '../../../src/main/services/templates';
+import {
+  lineLabels,
+  MEMO_LIMIT,
+  REMAINDER_LABEL,
+  runDroppedLimits,
+  runLimits,
+  TemplateService,
+} from '../../../src/main/services/templates';
 import type { TemplateGroup } from '../../../src/shared/types';
 import { ControllableLoader, immediateLoader, loadedCards } from '../../helpers/card-loader';
 import { CODE, FIXTURE_ROWS } from '../../helpers/fixture-cards';
-import { MOTIVATING_PATH, MOTIVATING_ROWS, motivatingTemplate } from '../../helpers/motivating';
+import {
+  MOTIVATING_PATH,
+  MOTIVATING_ROWS,
+  motivatingTemplate,
+  STRATOS,
+} from '../../helpers/motivating';
 
 const SQL = await initSqlJs();
 const ROWS = [...FIXTURE_ROWS, ...MOTIVATING_ROWS];
@@ -348,5 +360,162 @@ describe('TemplateService', () => {
       );
       expect(templates.compileTemplate(null)).toMatchObject({ reason: 'not-ready', state: 'idle' });
     });
+  });
+});
+
+describe('lineLabels', () => {
+  /** The motivating template, resolved against the fixture index. */
+  async function resolvedMotivating() {
+    const { cards } = await readyServices();
+    const ready = cards.ready();
+    if (ready === null) throw new Error('not ready');
+    const template = motivatingTemplate();
+    const resolved = resolveTemplate(template, ready);
+    if (!resolved.ok) throw new Error('expected the template to resolve');
+    return { template, resolved: resolved.resolved };
+  }
+
+  it('calls a description line what the user typed, so they recognise their own words', async () => {
+    const { template, resolved } = await resolvedMotivating();
+    const labels = lineLabels(template, resolved);
+    expect(labels.level4).toBe('level 4 monster');
+    expect(labels['fire-bw']).toBe('level 7 FIRE beast-warrior monster');
+  });
+
+  it('keeps a `[Name]` description line exactly as it was typed, brackets and all', async () => {
+    const { template, resolved } = await resolvedMotivating();
+    expect(lineLabels(template, resolved).A).toBe('[Elemental HERO Stratos]');
+  });
+
+  it('calls a picker-chosen line by its card’s name, NOT the canonical `#passcode`', async () => {
+    const { cards } = await readyServices();
+    const ready = cards.ready();
+    if (ready === null) throw new Error('not ready');
+    const template = motivatingTemplate();
+    const picked = {
+      ...template,
+      lines: template.lines.map((line) =>
+        line.id === 'A'
+          ? { id: 'A', card: { passcode: STRATOS, name: 'Elemental HERO Stratos' }, min: 0, max: 3 }
+          : line,
+      ),
+    };
+    const resolved = resolveTemplate(picked, ready);
+    if (!resolved.ok) throw new Error('expected the template to resolve');
+    // This is the text a canonical label would show, and nobody would know it.
+    expect(resolved.resolved.lines.find((line) => line.id === 'A')?.text).toBe(`#${STRATOS}`);
+    expect(lineLabels(picked, resolved.resolved).A).toBe('Elemental HERO Stratos');
+  });
+
+  it('calls the remainder what the template editor calls it', async () => {
+    const { template, resolved } = await resolvedMotivating();
+    expect(lineLabels(template, resolved).remainder).toBe(REMAINDER_LABEL);
+  });
+
+  it('falls back to the id rather than to nothing, so a chart is never headed by a blank', async () => {
+    const { template, resolved } = await resolvedMotivating();
+    const blanked = {
+      ...template,
+      lines: template.lines.map((line) => (line.id === 'spell' ? { ...line, text: '   ' } : line)),
+    };
+    expect(lineLabels(blanked, resolved).spell).toBe('spell');
+    // A line the template no longer has at all keeps its id too.
+    expect(lineLabels({ ...template, lines: [] }, resolved).level4).toBe('level4');
+  });
+
+  it('gives every line of the run a label', async () => {
+    const { template, resolved } = await resolvedMotivating();
+    const labels = lineLabels(template, resolved);
+    expect(Object.keys(labels).sort()).toEqual(resolved.lines.map((line) => line.id).sort());
+    expect(Object.values(labels).every((label) => label.trim() !== '')).toBe(true);
+  });
+});
+
+describe('runLimits', () => {
+  /** The motivating example with a limit added: `at most 1x spell`, which the remainder can hide. */
+  const LIMITED = () => {
+    const template = motivatingTemplate();
+    return {
+      ...template,
+      criteria: [
+        ...template.criteria,
+        { id: 'c3', name: 'a monster and few spells', text: '1x monster and at most 1x spell' },
+      ],
+    };
+  };
+
+  async function analysisOf(template: ReturnType<typeof LIMITED>) {
+    const { cards } = await readyServices();
+    const ready = cards.ready();
+    if (ready === null) throw new Error('not ready');
+    const resolved = resolveTemplate(template, ready);
+    if (!resolved.ok) throw new Error('expected the template to resolve');
+    return {
+      analysis: analyze(template, { cards: ready.cards, setnames: ready.setnames }),
+      labels: lineLabels(template, resolved.resolved),
+    };
+  }
+
+  it('is empty when the criteria carry no limit, so the footnote says nothing', async () => {
+    const { analysis, labels } = await analysisOf(motivatingTemplate() as never);
+    expect(runLimits(analysis, labels)).toEqual([]);
+  });
+
+  it('carries the counts a limit appears under and the cards it cannot see (PRD §6.3)', async () => {
+    const { analysis, labels } = await analysisOf(LIMITED());
+    const limits = runLimits(analysis, labels);
+    expect(limits).toHaveLength(1);
+    expect(limits[0]?.text).toBe('spell');
+    expect(limits[0]?.counts).toEqual([1]);
+    expect(limits[0]?.blindRange).not.toBeNull();
+  });
+
+  it('names the blind lines the way the rest of the results name them', async () => {
+    const { analysis, labels } = await analysisOf(LIMITED());
+    const blind = runLimits(analysis, labels)[0]?.blind ?? [];
+    // The remainder is one of them, and it is called what the editor calls it.
+    expect(blind.map((line) => line.label)).toContain(REMAINDER_LABEL);
+    // A line the limit COUNTS is never listed as blind.
+    expect(blind.map((line) => line.label)).not.toContain('spell');
+  });
+
+  it('is plain data: it crosses IPC as it is', async () => {
+    const { analysis, labels } = await analysisOf(LIMITED());
+    const limits = runLimits(analysis, labels);
+    expect(structuredClone(limits)).toEqual(limits);
+  });
+});
+
+describe('runDroppedLimits', () => {
+  it('is empty for a template whose limits all bind', async () => {
+    const { cards } = await readyServices();
+    const ready = cards.ready();
+    if (ready === null) throw new Error('not ready');
+    const analysis = analyze(motivatingTemplate(), {
+      cards: ready.cards,
+      setnames: ready.setnames,
+    });
+    expect(runDroppedLimits(analysis)).toEqual([]);
+  });
+
+  it('passes on what the engine left out, without the compiled indices nobody would know', async () => {
+    const analysis = {
+      classes: {
+        droppedLimits: [
+          { criterion: 0, text: 'trap', n: 1, reason: 'counts-nothing' },
+          { criterion: 1, text: 'trap', n: 1, reason: 'counts-nothing' },
+        ],
+      },
+    } as unknown as Parameters<typeof runDroppedLimits>[0];
+    expect(runDroppedLimits(analysis)).toEqual([
+      { text: 'trap', n: 1, reason: 'counts-nothing' },
+      { text: 'trap', n: 1, reason: 'counts-nothing' },
+    ]);
+  });
+
+  it('is empty when the template did not compile far enough to have classes', async () => {
+    expect(
+      runDroppedLimits({ classes: null } as unknown as Parameters<typeof runDroppedLimits>[0]),
+    ).toEqual([]);
   });
 });
