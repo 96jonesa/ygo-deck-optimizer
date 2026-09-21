@@ -1,7 +1,7 @@
 import type { Expr, FlatCriterion } from '../../src/core/criteria/ast';
 import { expandAll } from '../../src/core/criteria/expand';
 import type { Description } from '../../src/core/desc/ast';
-import type { MatchProblem } from '../../src/core/prob/montecarlo';
+import type { MatchFlat, MatchProblem } from '../../src/core/prob/montecarlo';
 import type { Fills } from './criteria-oracle';
 import { genExpr } from './gen-criteria';
 import { type Rng, seededRng } from './prng';
@@ -45,6 +45,8 @@ export interface GenProblemOptions {
   rangeChance?: number;
   /** How often a criterion is SPLIT across the cards opened on and the one drawn. */
   splitChance?: number;
+  /** How often a criterion gets a `finally` part, over the WHOLE hand (PRD §5.5). */
+  wholeChance?: number;
 }
 
 export const SMALL_PROBLEMS: GenProblemOptions = {
@@ -66,6 +68,20 @@ export const RANGED_PROBLEMS: GenProblemOptions = { ...SMALL_PROBLEMS, rangeChan
  * listed, which is what the split is checked against.
  */
 export const SPLIT_PROBLEMS: GenProblemOptions = { ...SMALL_PROBLEMS, splitChance: 0.5 };
+
+/**
+ * `SPLIT_PROBLEMS` with `finally` parts throughout: half the criteria split at
+ * `then` and half of ALL of them ask something of the whole hand as well. It is
+ * the family that reaches every shape the grammar allows — `five then sixth
+ * finally whole`, `five finally whole`, `then sixth finally whole` and `finally
+ * whole` — which is exactly the set a `sixth !== undefined` test somewhere
+ * downstream would get wrong.
+ */
+export const FINALLY_PROBLEMS: GenProblemOptions = {
+  ...SMALL_PROBLEMS,
+  splitChance: 0.5,
+  wholeChance: 0.5,
+};
 
 export function genProblem(rng: Rng, options: GenProblemOptions = SMALL_PROBLEMS): Generated {
   for (;;) {
@@ -97,6 +113,7 @@ export function genProblem(rng: Rng, options: GenProblemOptions = SMALL_PROBLEMS
         limitChance: 0.25,
         ...(options.rangeChance === undefined ? {} : { rangeChance: options.rangeChance }),
         ...(options.splitChance === undefined ? {} : { splitChance: options.splitChance }),
+        ...(options.wholeChance === undefined ? {} : { wholeChance: options.wholeChance }),
       }),
     );
     const expanded = expandAll(exprs, { maxHandSize: handSize });
@@ -108,11 +125,12 @@ export function genProblem(rng: Rng, options: GenProblemOptions = SMALL_PROBLEMS
       }),
       limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc) })),
     });
-    const flat = expanded.flat.map((alternative) =>
-      alternative.sixth === undefined
-        ? side(alternative)
-        : { ...side(alternative), sixth: side(alternative.sixth) },
-    );
+    const flat = expanded.flat.map((alternative) => {
+      const out: MatchFlat = side(alternative);
+      if (alternative.sixth !== undefined) out.sixth = side(alternative.sixth);
+      if (alternative.whole !== undefined) out.whole = side(alternative.whole);
+      return out;
+    });
     return {
       problem: { deckSize, matrix, flat },
       counts,
@@ -168,9 +186,20 @@ export function hasRange({ flat }: Generated): boolean {
   return flat.some(({ reqs }) => reqs.some(({ max }) => max !== undefined));
 }
 
-/** Whether any alternative of `generated` names the card drawn. */
+/**
+ * Whether any alternative of `generated` reads the hand in more than one
+ * WINDOW — naming the card drawn, or the whole hand beside the first five. It is
+ * what decides whether the hand is dealt in two pieces, and so whether an
+ * enumeration of outcomes and the scorer's own denominator agree without a
+ * factor of `H` between them.
+ */
 export function hasSplit({ flat }: Generated): boolean {
-  return flat.some(({ sixth }) => sixth !== undefined);
+  return flat.some(({ sixth, whole }) => sixth !== undefined || whole !== undefined);
+}
+
+/** Whether any alternative of `generated` asks something of the whole hand (`finally`). */
+export function hasFinally({ flat }: Generated): boolean {
+  return flat.some(({ whole }) => whole !== undefined);
 }
 
 /**
@@ -182,5 +211,17 @@ export function hasSplit({ flat }: Generated): boolean {
 export function smallSplitProblems(): Generated[] {
   return Array.from({ length: SMALL_PROBLEM_COUNT }, (_, i) =>
     genProblem(seededRng(83_000 + i), SPLIT_PROBLEMS),
+  );
+}
+
+/**
+ * A fourth family, where half the criteria also ask something of the WHOLE HAND
+ * (`finally`, PRD §5.5). The same oracles judge it: a hand of 3 or 4 is small
+ * enough that every (opening, drawn) outcome of the deck can be listed, and the
+ * three windows are then read straight off the positions.
+ */
+export function smallFinallyProblems(): Generated[] {
+  return Array.from({ length: SMALL_PROBLEM_COUNT }, (_, i) =>
+    genProblem(seededRng(109_000 + i), FINALLY_PROBLEMS),
   );
 }

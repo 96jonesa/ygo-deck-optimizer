@@ -67,21 +67,45 @@ export interface CountedRange extends Counted {
  *   `no X` is `atMost 0`.
  *
  * And one node that is not a leaf and is not a connective: `split`, written
- * `five then sixth`. It says the criterion is about a hand you draw in two
- * pieces — going second, the five you open on and then the card you draw — and
- * it may stand only at the ROOT of a criterion, never inside `and`, `or` or
- * another `split`. "These five must do X **and** the sixth must be Y" fixes
+ * `five then sixth finally whole`. It says the criterion is about a hand you
+ * draw in pieces — going second, the five you open on, then the cards you draw
+ * — and it may stand only at the ROOT of a criterion, never inside `and`, `or`
+ * or another `split`. "These five must do X **and** the sixth must be Y" fixes
  * which card is which, which is a different question from "my six cards hold X
  * and Y", and it is the question you ask when the extra card has to be the
  * answer.
+ *
+ * THREE WINDOWS, at most one part each, and every part present must hold
+ * (PRD §5.5, TDD §10.6):
+ *
+ * | part | window |
+ * | -- | -- |
+ * | `five` | the cards OPENED ON — the first `H − 1` |
+ * | `sixth` | the cards DRAWN — one where nothing draws, the whole drawn set where something does |
+ * | `whole` | the WHOLE hand, which is the union of the other two |
+ *
+ * `whole` is a full criterion in its own right — requirements, ranges, limits,
+ * nesting — and it is the one window a limit late in the hand can bind over: a
+ * ceiling over five does not follow from one over six, and the extra card is
+ * exactly what breaks it. It may not itself hold a `then` or a `finally`, which
+ * the grammar and `validateExpr` both refuse.
+ *
+ * Named for their WINDOWS rather than for the words that write them, which is
+ * why the `finally` part is `whole`: what a part MEANS is the cards it is judged
+ * over, and every reader of this node has to know which those are.
  */
 export type Expr =
   | { op: 'and'; args: Expr[] }
   | { op: 'or'; args: Expr[] }
   | { op: 'req'; n: number; max?: number; desc: Description }
   | { op: 'atMost'; n: number; desc: Description }
-  /** `five` absent is "the opening five may be anything": `then 1x [Ash Blossom & Joyous Spring]`. */
-  | { op: 'split'; five?: Expr; sixth: Expr };
+  /**
+   * `five` absent is "the opening five may be anything": `then 1x [Ash Blossom
+   * & Joyous Spring]`. At least one of `sixth` / `whole` is present — a split
+   * with neither says nothing the language can express, and it is the invariant
+   * `validateExpr` holds a loaded AST to.
+   */
+  | { op: 'split'; five?: Expr; sixth?: Expr; whole?: Expr };
 
 /**
  * The most requirement slots any one alternative of `expr` asks for — `and`
@@ -93,6 +117,13 @@ export type Expr =
  * sum this already takes. So the parser can refuse `… then 2x monster` on the
  * text, with the span of the thing that is wrong, rather than leaving it to an
  * expansion the reader never sees.
+ *
+ * A SPLIT is a MAXIMUM and not a three-way sum, and it is the easiest thing
+ * here to get wrong. `five` and `sixth` are DISJOINT windows, so their slots
+ * add; `whole`'s window is their UNION, so its slots are asked of the very same
+ * cards and counting them again would say `1x monster finally 1x monster` needs
+ * two. It needs one — assignment does not span windows, and one monster in the
+ * opening five answers both parts.
  */
 export function slotsOf(expr: Expr): number {
   switch (expr.op) {
@@ -104,8 +135,12 @@ export function slotsOf(expr: Expr): number {
       return expr.args.reduce((sum, arg) => sum + slotsOf(arg), 0);
     case 'or':
       return expr.args.reduce((most, arg) => Math.max(most, slotsOf(arg)), 0);
-    case 'split':
-      return slotsOf(expr.sixth) + (expr.five === undefined ? 0 : slotsOf(expr.five));
+    case 'split': {
+      const dealt =
+        (expr.five === undefined ? 0 : slotsOf(expr.five)) +
+        (expr.sixth === undefined ? 0 : slotsOf(expr.sixth));
+      return Math.max(dealt, expr.whole === undefined ? 0 : slotsOf(expr.whole));
+    }
   }
 }
 
@@ -141,6 +176,23 @@ export interface FlatCriterion {
    */
   sixth?: FlatSixth;
   /**
+   * The WHOLE HAND's own requirements and limits, when the criterion has a
+   * `finally` part (PRD §5.5). Present: `reqs` and `limits` above are about the
+   * cards OPENED ON — exactly as they are when `sixth` is present — and rules
+   * 1–4 are read once more over the whole hand, which is the union of the two
+   * dealt windows. Absent: nothing is asked of the whole hand as such.
+   *
+   * It is the window a LIMIT late in the hand binds over. `at most 1x brick`
+   * over five does not give `at most 1x brick` over six, and the card drawn is
+   * exactly what can break it — which is why `finally` exists and why it is a
+   * full criterion rather than a second `then`.
+   *
+   * ASSIGNMENT DOES NOT SPAN WINDOWS. Each part is satisfied over its own window
+   * independently, so `1x monster finally 1x monster` is met by the single
+   * monster in the opening five counted twice, once per part.
+   */
+  whole?: FlatSixth;
+  /**
    * An alternative the player would STOP for: if the OPENING hand meets it, no
    * draw card is activated (PRD §5.7). It comes from the CRITERION and not from
    * the expression, so `expandAll` never sets it — the caller ORs it over the
@@ -155,7 +207,11 @@ export interface FlatCriterion {
   stop?: true;
 }
 
-/** One alternative's drawn-set part: the same two lists, over the cards drawn. */
+/**
+ * ONE WINDOW of an alternative: the same two lists, over the cards that window
+ * holds. It is named for the first window that needed it — the cards drawn —
+ * and `FlatCriterion.whole` reads the identical shape over the whole hand.
+ */
 export interface FlatSixth {
   reqs: CountedRange[];
   limits: Counted[];
@@ -182,12 +238,14 @@ export function canonicalizeExpr(expr: Expr): Expr {
   }
   if (expr.op === 'atMost') return { op: 'atMost', n: expr.n, desc: canonicalize(expr.desc) };
   if (expr.op === 'split') {
-    // Absent rather than `undefined`, and `five` before `sixth`, because
-    // `meaning.ts` decides a stored AST is stale by stringifying both.
-    const sixth = canonicalizeExpr(expr.sixth);
-    return expr.five === undefined
-      ? { op: 'split', sixth }
-      : { op: 'split', five: canonicalizeExpr(expr.five), sixth };
+    // Absent rather than `undefined`, and `five`, `sixth`, `whole` in that
+    // order, because `meaning.ts` decides a stored AST is stale by stringifying
+    // both: a key that appeared, or moved, would silently invalidate saved work.
+    const out: Extract<Expr, { op: 'split' }> = { op: 'split' };
+    if (expr.five !== undefined) out.five = canonicalizeExpr(expr.five);
+    if (expr.sixth !== undefined) out.sixth = canonicalizeExpr(expr.sixth);
+    if (expr.whole !== undefined) out.whole = canonicalizeExpr(expr.whole);
+    return out;
   }
   const args: Expr[] = [];
   for (const arg of expr.args) {

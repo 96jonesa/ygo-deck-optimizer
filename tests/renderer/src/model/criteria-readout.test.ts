@@ -505,6 +505,37 @@ describe('a count asked of the card you draw', () => {
     );
     expect(limit?.heading).toBe('no drawn trap');
   });
+
+  /**
+   * The third window, and the same argument: `at most 1x trap` over the five you
+   * open on and `at most 1x trap` over all six are different statements — which
+   * is exactly why `finally` exists — so they never share a row either.
+   */
+  it('marks a count asked of the whole hand by a `finally` part, after the drawn one', () => {
+    const [requirement] = requirementRows(
+      analysisOf({
+        requirements: [
+          requirementOf('trap', {
+            appearsIn: [
+              { criterion: 'c1', alternative: 0, n: 2, whole: true },
+              { criterion: 'c1', alternative: 0, n: 1, sixth: true },
+              { criterion: 'c1', alternative: 0, n: 1 },
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(requirement?.heading).toBe('1x / 1x drawn / 2x in the whole hand trap');
+
+    const [limit] = limitRows(
+      analysisOf({
+        limits: [
+          limitOf('trap', { appearsIn: [{ criterion: 'c1', alternative: 0, n: 1, whole: true }] }),
+        ],
+      }),
+    );
+    expect(limit?.heading).toBe('at most 1x in the whole hand trap');
+  });
 });
 
 describe('limitRows', () => {

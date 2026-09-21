@@ -320,6 +320,61 @@ describe('CRITERION_SYNTAX', () => {
       expect(split.flat).not.toEqual(whole.flat);
     });
 
+    /**
+     * `finally` binds LOOSER than `then`, which binds looser than `and` and
+     * `or`: the row claims three windows at once, and the only way that reads
+     * is if every separator takes everything up to the next one.
+     */
+    it('asks all three windows at once, `finally` binding loosest', () => {
+      const expr = criterion(
+        '1x {starter} then 1x [Ash Blossom & Joyous Spring] finally 2x monster',
+      );
+      expect(expr).toMatchObject({ op: 'split' });
+      if (expr.op !== 'split') throw new Error('not a split');
+      expect(expr.five).toEqual(criterion('1x {starter}'));
+      expect(expr.sixth).toEqual(criterion('1x [Ash Blossom & Joyous Spring]'));
+      expect(expr.whole).toEqual(criterion('2x monster'));
+    });
+
+    it('leaves the five and the card drawn unasked about when `finally` leads', () => {
+      const expr = criterion('finally 2x monster');
+      expect(expr).toMatchObject({ op: 'split' });
+      expect(expr).not.toHaveProperty('five');
+      expect(expr).not.toHaveProperty('sixth');
+    });
+
+    /**
+     * The row's claim, and the reason the clause exists: `1x {starter} finally
+     * at most 1x trap` is NOT `1x {starter} and at most 1x trap`. The first asks
+     * for the starter among the FIVE and counts traps over the SIX.
+     */
+    it('is a different criterion from asking both of all six cards', () => {
+      const split = expand(criterion('1x {starter} finally at most 1x trap'), { maxHandSize: 6 });
+      const whole = expand(criterion('1x {starter} and at most 1x trap'), { maxHandSize: 6 });
+      expect(split.ok && whole.ok).toBe(true);
+      if (!split.ok || !whole.ok) throw new Error('expansion failed');
+      expect(split.flat[0]!.whole).toBeDefined();
+      expect(whole.flat[0]).not.toHaveProperty('whole');
+      expect(split.flat).not.toEqual(whole.flat);
+    });
+
+    /**
+     * "one monster in your opening five answers BOTH" — each part is judged over
+     * its own window, so the requirement is not doubled: the alternative asks
+     * one card of the five and one of the six, not two cards of anything.
+     */
+    it('spends no card twice between windows', () => {
+      const result = expand(criterion('1x monster finally 1x monster'), { maxHandSize: 6 });
+      if (!result.ok) throw new Error(result.message);
+      expect(result.flat).toEqual([
+        {
+          reqs: [{ n: 1, desc: desc('monster') }],
+          limits: [],
+          whole: { reqs: [{ n: 1, desc: desc('monster') }], limits: [] },
+        },
+      ]);
+    });
+
     it('expands a nested `or` into one alternative per branch', () => {
       const expr = criterion('(1x {starter} or 1x {extender}) and 1x monster');
       const result = expand(expr, { maxHandSize: 6 });

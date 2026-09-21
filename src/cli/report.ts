@@ -97,15 +97,28 @@ export function criteriaSection(a: Analysis): string {
 }
 
 /**
+ * Which WINDOW an appearance is about: the criterion's own (the whole hand, or
+ * the cards opened on where it is split), the cards drawn, or the whole hand as
+ * a `finally` part asks about it. It orders the counts and names them, and the
+ * renderer's `criteria-readout.ts` says the same in the same order — a test on
+ * either side holds the two to it.
+ */
+const windowOf = ({ sixth, whole }: Appearance): 0 | 1 | 2 =>
+  sixth === true ? 1 : whole === true ? 2 : 0;
+
+const WINDOW_SUFFIX = ['', ' drawn', ' in the whole hand'] as const;
+
+/**
  * The counts a requirement or a limit appears under, as the criteria editor
  * writes them: distinct counts joined by `/`, and a range kept apart from the
  * plain count it would otherwise read as — `1x monster` and `1-2x monster` are
  * different criteria and must not print alike.
  *
- * An appearance asked of the SIXTH CARD is kept apart from the same count asked
- * of the hand, and says so: `1x trap` of the card you draw is a different
- * statement from `1x trap` in six cards, and one row for both would be one row
- * for two questions.
+ * An appearance asked of the SIXTH CARD, or of the WHOLE HAND by a `finally`
+ * part, is kept apart from the same count asked of the criterion's own window,
+ * and says so: `1x trap` of the card you draw is a different statement from `1x
+ * trap` in six cards, and one row for all of them would be one row for three
+ * questions.
  */
 function countsOf(
   appearsIn: readonly Appearance[],
@@ -113,15 +126,15 @@ function countsOf(
 ): string {
   const seen = new Map<string, Appearance>();
   for (const appearance of appearsIn)
-    seen.set(`${appearance.n}-${appearance.max ?? ''}-${appearance.sixth === true}`, appearance);
+    seen.set(`${appearance.n}-${appearance.max ?? ''}-${windowOf(appearance)}`, appearance);
   return [...seen.values()]
     .sort(
       (x, y) =>
-        Number(x.sixth === true) - Number(y.sixth === true) ||
+        windowOf(x) - windowOf(y) ||
         x.n - y.n ||
         (x.max ?? Number.POSITIVE_INFINITY) - (y.max ?? Number.POSITIVE_INFINITY),
     )
-    .map((appearance) => (appearance.sixth === true ? `${say(appearance)} drawn` : say(appearance)))
+    .map((appearance) => `${say(appearance)}${WINDOW_SUFFIX[windowOf(appearance)]}`)
     .join(' / ');
 }
 

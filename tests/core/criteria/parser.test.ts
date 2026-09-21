@@ -519,6 +519,134 @@ describe('parseCriterion', () => {
     });
   });
 
+  describe('the whole hand, after finally', () => {
+    type Split = Extract<Expr, { op: 'split' }>;
+    const split = (parts: Omit<Split, 'op'>): Expr => ({ op: 'split', ...parts });
+
+    it('asks a full criterion of the whole hand, beside one of the first five', () => {
+      expectExpr('1x [C] finally 1x [D]', split({ five: req(1, C), whole: req(1, D) }));
+      // A FULL criterion: requirements, limits, ranges, `and`, `or`, nesting —
+      // everything an unsplit criterion may hold, which is what `then` may not.
+      expectExpr(
+        '1x [C] finally 2x [D] and no [E]',
+        split({ five: req(1, C), whole: and(req(2, D), atMost(0, E)) }),
+      );
+      expectExpr(
+        '1x [C] finally 1x [D] or (1x [E] and at most 1x [C])',
+        split({ five: req(1, C), whole: or(req(1, D), and(req(1, E), atMost(1, C))) }),
+      );
+      expectExpr('1x [C] finally 1-2x [D]', split({ five: req(1, C), whole: range(1, 2, D) }));
+    });
+
+    it('binds looser than `and` and `or`, so the whole of what precedes it is the opening part', () => {
+      expectExpr(
+        '1x [C] and 1x [D] finally 1x [E] or no [C]',
+        split({ five: and(req(1, C), req(1, D)), whole: or(req(1, E), atMost(0, C)) }),
+      );
+      expectExpr(
+        '1x [C] or 2x [D] finally 1x [E]',
+        split({ five: or(req(1, C), req(2, D)), whole: req(1, E) }),
+      );
+    });
+
+    it('binds looser than `then`, and the two come in window order', () => {
+      expectExpr(
+        '1x [C] then 1x [D] finally 2x [E]',
+        split({ five: req(1, C), sixth: req(1, D), whole: req(2, E) }),
+      );
+      expectExpr('then 1x [D] finally 2x [E]', split({ sixth: req(1, D), whole: req(2, E) }));
+      expectExpr(
+        '1x [C] and no [D] then no [E] finally 1x [D] and at most 2x [C]',
+        split({
+          five: and(req(1, C), atMost(0, D)),
+          sixth: atMost(0, E),
+          whole: and(req(1, D), atMost(2, C)),
+        }),
+      );
+    });
+
+    it('leaves the five unasked about when `finally` leads', () => {
+      expectExpr('finally 1x [C]', split({ whole: req(1, C) }));
+      expectExpr('finally no [C] and no [D]', split({ whole: and(atMost(0, C), atMost(0, D)) }));
+    });
+
+    /**
+     * It is the WHOLE HAND and not the cards drawn, so the one-card bound that
+     * `then` carries does not apply: `finally 2x [D]` is a question about six
+     * cards, and a perfectly ordinary one.
+     */
+    it('asks for more than one card, which `then` may not', () => {
+      expectExpr('finally 2x [D]', split({ whole: req(2, D) }));
+      expect(parseCriterion('1x [C] then 2x [D]', ctx).ok).toBe(false);
+      expect(parseCriterion('1x [C] finally 2x [D]', ctx).ok).toBe(true);
+      // And a `finally` asking more than any hand holds is DROPPED by `expand`,
+      // exactly as `7x [D]` on its own is — never refused on the text, because
+      // its window IS the whole hand and the two readings must not differ.
+      expect(parseCriterion('finally 7x [D]', ctx).ok).toBe(true);
+      expect(parseCriterion('7x [D]', ctx).ok).toBe(true);
+    });
+
+    it('refuses a second finally: there is one hand', () => {
+      expect(errorOf('1x [C] finally 1x [D] finally 1x [E]')).toEqual({
+        message:
+          'a criterion has one `finally`: it is a question about the whole hand, and there is one hand',
+        at: 'finally',
+        start: 22,
+      });
+      // A doubled `finally` has nothing where a term must start.
+      expect(errorOf('finally finally 1x [C]').message).toContain('after `finally`');
+    });
+
+    it('refuses a `then` after it, naming the order the two come in', () => {
+      expect(errorOf('1x [C] finally 1x [D] then 1x [E]')).toEqual({
+        message:
+          '`then` comes before `finally`: the cards you draw first, then the whole hand they leave you with',
+        at: 'then',
+        start: 22,
+      });
+    });
+
+    it('asks what the whole hand must be when nothing follows it', () => {
+      for (const text of ['1x [C] finally', 'finally']) {
+        const { message } = errorOf(text);
+        expect(message, text).toContain('what the whole hand must be after `finally`');
+      }
+      expect(errorOf('1x [C] finally').start).toBe(14);
+    });
+
+    it('refuses it inside parentheses, which is not where it stands', () => {
+      expect(errorOf('(1x [C] finally 1x [D]) and 1x [E]')).toEqual({
+        message:
+          '`finally` separates the cards you were dealt from the whole hand they make, so it stands between them and not inside parentheses',
+        at: 'finally',
+        start: 8,
+      });
+      expect(errorOf('1x ([C] finally [D])').message).toContain(
+        "cannot stand inside a description's parentheses",
+      );
+    });
+
+    /**
+     * A `finally` part may not itself be split — the windows are three and they
+     * are fixed. The grammar refuses it by having nowhere to put a second
+     * separator, and `validateExpr` refuses the stored shape in the same words.
+     */
+    it('refuses a `then` or a `finally` inside the `finally` part', () => {
+      expect(errorOf('1x [C] finally (1x [D] then 1x [E])').message).toContain(
+        'not inside parentheses',
+      );
+      expect(errorOf('1x [C] finally (1x [D] finally 1x [E])').message).toContain(
+        'not inside parentheses',
+      );
+    });
+
+    /** `finally` is a whole word, exactly as `then` is: a name holding it is untouched. */
+    it('reads `finally` only as a whole word', () => {
+      expectExpr('1x [Live and Let Die or 2x No More (at most)]', req(1, card(5)));
+      expect(parseCriterion('1x finallyx monster', ctx).ok).toBe(false);
+    });
+  });
+
   describe('errors', () => {
     it('asks for a term when there is nothing', () => {
       for (const text of ['', '   '])

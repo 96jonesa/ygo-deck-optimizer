@@ -24,7 +24,7 @@ import { createPrng } from '../../src/core/util/prng';
 /** A criterion as the oracle reads it: the compiled one, judged by hand. */
 type OracleCriterion = Pick<
   CompiledCriterion,
-  'limits' | 'reqs' | 'slots' | 'weight' | 'stop' | 'sixth'
+  'limits' | 'reqs' | 'slots' | 'weight' | 'stop' | 'sixth' | 'whole'
 >;
 
 /** One window of a criterion: the whole hand, the cards opened on, or the drawn set. */
@@ -103,28 +103,32 @@ function meetsWindow(window: Window, hand: readonly number[]): boolean {
  * What a hand is worth: the highest weight among the criteria it meets, and 0
  * when it meets none.
  *
- * A criterion naming the DRAWN SET (`sixth`) is read over the two windows
- * separately — its own slots and limits over what was opened on, its `sixth`
- * over what was drawn — and every other criterion over the two together. The
- * windows are disjoint, so "the two together" is simply their concatenation.
+ * A criterion naming the DRAWN SET (`sixth`) or the WHOLE HAND (`whole`, what
+ * `finally` writes) is read over one window at a time — its own slots and limits
+ * over what was opened on, its `sixth` over what was drawn, its `whole` over the
+ * two together — and every other criterion over the two together. The windows
+ * are disjoint, so "the two together" is simply their concatenation, which is
+ * why one `whole` serves both readings.
  */
 export function judge(criteria: readonly OracleCriterion[], hand: Windows): number {
   const split = Array.isArray(hand) ? null : (hand as { opened: number[]; drawn: number[] });
-  const whole = split === null ? (hand as readonly number[]) : [...split.opened, ...split.drawn];
+  const everything =
+    split === null ? (hand as readonly number[]) : [...split.opened, ...split.drawn];
   let best = 0;
   for (const criterion of criteria) {
     const weight = criterion.weight ?? 1;
     if (weight <= best) continue;
-    if (criterion.sixth === undefined) {
-      if (meetsWindow(criterion, whole)) best = weight;
+    if (criterion.sixth === undefined && criterion.whole === undefined) {
+      if (meetsWindow(criterion, everything)) best = weight;
       continue;
     }
     if (split === null)
       throw new RangeError(
-        'this criterion names the cards you drew, and the hand was given as one window: pass `{ opened, drawn }`',
+        'this criterion reads the hand in windows, and it was given as one: pass `{ opened, drawn }`',
       );
-    if (meetsWindow(criterion, split.opened) && meetsWindow(criterion.sixth, split.drawn))
-      best = weight;
+    if (criterion.sixth !== undefined && !meetsWindow(criterion.sixth, split.drawn)) continue;
+    if (criterion.whole !== undefined && !meetsWindow(criterion.whole, everything)) continue;
+    if (meetsWindow(criterion, split.opened)) best = weight;
   }
   return best;
 }

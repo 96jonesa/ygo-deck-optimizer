@@ -75,26 +75,31 @@ export function expansionPreview(
  * criterion writes them. Two appearances are the same count only when BOTH
  * ends agree: `1x` and `1-2x` are different things and read as `1x / 1-2x`.
  *
- * And one asked of the SIXTH CARD is never the same as one asked of the hand:
- * `1x trap` of the card you draw is a different statement from `1x trap` in six
- * cards, so it is kept apart and marked `drawn`. The CLI's `countsOf` says the
- * same, and the two are held to it by tests on either side.
+ * And one asked of the SIXTH CARD, or of the WHOLE HAND by a `finally` part, is
+ * never the same as one asked of the criterion's own window: `1x trap` of the
+ * card you draw is a different statement from `1x trap` in six cards, so each is
+ * kept apart and marked. The CLI's `countsOf` says the same, in the same order,
+ * and the two are held to it by tests on either side.
  */
+const windowOf = ({ sixth, whole }: Appearance): 0 | 1 | 2 =>
+  sixth === true ? 1 : whole === true ? 2 : 0;
+
+const WINDOW_SUFFIX = ['', ' drawn', ' in the whole hand'] as const;
+
 function countsOf(
   appearsIn: readonly Appearance[],
   say: (n: number, max: number | undefined) => string,
 ): string {
   const seen = new Map<string, Appearance>();
   for (const appearance of appearsIn)
-    seen.set(`${appearance.n}-${appearance.max ?? ''}-${appearance.sixth === true}`, appearance);
+    seen.set(`${appearance.n}-${appearance.max ?? ''}-${windowOf(appearance)}`, appearance);
   return [...seen.values()]
     .sort(
-      (a, b) =>
-        Number(a.sixth === true) - Number(b.sixth === true) ||
-        a.n - b.n ||
-        (a.max ?? Infinity) - (b.max ?? Infinity),
+      (a, b) => windowOf(a) - windowOf(b) || a.n - b.n || (a.max ?? Infinity) - (b.max ?? Infinity),
     )
-    .map(({ n, max, sixth }) => (sixth === true ? `${say(n, max)} drawn` : say(n, max)))
+    .map(
+      (appearance) => `${say(appearance.n, appearance.max)}${WINDOW_SUFFIX[windowOf(appearance)]}`,
+    )
     .join(' / ');
 }
 

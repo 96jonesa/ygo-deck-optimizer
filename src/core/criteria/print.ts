@@ -39,12 +39,17 @@ function printExpr(expr: Expr, ctx: PrintContext): string {
       return expr.args
         .map((arg) => (arg.op === 'or' ? `(${printExpr(arg, ctx)})` : printExpr(arg, ctx)))
         .join(' and ');
-    case 'split':
-      // `then` binds looser than `and` and `or` both, and a criterion holds
-      // one, so neither side ever needs parentheses to read back as itself.
-      return expr.five === undefined
-        ? `then ${printExpr(expr.sixth, ctx)}`
-        : `${printExpr(expr.five, ctx)} then ${printExpr(expr.sixth, ctx)}`;
+    case 'split': {
+      // `then` binds looser than `and` and `or` both, `finally` looser still,
+      // and a criterion holds at most one of each — so no part ever needs
+      // parentheses to read back as itself, and writing them in window order is
+      // the whole of printing a split.
+      const parts: string[] = [];
+      if (expr.five !== undefined) parts.push(printExpr(expr.five, ctx));
+      if (expr.sixth !== undefined) parts.push(`then ${printExpr(expr.sixth, ctx)}`);
+      if (expr.whole !== undefined) parts.push(`finally ${printExpr(expr.whole, ctx)}`);
+      return parts.join(' ');
+    }
   }
 }
 
@@ -54,8 +59,9 @@ function printExpr(expr: Expr, ctx: PrintContext): string {
  * within their ranges, descriptions the description grammar can express, and
  * no `and` / `or` without arguments, which prints as nothing. Terms are
  * joined by `and`, alternatives by `or`, and `at most 0x` reads `no`. A split
- * criterion writes `then` between its two parts, and a split with no
- * five-card part leads with it.
+ * criterion writes its parts in WINDOW order — the cards opened on, `then` the
+ * cards drawn, `finally` the whole hand — leaving out those it does not have,
+ * so a split with no five-card part leads with its separator.
  */
 export function printCriterion(expr: Expr, ctx: PrintContext): string {
   return printExpr(canonicalizeExpr(expr), ctx);

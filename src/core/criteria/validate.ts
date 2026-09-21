@@ -90,17 +90,35 @@ class ExprValidator {
         return max === undefined ? { op: 'req', n, desc } : { op: 'req', n, max, desc };
       }
       case 'split': {
-        // The root and nowhere else: a hand comes in two pieces, and a `split`
-        // under an `and` would be asking which five of which five.
+        // The root and nowhere else: a hand comes in three windows at most, and
+        // a `split` under an `and` would be asking which five of which five.
+        // The same check keeps a `then` or a `finally` out of a `finally` part,
+        // which is refused for the same reason and in the same words.
         if (depth > 0)
           return this.fail(
-            `${where}: \`split\` is the whole of a criterion — the five cards you open on, then the one you draw — and cannot stand inside \`and\`, \`or\` or another \`split\``,
+            `${where}: \`split\` is the whole of a criterion — the cards you open on, then the cards you draw, finally the whole hand — and cannot stand inside \`and\`, \`or\` or another \`split\``,
           );
-        const sixth = this.expr(`${where}.sixth`, value.sixth, depth + 1);
-        const five =
-          value.five === undefined ? undefined : this.expr(`${where}.five`, value.five, depth + 1);
-        if (sixth === undefined || (value.five !== undefined && five === undefined))
-          return undefined;
+        // A split with NEITHER dealt-window part nor a whole-hand part says
+        // nothing: no text writes it, and it would read as a criterion met by
+        // every hand rather than as the mistake it is.
+        if (value.sixth === undefined && value.whole === undefined)
+          return this.fail(
+            `${where}: a \`split\` needs a \`sixth\` (what you drew) or a \`whole\` (the whole hand), or both — with neither it asks nothing`,
+          );
+        const parts = {
+          five:
+            value.five === undefined
+              ? undefined
+              : this.expr(`${where}.five`, value.five, depth + 1),
+          sixth:
+            value.sixth === undefined
+              ? undefined
+              : this.expr(`${where}.sixth`, value.sixth, depth + 1),
+          whole:
+            value.whole === undefined
+              ? undefined
+              : this.expr(`${where}.whole`, value.whole, depth + 1),
+        };
         // HOW MANY CARDS `then` may ask for is not a question about this
         // expression: it is one about the TEMPLATE, since draw cards make the
         // drawn set larger than one card (`largestDrawnSet`). So it is left to
@@ -108,7 +126,14 @@ class ExprValidator {
         // text — and to `expand`, which refuses it for the run. Exactly the
         // reason `stop` is read here whether or not anything draws: what a file
         // may SAY is a different question from what a template makes of it.
-        return five === undefined ? { op: 'split', sixth } : { op: 'split', five, sixth };
+        const out: Extract<Expr, { op: 'split' }> = { op: 'split' };
+        for (const key of ['five', 'sixth', 'whole'] as const) {
+          if (value[key] === undefined) continue;
+          const part = parts[key];
+          if (part === undefined) return undefined;
+          out[key] = part;
+        }
+        return out;
       }
       default:
         return this.fail(

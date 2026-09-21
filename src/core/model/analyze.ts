@@ -175,6 +175,14 @@ export interface Appearance {
    * the two alike would be showing the same row for two questions.
    */
   sixth?: true;
+  /**
+   * Whether it is asked of the WHOLE HAND by a `finally` part (PRD §5.5), where
+   * the criterion's own part is about the first five. The same argument: `at most
+   * 1x trap` over the five you open on and `at most 1x trap` over all six are
+   * different statements, and `finally` exists because the second does not follow
+   * from the first.
+   */
+  whole?: true;
 }
 
 export interface NearMissAnalysis {
@@ -524,8 +532,14 @@ interface ParsedCriterion {
 /** The descriptions of a criterion, as written. */
 function descsOf(expr: Expr): Description[] {
   if (expr.op === 'and' || expr.op === 'or') return expr.args.flatMap(descsOf);
+  // EVERY window: a card named only after `then` or `finally` is as much a
+  // description of the criterion as one named first, and a branch left out here
+  // would give it a column with no appearances — a readout that quietly says
+  // nothing about part of a criterion.
   if (expr.op === 'split')
-    return [...(expr.five === undefined ? [] : descsOf(expr.five)), ...descsOf(expr.sixth)];
+    return [expr.five, expr.sixth, expr.whole].flatMap((part) =>
+      part === undefined ? [] : descsOf(part),
+    );
   return [expr.desc];
 }
 
@@ -541,14 +555,13 @@ function flatText(flat: FlatCriterion, ctx: DescContext): string {
     ];
     return parts.join(', ');
   };
-  const five = sideText(flat);
-  // A split alternative reads as it is written: the five you open on, `then`,
-  // the card you draw. An empty five-card part is the one that leads with it.
-  if (flat.sixth !== undefined) {
-    const sixth = sideText(flat.sixth);
-    return five === '' ? `then ${sixth}` : `${five} then ${sixth}`;
-  }
-  return five === '' ? '(nothing: every hand meets it)' : five;
+  // A split alternative reads as it is written, in window order: the five you
+  // open on, `then` the cards you draw, `finally` the whole hand. An empty
+  // five-card part is the one that leads with its separator.
+  const parts = [sideText(flat)].filter((text) => text !== '');
+  if (flat.sixth !== undefined) parts.push(`then ${sideText(flat.sixth)}`);
+  if (flat.whole !== undefined) parts.push(`finally ${sideText(flat.whole)}`);
+  return parts.length === 0 ? '(nothing: every hand meets it)' : parts.join(' ');
 }
 
 /** One pass over the database; remembered in `ctx.memo`, under a key that holds all it depends on. */
@@ -913,18 +926,18 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     }
     out.dropped = expanded.dropped;
     out.alternatives = expanded.flat.map((flat) => flatText(flat, descCtx));
-    expanded.flat.forEach(({ reqs, limits, sixth }, alternative) => {
+    expanded.flat.forEach(({ reqs, limits, sixth, whole }, alternative) => {
       /**
        * One window's requirements and limits into the columns. The SIXTH CARD's
-       * go in too, and must: a description only it mentions is still a column of
-       * the match matrix (`indexFlat` makes one), so leaving it out here would
-       * give it a column with no appearances — no `filledBy`, no near misses, no
-       * "no line fills this requirement" — which is a readout that quietly says
-       * nothing about half a criterion.
+       * and the WHOLE HAND's go in too, and must: a description only one of them
+       * mentions is still a column of the match matrix (`indexFlat` makes one),
+       * so leaving it out here would give it a column with no appearances — no
+       * `filledBy`, no near misses, no "no line fills this requirement" — which
+       * is a readout that quietly says nothing about part of a criterion.
        */
       const register = (
         side: FlatCriterion | NonNullable<FlatCriterion['sixth']>,
-        where: { sixth?: true },
+        where: { sixth?: true; whole?: true },
       ) => {
         for (const { n, max, desc } of side.reqs)
           column(desc).required.push({
@@ -939,6 +952,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       };
       register({ reqs, limits }, {});
       if (sixth !== undefined) register(sixth, { sixth: true });
+      if (whole !== undefined) register(whole, { whole: true });
     });
     parsedCriteria.push({ expr: result.expr, flat: expanded.flat });
     return out;
@@ -1310,9 +1324,12 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
         // would leave the one template most likely to be surprised unwarned.
         const counts = ({ limits, reqs }: SixthCard) =>
           limits.length > 0 || reqs?.some(({ max }) => max !== null) === true;
-        const censuses = compiled.problem.criteria.filter(
-          (criterion) =>
-            counts(criterion) || (criterion.sixth !== undefined && counts(criterion.sixth)),
+        const censuses = compiled.problem.criteria.filter((criterion) =>
+          // The `finally` window counts hardest of the three: it is the whole
+          // hand, which is exactly the window drawing makes larger.
+          [criterion, criterion.sixth, criterion.whole].some(
+            (window) => window !== undefined && counts(window),
+          ),
         ).length;
         if (censuses > 0 && draws)
           issues.push(

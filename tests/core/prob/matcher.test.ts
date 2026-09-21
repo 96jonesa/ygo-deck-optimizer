@@ -769,4 +769,91 @@ describe('compileSplitWeigher', () => {
       }
     expect(checked).toBe(100);
   });
+
+  /**
+   * A `finally` part is judged over the two windows SUMMED, which with draw
+   * cards is the whole hand you are left holding — every card still in it when
+   * the drawing stops. It is the one window that can be broken by a card the
+   * draw cards fetched, which is why the clause exists.
+   */
+  describe('a `finally` part', () => {
+    const needsInWhole = (mask: number, slots = 1): CompiledCriterion => ({
+      slots: [],
+      limits: [],
+      whole: { slots: new Array<number>(slots).fill(mask), limits: [] },
+    });
+
+    it('judges it over the two windows together, wherever the cards fell', () => {
+      const criterion = needsInWhole(FILLS_Y, 2);
+      expect(weigh([criterion], [0, 0, 2, 0], [0, 0, 0, 0])).toBe(1);
+      expect(weigh([criterion], [0, 0, 0, 0], [0, 0, 2, 0])).toBe(1);
+      expect(weigh([criterion], [0, 0, 1, 0], [0, 0, 1, 0])).toBe(1);
+      expect(weigh([criterion], [0, 0, 1, 0], [1, 0, 0, 0])).toBe(0);
+    });
+
+    it('keeps the opening part about the cards OPENED ON, with no `then` in sight', () => {
+      const criterion: CompiledCriterion = {
+        slots: [FILLS_X],
+        limits: [],
+        whole: { slots: [], limits: [{ mask: Y, n: 0 }] },
+      };
+      // X opened on and no Y anywhere: met.
+      expect(weigh([criterion], [0, 1, 0, 0], [1, 0, 0, 0])).toBe(1);
+      // The X is in the DRAWN window, so the opening part is unmet.
+      expect(weigh([criterion], [1, 0, 0, 0], [0, 1, 0, 0])).toBe(0);
+      // A Y drawn breaks the `finally` limit, though the opening was fine.
+      expect(weigh([criterion], [0, 1, 0, 0], [0, 0, 1, 0])).toBe(0);
+    });
+
+    it('conjoins all three windows when all three are there', () => {
+      const criterion: CompiledCriterion = {
+        slots: [FILLS_X],
+        limits: [],
+        sixth: { slots: [FILLS_Y], limits: [] },
+        whole: { slots: [], limits: [{ mask: Z, n: 0 }] },
+      };
+      expect(weigh([criterion], [0, 1, 0, 0], [0, 0, 1, 0])).toBe(1);
+      expect(weigh([criterion], [0, 1, 0, 0], [0, 0, 1, 1])).toBe(0);
+      // No X opened on: the opening part is unmet though the hand holds one.
+      expect(weigh([criterion], [1, 0, 0, 0], [0, 1, 1, 0])).toBe(0);
+      // Nothing of Y drawn: the `then` part is unmet.
+      expect(weigh([criterion], [0, 1, 0, 0], [1, 0, 0, 0])).toBe(0);
+    });
+
+    it('agrees with brute force over every hand and every place to split it', () => {
+      const criteria: CompiledCriterion[] = [
+        { slots: [FILLS_X], limits: [], whole: { slots: [FILLS_Y], limits: [] } },
+        {
+          slots: [FILLS_X],
+          limits: [],
+          sixth: { slots: [FILLS_Y], limits: [] },
+          whole: { slots: [], limits: [{ mask: Z, n: 0 }] },
+          weight: 4,
+        },
+        { slots: [], limits: [], whole: { slots: [], limits: [{ mask: X, n: 0 }] }, weight: 2 },
+        { slots: [FILLS_X, FILLS_Y], limits: [], weight: 3 },
+      ];
+      let checked = 0;
+      for (const opened of compositions(4, 2))
+        for (const drawn of compositions(4, 2)) {
+          const mine = weigh(criteria, [...opened], [...drawn]);
+          const summed = opened.map((count, cls) => count + drawn[cls]!);
+          let best = 0;
+          for (const criterion of criteria) {
+            const weight = criterion.weight ?? 1;
+            if (weight <= best) continue;
+            const split = criterion.sixth !== undefined || criterion.whole !== undefined;
+            const met = split
+              ? bruteForceMeets(criterion, opened) &&
+                (criterion.sixth === undefined || bruteForceMeets(criterion.sixth, drawn)) &&
+                (criterion.whole === undefined || bruteForceMeets(criterion.whole, summed))
+              : bruteForceMeets(criterion, summed);
+            if (met) best = weight;
+          }
+          same(mine, best, () => ({ opened: [...opened], drawn: [...drawn] }));
+          checked++;
+        }
+      expect(checked).toBe(100);
+    });
+  });
 });

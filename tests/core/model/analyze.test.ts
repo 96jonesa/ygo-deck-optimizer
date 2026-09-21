@@ -1240,6 +1240,62 @@ describe('analyze of a split criterion', () => {
     expect(a.work.hands![0]).toMatchObject({ H: 6, part: 'second' });
     expect(a.work.hands![0]!.terms).toBeGreaterThan(0);
   });
+
+  describe('a `finally` part', () => {
+    it('shows the expansion in window order, with every separator it has', () => {
+      const a = analyze(secondOf('1x monster then no trap finally at most 1x trap'), ctx);
+      expect(a.ok).toBe(true);
+      expect(criterionOf(a, 'c1').alternatives).toEqual([
+        '1x monster then no trap finally at most 1x trap',
+      ]);
+      expect(criterionOf(a, 'c1').parsed).toMatchObject({
+        ok: true,
+        canonical: '1x monster then no trap finally at most 1x trap',
+      });
+    });
+
+    it('leads with `finally` where nothing is asked of the cards opened on', () => {
+      const a = analyze(secondOf('finally 2x trap'), ctx);
+      expect(criterionOf(a, 'c1').alternatives).toEqual(['finally 2x trap']);
+    });
+
+    /**
+     * A description named ONLY in the `finally` part still gets its column, its
+     * `filledBy` and its near misses — anything less is a readout that says
+     * nothing about part of a criterion while looking complete.
+     */
+    it('counts its descriptions like any other, saying which window asked', () => {
+      const a = analyze(secondOf('1x monster finally at most 1x trap'), ctx);
+      expect(limitOf(a, 'trap').counts).toEqual(['tr']);
+      expect(limitOf(a, 'trap').appearsIn).toEqual([
+        { criterion: 'c1', alternative: 0, n: 1, whole: true },
+      ]);
+      expect(requirementOf(a, 'monster').appearsIn).toEqual([
+        { criterion: 'c1', alternative: 0, n: 1 },
+      ]);
+    });
+
+    it('is an error, on the criterion, when it is not tagged going second', () => {
+      for (const when of ['first', 'both'] as const) {
+        const a = analyze(secondOf('1x monster finally 2x trap', when), ctx);
+        expect(a.ok, when).toBe(false);
+        expect(codes(criterionOf(a, 'c1').issues), when).toEqual(['!sixth-card']);
+        expect(criterionOf(a, 'c1').issues[0]!.message, when).toContain('tag it going second');
+      }
+    });
+
+    /**
+     * Its window is the whole hand, so it asks for as many cards as a hand holds
+     * — and one asking for more is DROPPED, exactly as an unsplit criterion
+     * asking for more is, rather than refused on the text as `then` is.
+     */
+    it('drops an alternative asking more of the whole hand than it holds', () => {
+      expect(analyze(secondOf('1x monster finally 6x trap'), ctx).ok).toBe(true);
+      const over = analyze(secondOf('1x monster finally 7x trap'), ctx);
+      expect(criterionOf(over, 'c1').dropped).toBe(1);
+      expect(criterionOf(over, 'c1').alternatives).toEqual([]);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

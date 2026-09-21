@@ -467,6 +467,30 @@ export interface CompiledCriterion {
    */
   sixth?: SixthCard;
   /**
+   * THE WHOLE HAND's own part — what `finally` writes (PRD §5.5). Present:
+   * `slots`, `limits` and `reqs` above are about the cards OPENED ON, exactly as
+   * they are when `sixth` is present, and this is judged over the whole hand —
+   * the union of the two dealt windows. Absent: nothing is asked of the whole
+   * hand as such, which is every criterion the engine had before this.
+   *
+   * SO "IS THIS CRITERION SPLIT?" IS `sixth !== undefined || whole !== undefined`
+   * and not either one alone. A criterion with a `finally` part and no `then`
+   * still reads its first window as the cards opened on, and anything testing
+   * only `sixth` would judge that window over the whole hand — which is the one
+   * reading `finally` exists to deny.
+   *
+   * It costs the enumeration nothing. A `finally` part is a predicate on the
+   * hand composition itself, which is fixed in `compileValuer`'s outer sum, so it
+   * composes with `value(h) = Σ_c h_c · best(h − e_c, c)` untouched: no new
+   * sample space, no new walk, and the `H · C(N, H)` denominator unchanged
+   * (TDD §10.6).
+   *
+   * Like `sixth` it may only be judged by a hand size marked `drawn`, and
+   * `validateProblem` holds it to that: the split is a statement about a hand
+   * dealt in two pieces, and going first nothing is drawn.
+   */
+  whole?: SixthCard;
+  /**
    * A criterion the player would STOP for (PRD §5.7): if the OPENING hand
    * already meets it, no draw card is activated at all. Absent is the default,
    * and every criterion the engine had before draw cards.
@@ -572,6 +596,22 @@ export interface Problem {
 
 const isCount = (value: number) => Number.isInteger(value) && value >= 0;
 
+/**
+ * Whether a criterion reads the hand as MORE THAN ONE WINDOW — a `then` part, a
+ * `finally` part, or both. It is the one question everything that scores a hand
+ * asks of a criterion, so it is asked in one place: a second copy of
+ * `sixth !== undefined` that forgot `whole` would judge a `finally` criterion's
+ * opening part over all six cards and answer a different question in silence.
+ *
+ * Structural on purpose — the presence of the keys and nothing about their
+ * contents — so that the compiled criterion, the resolved alternative
+ * (`FlatAlternative`) and the flat one (`FlatCriterion`) are all asked in the
+ * same words, which is the whole point of having it in one place.
+ */
+export function isSplit(criterion: { sixth?: unknown; whole?: unknown }): boolean {
+  return criterion.sixth !== undefined || criterion.whole !== undefined;
+}
+
 function checkMask(mask: number, classCount: number, where: string, role: string): void {
   if (!isCount(mask))
     throw new RangeError(`${where}: a class mask is a non-negative whole number, not ${mask}`);
@@ -642,8 +682,9 @@ export function validateProblem(problem: Problem): void {
       if (taken.has(at)) throw new RangeError(`hand size ${H}: criterion ${at} appears twice`);
       taken.add(at);
       // A split criterion is a statement about a hand drawn in two pieces, so
-      // the hand judging it has to be one — going first there is no sixth card.
-      if (criteria[at]!.sixth !== undefined && drawn !== true)
+      // the hand judging it has to be one — going first there is no sixth card,
+      // and so no "the first five" for a `finally` part to stand apart from.
+      if (isSplit(criteria[at]!) && drawn !== true)
         throw new RangeError(
           `hand size ${H}: criterion ${at} is about the card you draw, but this hand does not draw one — a split criterion is judged only by a hand marked \`drawn\``,
         );
@@ -678,12 +719,19 @@ export function validateProblem(problem: Problem): void {
   // problem rather than to one of them — and a hand that draws none refuses a
   // split criterion outright above, so the widest hand is never too generous.
   const drawnRoom = Math.max(...handSizes.map(({ H }) => largestDrawnSet(H, draws)));
-  criteria.forEach(({ weight, sixth, ...part }, criterion) => {
+  criteria.forEach(({ weight, sixth, whole, ...part }, criterion) => {
     if (weight !== undefined && (!Number.isSafeInteger(weight) || weight < 1))
       throw new RangeError(
         `criterion ${criterion}: a weight is a positive whole number — the score is a sum of weights, and exactness rests on that — not ${weight}`,
       );
     checkPart(part, classes.length, `criterion ${criterion}`);
+    // The WHOLE HAND's part carries no slot bound of its own, for the reason the
+    // criterion's own part carries none: it is judged over the whole hand, and a
+    // part asking more cards than a hand holds is never met — `meets` refuses it
+    // — rather than malformed. Only `then` is bounded, because what the drawn set
+    // can hold is a fact about the TEMPLATE's draw cards and not about the hand.
+    if (whole !== undefined)
+      checkPart(whole, classes.length, `criterion ${criterion}, the whole hand`);
     if (sixth === undefined) return;
     if (sixth.slots.length > drawnRoom)
       throw new RangeError(
@@ -776,8 +824,10 @@ function checkDraws(
 function remedies({ criteria }: Problem): string[] {
   const out = ['hold fewer copies of a draw card', 'merge lines the criteria cannot tell apart'];
   if (criteria.some(({ stop }) => stop === true)) out.push('drop a "stop here"');
-  if (criteria.some(({ sixth }) => sixth !== undefined))
-    out.push('or drop a `then` (it reads the cards you opened on apart from the cards you drew)');
+  if (criteria.some(isSplit))
+    out.push(
+      'or drop a `then` or `finally` (either reads the cards you opened on apart from the cards you drew)',
+    );
   return out;
 }
 

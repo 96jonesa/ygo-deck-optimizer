@@ -79,14 +79,18 @@ export function whenOf(criterion: Pick<TemplateCriterion, 'when'>): CriterionWhe
 export const CRITERION_WEIGHT_MAX = 1000;
 
 /**
- * Why a criterion split across the opening five and the sixth card must be
- * tagged going second — in the one wording `resolveTemplate` and `analyze` both
- * use, so that the run and the readout cannot come to disagree about it.
+ * Why a criterion split across the opening five, the cards drawn and the whole
+ * hand must be tagged going second — in the one wording `resolveTemplate` and
+ * `analyze` both use, so that the run and the readout cannot come to disagree
+ * about it.
  *
  * It is an ERROR and not a warning, and not the criterion quietly going
  * unjudged. `then` says which card is which, and only the hand you draw a sixth
  * card into has a sixth card to say it about; going first there is nothing for
- * the second half of the criterion to be true or false of. A tag saying
+ * the second half of the criterion to be true or false of. `finally` names no
+ * card drawn and is refused all the same: what it adds is a question about the
+ * whole hand BESIDE one about the first five, and going first there is no "first
+ * five" apart from the hand. A tag saying
  * otherwise is a contradiction the user wrote down, and the tag is also what the
  * editor groups the criteria by — so narrowing it silently would leave a
  * criterion sitting under a heading that no longer describes it. Tagging it
@@ -98,7 +102,7 @@ export function splitNeedsSecond(when: CriterionWhen): string {
     when === 'first'
       ? 'this one is judged going first, where the hand is five cards and none of them is drawn after'
       : 'this one is judged for both hands, and going first the hand is five cards and none of them is drawn after';
-  return `\`then\` is about the card you draw going second, but ${judged} — tag it going second, or ask for the six cards together and drop the \`then\``;
+  return `\`then\` and \`finally\` split the hand you draw going second, but ${judged} — tag it going second, or ask for the six cards together and drop the \`then\` or \`finally\``;
 }
 
 /** A criterion's weight; one that says nothing is worth 1 (PRD §5.6). */

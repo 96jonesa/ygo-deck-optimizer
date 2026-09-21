@@ -1766,7 +1766,7 @@ describe('the sixth card through resolve and compile', () => {
 
     it('refuses `both`, naming what to do about it', () => {
       expect(errorsOf(tagged('both'))).toEqual([
-        'criterion "c1": `then` is about the card you draw going second, but this one is judged for both hands, and going first the hand is five cards and none of them is drawn after — tag it going second, or ask for the six cards together and drop the `then`',
+        'criterion "c1": `then` and `finally` split the hand you draw going second, but this one is judged for both hands, and going first the hand is five cards and none of them is drawn after — tag it going second, or ask for the six cards together and drop the `then` or `finally`',
       ]);
     });
 
@@ -1786,6 +1786,141 @@ describe('the sixth card through resolve and compile', () => {
     expect(errorsOf(secondTemplate(['1x monster then 2x trap']))[0]).toContain(
       'the card you draw is one card',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `finally` through resolve and compile (PRD §5.5, YGO-41)
+// ---------------------------------------------------------------------------
+
+describe('a `finally` clause through resolve and compile', () => {
+  const secondTemplate = (texts: string[]): Template => {
+    const template = templateOf(
+      [line('mon', 'monster', 0, 10), line('sp', 'spell', 0, 10), line('tr', 'trap', 0, 10)],
+      texts,
+    );
+    return {
+      ...template,
+      hand: { size: 6 },
+      mode: 'second',
+      criteria: template.criteria.map((criterion) => ({ ...criterion, when: 'second' })),
+    };
+  };
+
+  const compiledOf = (texts: string[]) => {
+    const compiled = compileProblem(resolved(secondTemplate(texts)), {
+      handSizes: [{ H: 6, weight: 1 }],
+    });
+    if (!compiled.ok) throw new Error(compiled.errors.join('\n'));
+    return compiled;
+  };
+
+  it('resolves all three windows into columns of ONE match matrix', () => {
+    const r = resolved(secondTemplate(['1x monster then no trap finally at most 1x spell']));
+    expect(r.criteria[0]!.canonical).toBe('1x monster then no trap finally at most 1x spell');
+    expect(r.flat).toEqual([
+      {
+        reqs: [{ n: 1, desc: 0 }],
+        limits: [],
+        sixth: { reqs: [], limits: [{ n: 0, desc: 1 }] },
+        whole: { reqs: [], limits: [{ n: 1, desc: 2 }] },
+      },
+    ]);
+    expect(r.descriptions.map((d) => d.text)).toEqual(['monster', 'trap', 'spell']);
+    // A description named ONLY in the `finally` part is a column like any other.
+    expect(fillersOf(r, 'spell')).toEqual(['sp']);
+  });
+
+  it('compiles the `finally` part into its own masks, and marks the hand as drawing', () => {
+    const compiled = compiledOf(['1x monster finally at most 1x trap']);
+    const [criterion] = compiled.problem.criteria;
+    expect(criterion!.whole).toBeDefined();
+    expect(criterion!).not.toHaveProperty('sixth');
+    expect(criterion!.whole!.limits).toHaveLength(1);
+    // Its own part is still about the cards OPENED ON, which is why the hand draws.
+    expect(compiled.problem.handSizes).toEqual([{ H: 6, weight: 1, drawn: true }]);
+    expect(() => validateProblem(compiled.problem)).not.toThrow();
+  });
+
+  /**
+   * THE ROOM OF THE `finally` WINDOW IS THE WHOLE HAND, which is what makes `at
+   * most 6x` a vacuous `finally` at a hand of six — and `at most 5x` a binding
+   * one, where the same ceiling over the five it opens on would be vacuous.
+   */
+  it('weighs a `finally` limit against six cards and the opening part against five', () => {
+    const vacuous = compiledOf(['1x monster finally at most 6x trap']);
+    expect(vacuous.droppedLimits).toEqual([
+      { criterion: 0, desc: 1, n: 6, reason: 'never-binds', whole: true },
+    ]);
+    expect(vacuous.problem.criteria[0]!.whole!.limits).toEqual([]);
+    const binding = compiledOf(['1x monster finally at most 5x trap']);
+    expect(binding.droppedLimits).toEqual([]);
+    expect(binding.problem.criteria[0]!.whole!.limits).toHaveLength(1);
+    // The criterion's OWN window is the five it opens on, where 5 is vacuous.
+    const opening = compiledOf(['at most 5x trap finally 1x monster']);
+    expect(opening.droppedLimits).toEqual([{ criterion: 0, desc: 0, n: 5, reason: 'never-binds' }]);
+  });
+
+  it('judges the opening part over five cards, `then` or no `then`', () => {
+    expect(resolved(secondTemplate(['5x monster finally 1x trap'])).criteria[0]!.dropped).toBe(0);
+    expect(resolved(secondTemplate(['6x monster finally 1x trap'])).criteria[0]!.dropped).toBe(1);
+    // And the `finally` part itself gets all six.
+    expect(resolved(secondTemplate(['1x monster finally 6x trap'])).criteria[0]!.dropped).toBe(0);
+    expect(resolved(secondTemplate(['1x monster finally 7x trap'])).criteria[0]!.dropped).toBe(1);
+  });
+
+  it('must be tagged going second, in the same words a `then` must', () => {
+    const template = secondTemplate(['1x monster finally 1x trap']);
+    for (const when of ['first', 'both'] as const) {
+      const tagged: Template = { ...template, criteria: [{ ...template.criteria[0]!, when }] };
+      expect(errorsOf(tagged)[0], when).toContain('`then` and `finally` split the hand');
+      expect(errorsOf(tagged)[0], when).toContain('tag it going second');
+    }
+  });
+
+  /**
+   * A REGRESSION, and it predates `finally`: `compileProblem` decides which
+   * match-matrix columns are DEAD — mentioned only by criteria this run does not
+   * judge — and it used to read the top-level window alone. A description named
+   * only after `then` or `finally` by a criterion the run DOES judge, and named
+   * again by one it does not, was then dropped from the class partition, its mask
+   * became 0, and that half of the criterion became unmeetable. Nothing threw;
+   * the run answered a different question.
+   */
+  it('keeps a class a description named only after `then` or `finally` needs', () => {
+    const template = templateOf(
+      [line('mon', 'monster', 0, 10), line('tr', 'trap', 0, 10)],
+      ['1x monster then 1x trap', '1x monster finally 1x trap', '1x trap'],
+    );
+    const going: Template = {
+      ...template,
+      hand: { size: 6 },
+      mode: 'second',
+      criteria: [
+        { ...template.criteria[0]!, when: 'second' },
+        { ...template.criteria[1]!, when: 'second' },
+        // The going-FIRST criterion names `trap` too, and this run never judges it.
+        { ...template.criteria[2]!, when: 'first' },
+      ],
+    };
+    const r = resolved(going);
+    const compiled = compileProblem(r, {
+      handSizes: [{ H: 6, weight: 1, criteria: [0, 1] }],
+    });
+    if (!compiled.ok) throw new Error(compiled.errors.join('\n'));
+    // `trap` still tells a class apart, so neither half asks a mask of 0 — which
+    // is what a criterion that can never be met looks like from the outside.
+    for (const criterion of compiled.problem.criteria) {
+      expect(criterion.slots).not.toContain(0);
+      expect(criterion.sixth?.slots ?? []).not.toContain(0);
+      expect(criterion.whole?.slots ?? []).not.toContain(0);
+    }
+    const scored = createScorer(compiled.problem, 6).score(
+      compiled.problem.classes.map(({ lineIds }) =>
+        lineIds.includes('mon') ? 10 : lineIds.includes('tr') ? 10 : 20,
+      ),
+    );
+    expect(scored.num).toBeGreaterThan(0);
   });
 });
 
