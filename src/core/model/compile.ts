@@ -18,6 +18,7 @@ import {
   type DrawClass,
   type DrawSpec,
   type HandSize,
+  isSplit,
   largestDrawnSet,
   largestHand,
   MAX_CLASSES,
@@ -103,6 +104,13 @@ export interface ResolvedFlat extends ResolvedSide {
    * alternative is judged over the whole hand, as every alternative was before.
    */
   sixth?: ResolvedSide;
+  /**
+   * The WHOLE HAND's own part — what `finally` writes (PRD §5.5). Present: `reqs`
+   * and `limits` are about the cards opened on, as they are when `sixth` is, and
+   * this is about the whole hand. Absent: nothing is asked of the whole hand as
+   * such.
+   */
+  whole?: ResolvedSide;
   /** An alternative the player would STOP for: met by the opening, nothing is drawn (PRD §5.7). */
   stop?: true;
   /**
@@ -212,12 +220,13 @@ export function indexFlat(
     }),
     limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc, 'inLimit') })),
   });
-  return flat.map(({ reqs, limits, sixth }, at) => {
+  return flat.map(({ reqs, limits, sixth, whole }, at) => {
     const indexed: ResolvedFlat = side({ reqs, limits });
-    // The sixth card's descriptions are columns of the SAME match matrix: a
+    // Every window's descriptions are columns of the SAME match matrix: a
     // class has to tell apart every description any criterion mentions,
     // wherever in the criterion it stands.
     if (sixth !== undefined) indexed.sixth = side(sixth);
+    if (whole !== undefined) indexed.whole = side(whole);
     // Whether the player would stop for it travels with it, for the reason its
     // bounds do: a second copy of this rule is how it goes missing.
     if (stopOf(at)) indexed.stop = true;
@@ -582,6 +591,8 @@ export interface FlatAlternative {
   weight?: number;
   /** The sixth card's own part; absent is a criterion judged over the whole hand. */
   sixth?: { reqs: readonly ResolvedRange[]; limits: readonly ResolvedCounted[] };
+  /** The whole hand's own part, what `finally` writes (PRD §5.5). */
+  whole?: { reqs: readonly ResolvedRange[]; limits: readonly ResolvedCounted[] };
   /** An alternative the player would STOP for (PRD §5.7). */
   stop?: true;
 }
@@ -623,6 +634,8 @@ export interface DroppedLimit {
   reason: DroppedReason;
   /** Whether it was the SIXTH CARD's limit, where one card is the whole hand. */
   sixth?: true;
+  /** Whether it was the `finally` part's limit, whose window is the whole hand. */
+  whole?: true;
 }
 
 export type DroppedReason = 'counts-nothing' | 'never-binds';
@@ -642,6 +655,8 @@ export interface DroppedCeiling {
   reason: DroppedReason;
   /** Whether it was the SIXTH CARD's ceiling, where one card is the whole hand. */
   sixth?: true;
+  /** Whether it was the `finally` part's ceiling, whose window is the whole hand. */
+  whole?: true;
 }
 
 /**
@@ -692,7 +707,7 @@ interface CompiledAlternative {
  * - a limit becomes a mask, dropped on the same two grounds.
  */
 export function compileCriterion(
-  { reqs, limits, weight, sixth, stop }: FlatAlternative,
+  { reqs, limits, weight, sixth, whole, stop }: FlatAlternative,
   maskOf: (desc: number) => number,
   rooms: WindowRooms,
 ): CompiledAlternative {
@@ -709,8 +724,8 @@ export function compileCriterion(
   const window = (
     side: { reqs: readonly ResolvedRange[]; limits: readonly ResolvedCounted[] },
     room: number,
-    /** Stamped on what this window drops, so a readout can say which half it was. */
-    from: { sixth?: true },
+    /** Stamped on what this window drops, so a readout can say which window it was. */
+    from: { sixth?: true; whole?: true },
   ): SixthCard => {
     const compiled = side.reqs.map(({ n, max, desc }): CompiledRequirement => {
       const mask = maskOf(desc);
@@ -738,12 +753,19 @@ export function compileCriterion(
 
   // A split criterion's own requirements are judged over the cards opened on,
   // which is `H − 1` and not the whole hand — and with draw cards those are two
-  // different numbers rather than one apart.
-  const criterion: CompiledCriterion =
-    sixth === undefined
-      ? window({ reqs, limits }, rooms.hand, {})
-      : window({ reqs, limits }, rooms.opened, {});
+  // different numbers rather than one apart. A `finally` part makes the criterion
+  // split just as a `then` part does, so it is `isSplit` and not `sixth` that
+  // decides which room the first window gets.
+  const criterion: CompiledCriterion = window(
+    { reqs, limits },
+    isSplit({ sixth, whole }) ? rooms.opened : rooms.hand,
+    {},
+  );
   if (sixth !== undefined) criterion.sixth = window(sixth, rooms.drawn, { sixth: true });
+  // The `finally` part's window is the WHOLE hand, so its room is `rooms.hand` —
+  // which is exactly the room an unsplit criterion is judged in, and the reason
+  // `at most 6x <desc>` is a vacuous `finally` at a hand of six.
+  if (whole !== undefined) criterion.whole = window(whole, rooms.hand, { whole: true });
   // Left out at 1 for the same reason: the weigher then answers exactly what
   // the matcher answered, and the success set carries the 1s it always did.
   if (weight !== undefined && weight !== 1) criterion.weight = weight;
@@ -852,8 +874,18 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
     const out = new Set<number>();
     flat.forEach((alternative, at) => {
       if (!which(at)) return;
-      for (const { desc } of alternative.reqs) out.add(desc);
-      for (const { desc } of alternative.limits) out.add(desc);
+      // EVERY WINDOW, and it has to be every window: a description named only
+      // after `then` or `finally` is a column of the match matrix like any other
+      // (`indexFlat` makes one), and leaving it out here would put it in `dead`
+      // whenever some criterion this run does NOT judge also names it — which
+      // drops it from the class partition, makes its mask 0, and turns that half
+      // of a criterion this run DOES judge into something no hand can meet.
+      // Nothing throws; the run just answers a different question.
+      for (const side of [alternative, alternative.sixth, alternative.whole]) {
+        if (side === undefined) continue;
+        for (const { desc } of side.reqs) out.add(desc);
+        for (const { desc } of side.limits) out.add(desc);
+      }
     });
     return out;
   };
@@ -963,12 +995,20 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
   const problem: Problem = {
     deckSize,
     handSizes: handSizes.map((hand) => {
-      // A hand DRAWS its last card wherever an alternative it judges asks about
-      // that card — and wherever the caller says so, which is how a criterion's
-      // own row of a breakdown ends up a fraction over the headline's
-      // denominator instead of one sixth of it.
+      // A hand DRAWS its last card wherever an alternative it judges reads the
+      // hand as more than one window — `then`, which asks about that card, or
+      // `finally`, which asks nothing about it but still makes the alternative's
+      // own part a question about the first `H − 1`. Either way the hand has to be
+      // dealt in two pieces for the reading to mean anything. And wherever the
+      // caller says so, which is how a criterion's own row of a breakdown ends up
+      // a fraction over the headline's denominator instead of one sixth of it.
       const mineHere = hand.criteria ?? flat.map((_, at) => at);
-      const drawn = hand.drawn === true || mineHere.some((at) => flat[at]?.sixth !== undefined);
+      const drawn =
+        hand.drawn === true ||
+        mineHere.some((at) => {
+          const alternative = flat[at];
+          return alternative !== undefined && isSplit(alternative);
+        });
       const out: HandSize = { H: hand.H, weight: hand.weight };
       if (hand.criteria !== undefined) out.criteria = hand.criteria.map((old) => indexOf.get(old)!);
       if (drawn) out.drawn = true;

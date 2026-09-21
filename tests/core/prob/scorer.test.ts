@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Expr, FlatCriterion } from '../../../src/core/criteria/ast';
 import { expandAll } from '../../../src/core/criteria/expand';
+import type { Description } from '../../../src/core/desc/ast';
 import { type CompiledCriterion, type Problem, partProblem } from '../../../src/core/model/problem';
 import { estimate } from '../../../src/core/prob/montecarlo';
 import {
@@ -14,7 +15,7 @@ import {
 } from '../../../src/core/prob/scorer';
 import { same } from '../../helpers/assert';
 // The multiplicative formula and plain listing: the routes the engine does not take.
-import { choose, combinations } from '../../helpers/combinatorics';
+import { choose, combinations, compositions } from '../../helpers/combinatorics';
 import { satisfiesAnyFlat, satisfiesFlat, satisfiesTree } from '../../helpers/criteria-oracle';
 import { estimate as estimateDraws, exhaustive } from '../../helpers/draw-oracle';
 import { bit, drawProblem, withoutDraws } from '../../helpers/draw-problem';
@@ -25,8 +26,10 @@ import {
   fillsOf,
   type Generated,
   genProblem,
+  hasFinally,
   hasRange,
   hasSplit,
+  smallFinallyProblems,
   smallProblems,
   smallRangedProblems,
   smallSplitProblems,
@@ -1612,6 +1615,605 @@ describe('the sixth card against exhaustive enumeration of every outcome', () =>
 });
 
 // ---------------------------------------------------------------------------
+// `finally`: a full criterion over the whole hand, beside one over the first
+// five (PRD §5.5, TDD §10.6, YGO-41)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE ORACLE FOR `finally`, and it shares nothing with `src/core/prob`: a deck
+ * of TWELVE DISTINCT CARDS, every 6-subset of them listed, and within each every
+ * choice of which card was the one drawn — `6 · C(12, 6) = 5,544` outcomes,
+ * which is the denominator the scorer reports and which nothing here is told.
+ *
+ * The three windows are made by literally partitioning the six cards, and each
+ * part is judged by hand-written logic over its own window. That is what a
+ * class-composition oracle cannot check: whether ASSIGNMENT spans windows.
+ *
+ * Cards 0–2 are starters, 3–5 are bricks, 6–11 are neither — which is classes
+ * 1, 2 and 0 of the problems below, at totals `[6, 3, 3]`.
+ */
+const TWELVE = {
+  starters: [0, 1, 2],
+  bricks: [3, 4, 5],
+  counts: [6, 3, 3],
+} as const;
+
+/** One outcome: the five cards opened on, the card drawn, and the six together. */
+interface Outcome12 {
+  five: number[];
+  drawn: number[];
+  whole: number[];
+}
+
+function outcomes12(): Outcome12[] {
+  const deck = Array.from({ length: 12 }, (_, card) => card);
+  const out: Outcome12[] = [];
+  for (const subset of combinations(deck, 6))
+    for (let at = 0; at < 6; at++)
+      out.push({
+        five: subset.filter((_, i) => i !== at),
+        drawn: [subset[at]!],
+        whole: subset,
+      });
+  return out;
+}
+
+const OUTCOMES_12 = outcomes12();
+
+const starters = (cards: readonly number[]) =>
+  cards.filter((card) => (TWELVE.starters as readonly number[]).includes(card)).length;
+const bricks = (cards: readonly number[]) =>
+  cards.filter((card) => (TWELVE.bricks as readonly number[]).includes(card)).length;
+
+/** How many of the 5,544 outcomes `judge` accepts. */
+const count12 = (judge: (outcome: Outcome12) => boolean) => OUTCOMES_12.filter(judge).length;
+
+/** Blank, starter, brick — at 6, 3 and 3 copies, with the sixth card drawn apart. */
+const deckOfTwelve = (criteria: CompiledCriterion[]): Problem =>
+  problemOf(12, 3, criteria, [{ H: 6, weight: 1, drawn: true }]);
+
+/** `1x starter`, whichever window it is asked of. */
+const ONE_STARTER = { slots: [A], limits: [] };
+/** `at most 1x brick`, whichever window it is asked of. */
+const AT_MOST_ONE_BRICK = { slots: [], limits: [{ mask: B, n: 1 }] };
+/** A part every hand meets: no slot and no limit. Vacuous `then`, vacuous `finally`. */
+const VACUOUS = { slots: [], limits: [] };
+
+describe('a `finally` clause against card-level brute force', () => {
+  it('lists 5,544 outcomes, which is the denominator the scorer reports', () => {
+    expect(OUTCOMES_12).toHaveLength(6 * choose(12, 6));
+    expect(createScorer(deckOfTwelve([{ ...ONE_STARTER }]), 6).score([...TWELVE.counts]).den).toBe(
+      5544,
+    );
+  });
+
+  /**
+   * THE CASE THAT MOTIVATES THE FEATURE (YGO-41): requirements early, limits
+   * late. `1x starter finally at most 1x brick` is NOT `1x starter and at most
+   * 1x brick`, and the difference is a whole question, not a rounding.
+   */
+  it('scores `1x starter finally at most 1x brick` at exactly 2505 / 5544', () => {
+    const judge = ({ five, whole }: Outcome12) => starters(five) >= 1 && bricks(whole) <= 1;
+    expect(count12(judge)).toBe(2505);
+    expect(
+      createScorer(deckOfTwelve([{ ...ONE_STARTER, whole: AT_MOST_ONE_BRICK }]), 6).score([
+        ...TWELVE.counts,
+      ]),
+    ).toEqual(plain(2505, 5544));
+  });
+
+  it('scores the unsplit `1x starter and at most 1x brick` at exactly 2658 / 5544', () => {
+    const judge = ({ whole }: Outcome12) => starters(whole) >= 1 && bricks(whole) <= 1;
+    expect(count12(judge)).toBe(2658);
+    expect(
+      createScorer(deckOfTwelve([{ slots: [A], limits: [{ mask: B, n: 1 }] }]), 6).score([
+        ...TWELVE.counts,
+      ]),
+    ).toEqual(plain(2658, 5544));
+  });
+
+  /**
+   * O5: the DIFFERENCE between the two, computed a third way. It is exactly the
+   * outcomes whose only starter is the card drawn — one per six-card hand
+   * holding exactly one starter and at most one brick — so the two criteria
+   * differ by a number that can be counted without evaluating either.
+   */
+  it('differs from the unsplit reading by exactly the hands whose only starter was drawn', () => {
+    const delta = combinations(
+      Array.from({ length: 12 }, (_, card) => card),
+      6,
+    ).filter((hand) => starters(hand) === 1 && bricks(hand) <= 1).length;
+    expect(delta).toBe(153);
+    expect(2658 - 2505).toBe(delta);
+  });
+
+  it('scores all three windows at once: `1x starter then no brick finally at most 1x brick`', () => {
+    const judge = ({ five, drawn, whole }: Outcome12) =>
+      starters(five) >= 1 && bricks(drawn) === 0 && bricks(whole) <= 1;
+    expect(count12(judge)).toBe(2145);
+    expect(
+      createScorer(
+        deckOfTwelve([
+          {
+            ...ONE_STARTER,
+            sixth: { slots: [], limits: [{ mask: B, n: 0 }] },
+            whole: AT_MOST_ONE_BRICK,
+          },
+        ]),
+        6,
+      ).score([...TWELVE.counts]),
+    ).toEqual(plain(2145, 5544));
+  });
+
+  /**
+   * ASSIGNMENT DOES NOT SPAN WINDOWS — the open question of YGO-41, pinned here
+   * rather than assumed. Each part is satisfied over its OWN window
+   * independently, so the single starter in the opening five answers both parts
+   * of `1x starter finally 1x starter`, and the criterion is worth exactly what
+   * `1x starter` over the five is worth.
+   */
+  it('lets one card answer two parts: `1x starter finally 1x starter` is `1x starter` over the five', () => {
+    const judge = ({ five, whole }: Outcome12) => starters(five) >= 1 && starters(whole) >= 1;
+    expect(count12(judge)).toBe(4662);
+    const twice = createScorer(deckOfTwelve([{ ...ONE_STARTER, whole: ONE_STARTER }]), 6).score([
+      ...TWELVE.counts,
+    ]);
+    expect(twice).toEqual(plain(4662, 5544));
+    // I4: `A` over five implies `A` over six for a monotone `A`, so asking it
+    // twice asks it once — and a criterion needing TWO distinct starters would
+    // score far less, which is what "does not span" rules out.
+    expect(
+      createScorer(deckOfTwelve([{ ...ONE_STARTER, sixth: VACUOUS }]), 6).score([...TWELVE.counts]),
+    ).toEqual(twice);
+    expect(
+      createScorer(deckOfTwelve([{ slots: [A, A], limits: [] }]), 6).score([...TWELVE.counts]).num,
+    ).toBeLessThan(twice.num);
+  });
+
+  it('binds a ceiling the opening five could never break: `2x starter finally at most 2x starter`', () => {
+    const judge = ({ five, whole }: Outcome12) => starters(five) >= 2 && starters(whole) <= 2;
+    expect(count12(judge)).toBe(1512);
+    expect(
+      createScorer(
+        deckOfTwelve([
+          { slots: [A, A], limits: [], whole: { slots: [], limits: [{ mask: A, n: 2 }] } },
+        ]),
+        6,
+      ).score([...TWELVE.counts]),
+    ).toEqual(plain(1512, 5544));
+  });
+
+  /**
+   * THE IDENTITIES. Each is a claim about what `finally` MEANS, checked as an
+   * equality of exact integers rather than of printed probabilities.
+   */
+  describe('identities', () => {
+    const scoreOf = (criteria: CompiledCriterion[]) =>
+      createScorer(deckOfTwelve(criteria), 6).score([...TWELVE.counts]);
+
+    // I1 — a `finally` with no part before it is just a whole-hand criterion.
+    it('makes a leading `finally` the unsplit criterion, digit for digit', () => {
+      const leading = scoreOf([{ slots: [], limits: [], whole: AT_MOST_ONE_BRICK }]);
+      const unsplit = scoreOf([{ slots: [], limits: [{ mask: B, n: 1 }] }]);
+      expect(leading).toEqual(unsplit);
+      expect(leading).toEqual(plain(2772, 5544));
+      expect(count12(({ whole }) => bricks(whole) <= 1)).toBe(2772);
+    });
+
+    // I2 — a vacuous `finally` changes nothing beside a `then`.
+    it('leaves a `then` criterion untouched when the `finally` part is vacuous', () => {
+      const withFinally = scoreOf([
+        { ...ONE_STARTER, sixth: { slots: [B], limits: [] }, whole: VACUOUS },
+      ]);
+      const without = scoreOf([{ ...ONE_STARTER, sixth: { slots: [B], limits: [] } }]);
+      expect(withFinally).toEqual(without);
+      expect(withFinally.num).toBeGreaterThan(0);
+    });
+
+    // I3 — a vacuous part either way round says the same thing: `A` over the five.
+    it('says the same as a vacuous `then`: both mean `A` over the first five', () => {
+      const viaFinally = scoreOf([{ ...ONE_STARTER, whole: VACUOUS }]);
+      const viaThen = scoreOf([{ ...ONE_STARTER, sixth: VACUOUS }]);
+      expect(viaFinally).toEqual(viaThen);
+      expect(viaFinally).toEqual(plain(4662, 5544));
+    });
+  });
+
+  /**
+   * The same numbers once more, through the FLAT-CRITERION oracle rather than by
+   * hand: `satisfiesFlat` assigns concrete cards to slots one at a time and
+   * shares nothing with the matcher's Hall conditions. It is the check that the
+   * hand-written predicates above and the language's own rules agree.
+   */
+  it('agrees with the flat-criterion oracle, outcome by outcome', () => {
+    const card = (passcode: number): Description => ({ anyOf: [{ t: 'card', passcode }] });
+    const STARTER = card(1);
+    const BRICK = card(2);
+    /** Cards 0–2 are starters, 3–5 bricks: the relation everything is judged by. */
+    const fills = (cardIndex: number, desc: Description) =>
+      desc === STARTER
+        ? (TWELVE.starters as readonly number[]).includes(cardIndex)
+        : (TWELVE.bricks as readonly number[]).includes(cardIndex);
+
+    const cases: [FlatCriterion, CompiledCriterion, number][] = [
+      [
+        {
+          reqs: [{ n: 1, desc: STARTER }],
+          limits: [],
+          whole: { reqs: [], limits: [{ n: 1, desc: BRICK }] },
+        },
+        { ...ONE_STARTER, whole: AT_MOST_ONE_BRICK },
+        2505,
+      ],
+      [
+        {
+          reqs: [{ n: 1, desc: STARTER }],
+          limits: [],
+          sixth: { reqs: [], limits: [{ n: 0, desc: BRICK }] },
+          whole: { reqs: [], limits: [{ n: 1, desc: BRICK }] },
+        },
+        {
+          ...ONE_STARTER,
+          sixth: { slots: [], limits: [{ mask: B, n: 0 }] },
+          whole: AT_MOST_ONE_BRICK,
+        },
+        2145,
+      ],
+      [
+        {
+          reqs: [{ n: 1, desc: STARTER }],
+          limits: [],
+          whole: { reqs: [{ n: 1, desc: STARTER }], limits: [] },
+        },
+        { ...ONE_STARTER, whole: ONE_STARTER },
+        4662,
+      ],
+      [
+        { reqs: [], limits: [], whole: { reqs: [], limits: [{ n: 1, desc: BRICK }] } },
+        { slots: [], limits: [], whole: AT_MOST_ONE_BRICK },
+        2772,
+      ],
+    ];
+
+    for (const [flat, compiled, expected] of cases) {
+      // The oracle reads the card drawn as the LAST of the hand it is given.
+      const hits = OUTCOMES_12.filter(({ five, drawn }) =>
+        satisfiesFlat(flat, [...five, ...drawn], fills),
+      ).length;
+      same(hits, expected, () => ({ flat }));
+      same(
+        createScorer(deckOfTwelve([compiled]), 6).score([...TWELVE.counts]).num,
+        expected,
+        () => ({ compiled }),
+      );
+    }
+  });
+});
+
+/**
+ * THE COMPOSITION ORACLE on a deck the size of a real one: 40 cards as 25 blank,
+ * 9 starters and 6 bricks. It writes out
+ *
+ *     num = Σ_h Σ_c h_c · w(h, c) · Π_c' C(n_c', h_c')      den = H · C(N, H)
+ *
+ * with its own binomials and its own composition walk — no success set, no
+ * complement store, no Hall conditions — and confirms that what the card-level
+ * oracle settled on twelve cards scales, and that the class partition is right.
+ */
+describe('a `finally` clause against a composition oracle on forty cards', () => {
+  const N40 = [25, 9, 6];
+  const deckOfForty = (criteria: CompiledCriterion[]): Problem =>
+    problemOf(40, 3, criteria, [{ H: 6, weight: 1, drawn: true }]);
+
+  /** `Σ_h Σ_c h_c · value(h − e_c, c, h) · ways(h)`, and `6 · C(40, 6)` under it. */
+  function oracle(value: (five: number[], cls: number, h: number[]) => number) {
+    let num = 0;
+    for (const h of compositions(3, 6)) {
+      let ways = 1;
+      for (let cls = 0; cls < 3; cls++) ways *= choose(N40[cls]!, h[cls]!);
+      if (ways === 0) continue;
+      let inner = 0;
+      for (let cls = 0; cls < 3; cls++) {
+        if (h[cls] === 0) continue;
+        const five = [...h];
+        five[cls]!--;
+        inner += h[cls]! * value(five, cls, h);
+      }
+      num += inner * ways;
+    }
+    return { num, den: 6 * choose(40, 6) };
+  }
+
+  it('agrees exactly on `1x starter finally at most 1x brick`', () => {
+    const expected = oracle((five, _cls, h) => (five[1]! >= 1 && h[2]! <= 1 ? 1 : 0));
+    expect(expected).toEqual({ num: 13_950_090, den: 23_030_280 });
+    expect(
+      createScorer(deckOfForty([{ ...ONE_STARTER, whole: AT_MOST_ONE_BRICK }]), 6).score(N40),
+    ).toEqual(plain(expected.num, expected.den));
+  });
+
+  it('agrees exactly on all three windows at once', () => {
+    const expected = oracle((five, cls, h) => (five[1]! >= 1 && cls !== 2 && h[2]! <= 1 ? 1 : 0));
+    expect(expected).toEqual({ num: 12_599_334, den: 23_030_280 });
+    expect(
+      createScorer(
+        deckOfForty([
+          {
+            ...ONE_STARTER,
+            sixth: { slots: [], limits: [{ mask: B, n: 0 }] },
+            whole: AT_MOST_ONE_BRICK,
+          },
+        ]),
+        6,
+      ).score(N40),
+    ).toEqual(plain(expected.num, expected.den));
+  });
+
+  it('is not the unsplit reading, which the same oracle scores differently', () => {
+    const expected = oracle((_five, _cls, h) => (h[1]! >= 1 && h[2]! <= 1 ? 1 : 0));
+    expect(expected).toEqual({ num: 15_111_360, den: 23_030_280 });
+    expect(
+      createScorer(deckOfForty([{ slots: [A], limits: [{ mask: B, n: 1 }] }]), 6).score(N40),
+    ).toEqual(plain(expected.num, expected.den));
+  });
+
+  /**
+   * WEIGHTED, because the `finally` part is evaluated once per composition above
+   * the per-class loop and under the same early break — so a weight is exactly
+   * what could make that hoisting wrong, by letting a heavier criterion be
+   * skipped for a reason that depends on the class.
+   */
+  it('agrees exactly with weights in play, where the hoisted part meets the early break', () => {
+    const expected = oracle((five, _cls, h) =>
+      five[1]! >= 1 && h[2]! === 0 ? 5 : h[1]! >= 1 ? 1 : 0,
+    );
+    expect(expected).toEqual({ num: 44_727_210, den: 23_030_280 });
+    const scored = createScorer(
+      deckOfForty([
+        { ...ONE_STARTER, whole: { slots: [], limits: [{ mask: B, n: 0 }] }, weight: 5 },
+        { slots: [A], limits: [], weight: 1 },
+      ]),
+      6,
+    ).score(N40);
+    expect(scored.num).toBe(expected.num);
+    expect(scored.den).toBe(expected.den);
+  });
+});
+
+/**
+ * THE TEAM LEAD'S TARGETS (YGO-41), computed by a class-composition oracle in
+ * Python sharing nothing with this repository, and reproduced here by a third
+ * route. Deck of 40 in four classes — 26 blank, 3 starters, 3 bricks, 8 traps —
+ * going second, every row over `6 · C(40, 6) = 23,030,280` so that all of them
+ * are directly comparable.
+ *
+ * The identities among them (I1, I3, I4) are ALGEBRAICALLY trivial — with no
+ * `then` part the per-class sum telescopes on `Σ_c h_c = H` — so a green row
+ * here is a check on the CODE and not on the semantics. What tests the semantics
+ * is the card-level enumeration above and the delta below.
+ */
+describe("the lead's composition-oracle targets", () => {
+  const N = [26, 3, 3, 8];
+  const STARTER = 1 << 1;
+  const BRICK = 1 << 2;
+  const TRAP = 1 << 3;
+  const DEN = 6 * choose(40, 6);
+
+  const scoreOf = (criterion: CompiledCriterion) =>
+    createScorer(problemOf(40, 4, [criterion], [{ H: 6, weight: 1, drawn: true }]), 6).score(N);
+
+  const rows: [string, CompiledCriterion, number][] = [
+    [
+      'unsplit `1x starter and at most 1x brick`',
+      { slots: [STARTER], limits: [{ mask: BRICK, n: 1 }] },
+      8_716_818,
+    ],
+    [
+      '`1x starter finally at most 1x brick`',
+      { slots: [STARTER], limits: [], whole: { slots: [], limits: [{ mask: BRICK, n: 1 }] } },
+      7_464_666,
+    ],
+    [
+      '`1x starter then 1x trap finally at most 1x brick`',
+      {
+        slots: [STARTER],
+        limits: [],
+        sixth: { slots: [TRAP], limits: [] },
+        whole: { slots: [], limits: [{ mask: BRICK, n: 1 }] },
+      },
+      1_548_888,
+    ],
+    [
+      '`finally at most 1x brick`',
+      { slots: [], limits: [], whole: { slots: [], limits: [{ mask: BRICK, n: 1 }] } },
+      21_794_850,
+    ],
+    ['unsplit `at most 1x brick` (I1)', { slots: [], limits: [{ mask: BRICK, n: 1 }] }, 21_794_850],
+    [
+      '`1x starter finally at most 6x trap`, a vacuous `finally`',
+      { slots: [STARTER], limits: [], whole: { slots: [], limits: [{ mask: TRAP, n: 6 }] } },
+      7_773_885,
+    ],
+    [
+      '`1x starter then at most 1x trap` (I3)',
+      { slots: [STARTER], limits: [], sixth: { slots: [], limits: [{ mask: TRAP, n: 1 }] } },
+      7_773_885,
+    ],
+    [
+      '`1x starter finally 1x starter` (I4)',
+      { slots: [STARTER], limits: [], whole: { slots: [STARTER], limits: [] } },
+      7_773_885,
+    ],
+  ];
+
+  it.each(rows)('scores %s exactly', (_label, criterion, expected) => {
+    expect(scoreOf(criterion)).toEqual(plain(expected, DEN));
+  });
+
+  /**
+   * O5 on this fixture, and the one row that tests the SEMANTICS rather than the
+   * arithmetic: the difference between `finally` and the unsplit reading is
+   * exactly the hands whose only starter is the card drawn — each contributing
+   * one outcome, the one in which that starter was drawn. Counted here without
+   * evaluating either criterion.
+   */
+  it('differs from the unsplit reading by exactly the hands whose only starter was drawn', () => {
+    let delta = 0;
+    for (const h of compositions(4, 6)) {
+      if (h[1] !== 1 || h[2]! > 1) continue;
+      let ways = 1;
+      for (let cls = 0; cls < 4; cls++) ways *= choose(N[cls]!, h[cls]!);
+      delta += ways;
+    }
+    expect(delta).toBe(1_252_152);
+    expect(8_716_818 - 7_464_666).toBe(delta);
+  });
+
+  /**
+   * THE DIRECTION, which is the cheapest way to catch the single likeliest
+   * mistake: `finally` must be STRICTER than the unsplit reading, because the
+   * initial part moves from six cards to five while the limit still counts all
+   * six. A `finally` template scoring HIGHER than its unsplit twin means the
+   * initial part is still being judged over the whole hand.
+   */
+  it('is stricter than the unsplit reading, never looser', () => {
+    const split = scoreOf({
+      slots: [STARTER],
+      limits: [],
+      whole: { slots: [], limits: [{ mask: BRICK, n: 1 }] },
+    });
+    const unsplit = scoreOf({ slots: [STARTER], limits: [{ mask: BRICK, n: 1 }] });
+    expect(split.num).toBeLessThan(unsplit.num);
+  });
+});
+
+/**
+ * THE SAME ORACLE, over GENERATED criteria: every shape the grammar allows —
+ * `five then sixth finally whole`, `five finally whole`, `then sixth finally
+ * whole` and `finally whole` — held against the very enumeration the `then`
+ * family is held against. `enumerateDrawn` lists each (opening, drawn) outcome
+ * of the deck and judges it by assigning concrete cards, which is how a window
+ * read wrongly shows up as a wrong integer rather than as a plausible one.
+ */
+describe('a `finally` clause against exhaustive enumeration of every outcome', () => {
+  const generated = smallFinallyProblems();
+
+  it('generates problems worth testing', () => {
+    expect(generated.length).toBeGreaterThanOrEqual(200);
+    const withFinally = generated.filter(hasFinally);
+    expect(withFinally.length).toBeGreaterThanOrEqual(80);
+    // All four shapes, and problems that MIX them with unsplit criteria — the
+    // case a run that judged every criterion in one window would get wrong.
+    const parts = generated.flatMap(({ flat }) => flat);
+    const shape = (sixth: boolean, whole: boolean) =>
+      parts.filter((f) => (f.sixth !== undefined) === sixth && (f.whole !== undefined) === whole)
+        .length;
+    expect(shape(true, true)).toBeGreaterThanOrEqual(10);
+    expect(shape(false, true)).toBeGreaterThanOrEqual(30);
+    expect(shape(true, false)).toBeGreaterThanOrEqual(30);
+    expect(shape(false, false)).toBeGreaterThanOrEqual(30);
+    // A `finally` part that is limits alone, and one with requirement slots:
+    // the first binds only over six cards, the second can be answered by five.
+    const wholes = parts.flatMap(({ whole }) => (whole === undefined ? [] : [whole]));
+    expect(wholes.filter(({ reqs }) => reqs.length === 0).length).toBeGreaterThanOrEqual(5);
+    expect(wholes.filter(({ reqs }) => reqs.length > 0).length).toBeGreaterThanOrEqual(40);
+    expect(wholes.filter(({ limits }) => limits.length > 0).length).toBeGreaterThanOrEqual(10);
+    // And probabilities actually decided by chance, not 0 or 1 throughout.
+    const p = withFinally.map((g) => {
+      const { outcomes, successes } = enumerateDrawn(g, g.counts, g.flat);
+      return successes / outcomes;
+    });
+    expect(p.filter((value) => value > 0.02 && value < 0.98).length).toBeGreaterThanOrEqual(40);
+  });
+
+  it('counts exactly the successful outcomes of every deck, problem by problem', () => {
+    let decks = 0;
+    let outcomes = 0;
+    generated.forEach((g, i) => {
+      const converted = problemFromMatrix(g.problem, [g.handSize]);
+      const scorer = createScorer(converted.problem, g.handSize);
+      const rng = seededRng(112_000 + i);
+      for (const counts of [g.counts, otherCounts(rng, g)]) {
+        const exact = enumerateDrawn(g, counts, g.flat);
+        const context = () => ({ index: i, counts, problem: g.problem, handSize: g.handSize });
+        same(exact.outcomes, g.handSize * choose(g.problem.deckSize, g.handSize), context);
+        const { num, den } = scorer.score(converted.totals(counts));
+        // 1 where the hand is dealt in two pieces — which a `finally` part makes
+        // it, with or without a `then` — and `H` where it is not.
+        const factor = hasSplit(g) ? 1 : g.handSize;
+        same(num * factor, exact.successes, context);
+        same(den * factor, exact.outcomes, context);
+        decks++;
+        outcomes += exact.outcomes;
+      }
+    });
+    // Pinned so the size of the check is on record; it moves only if the generator does.
+    expect({ decks, outcomes }).toEqual({ decks: 480, outcomes: 721_062 });
+  });
+
+  it('counts the same outcomes as the UNEXPANDED criteria do', () => {
+    generated.slice(0, 80).forEach((g, i) => {
+      const converted = problemFromMatrix(g.problem, [g.handSize]);
+      const fills = fillsOf(g.problem);
+      const deck = deckOf(g.problem, g.counts);
+      let successes = 0;
+      for (let drawn = 0; drawn < deck.length; drawn++) {
+        const rest = deck.filter((_, at) => at !== drawn);
+        for (const opening of combinations(rest, g.handSize - 1))
+          if (g.exprs.some((expr) => satisfiesTree(expr, [...opening, deck[drawn]!], fills)))
+            successes++;
+      }
+      const { num } = createScorer(converted.problem, g.handSize).score(converted.totals(g.counts));
+      same(num * (hasSplit(g) ? 1 : g.handSize), successes, () => ({
+        index: i,
+        problem: g.problem,
+      }));
+    });
+  });
+
+  /**
+   * A 95% interval MISSES ONE TIME IN TWENTY by construction, so "every problem
+   * inside its own interval" is a seed lottery and not a check — it passes or
+   * fails on which seeds were picked, and a run of it that goes green says
+   * nothing. Two claims are made instead, and both are about the family:
+   *
+   * - no problem is GROSSLY out, at five standard errors, which a real
+   *   disagreement about a window would be far past; and
+   * - the 95% intervals hit about as often as 95% intervals should, which is
+   *   what a small systematic bias — the kind that keeps every problem inside
+   *   five sigma — would break.
+   */
+  it('agrees with the Monte Carlo oracle on the whole family', () => {
+    const family = generated.filter(hasFinally).slice(0, 40);
+    let inside = 0;
+    family.forEach((g, i) => {
+      const converted = problemFromMatrix(g.problem, [g.handSize]);
+      const { num, den } = createScorer(converted.problem, g.handSize).score(
+        converted.totals(g.counts),
+      );
+      const {
+        ci95,
+        p: sampled,
+        stderr,
+      } = estimate(g.problem, g.counts, {
+        handSize: g.handSize,
+        samples: 60_000,
+        seed: 117_000 + i,
+      });
+      const p = num / den;
+      if (p >= ci95[0] - 1e-9 && p <= ci95[1] + 1e-9) inside++;
+      // `stderr` is 0 where the sample never succeeded; the interval still binds there.
+      const band = Math.max(5 * stderr, 1e-9);
+      if (Math.abs(p - sampled) > band)
+        throw new Error(
+          `exact ${p} is ${Math.abs(p - sampled) / (stderr || 1)} standard errors from the sampled ${sampled} for problem ${i}: ${JSON.stringify(g.problem)}`,
+        );
+    });
+    expect(inside).toBeGreaterThanOrEqual(family.length - 5);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Draw cards (PRD §5.7)
 // ---------------------------------------------------------------------------
 
@@ -2214,6 +2816,111 @@ describe('createScorers with `then` and draw cards', () => {
         [4, 2, 2],
         3,
       ],
+      // `finally` BESIDE DRAW CARDS (PRD §5.5, §5.7, YGO-41). Its window is the
+      // whole END hand — every card still held when the drawing stops, resolved
+      // copies excluded — which is exactly the two windows summed, so the oracle
+      // and the engine must agree without either being told so.
+      [
+        'a `finally` part alone: the opening is still the cards opened on',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [
+            { slots: [bit(2)], limits: [], whole: { slots: [bit(2), bit(2)], limits: [] } },
+          ],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        'a `finally` LIMIT that drawing can break, which is why the clause exists',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [
+            { slots: [bit(2)], limits: [], whole: { slots: [], limits: [{ mask: bit(2), n: 1 }] } },
+          ],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        'all three windows at once, with draw cards under them',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [
+            {
+              slots: [bit(2)],
+              limits: [],
+              sixth: { slots: [], limits: [{ mask: bit(1), n: 0 }] },
+              whole: { slots: [], limits: [{ mask: bit(2), n: 2 }] },
+            },
+          ],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        'a `finally` criterion that also stops: the hand it is judged over is then the opening',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [
+            {
+              slots: [bit(2)],
+              limits: [],
+              whole: { slots: [], limits: [{ mask: bit(2), n: 1 }] },
+              stop: true,
+            },
+          ],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        'a `finally` criterion beside a `then` one and an unsplit one, weighted',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [
+            {
+              slots: [bit(2)],
+              limits: [],
+              whole: { slots: [], limits: [{ mask: bit(2), n: 1 }] },
+              weight: 4,
+            },
+            thenNeeds(bit(2), { weight: 2 }),
+            { slots: [bit(2), bit(2)], limits: [], weight: 1 },
+          ],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        'once-per-turn under a `finally` limit, where an unactivated copy stays in the hand',
+        drawProblem({
+          n: [3, 3, 2],
+          H: 2,
+          drawn: true,
+          draw: { 1: { n: 2, oncePerTurn: true } },
+          criteria: [
+            { slots: [], limits: [], whole: { slots: [], limits: [{ mask: bit(1), n: 1 }] } },
+          ],
+        }),
+        [3, 3, 2],
+        2,
+      ],
     ];
 
     it.each(cases)('agrees exactly: %s', (_label, problem, n, hand) => {
@@ -2225,6 +2932,174 @@ describe('createScorers with `then` and draw cards', () => {
       const exact = createBlendScorer(problem).score(n);
       const p = exact.parts.reduce((sum, part) => sum + part.successNum / part.den, 0);
       expect(p).toBeCloseTo(exhaustive(problem, n, hand).p, 12);
+    });
+  });
+
+  /**
+   * THE TEAM LEAD'S DRAW-PATH TARGETS (YGO-41), from an exact ordered-prefix
+   * oracle in Python — least fixed point for ℓ, resolved copies removed from the
+   * hand, `Fraction` throughout — which reproduced the engine's plain `then` row
+   * before any of these were taken. That row is repeated first below for the same
+   * reason: it needs none of the `finally` code, so a harness that cannot hit it
+   * is what is wrong.
+   *
+   * The fixture is the template the lead ran, compiled: three Pot of Greed (draw
+   * 2), three level-4 monsters, three level-8 monsters, eight traps and 23 cards
+   * nothing can see. Class 0 is blank, 1 is the Pot, 2 the starter, 3 the brick,
+   * 4 the trap — the order `compileProblem` produces from it.
+   *
+   * Fractions are compared REDUCED, not as numerators: the draw path reports one
+   * exact fraction per prefix length and the parts SUM (PRD §5.7), so the total's
+   * denominator is whatever the combination leaves.
+   */
+  describe("the lead's draw-path targets", () => {
+    const N = [23, 3, 3, 3, 8];
+    // Class 1 is the Pot, and no criterion here names it: it is a draw class the
+    // criteria cannot see, which is what the `stop` identity below rests on.
+    const STARTER = 1 << 2;
+    const BRICK = 1 << 3;
+    const TRAP = 1 << 4;
+
+    const withPots = (criteria: CompiledCriterion[]): Problem =>
+      drawProblem({
+        n: N,
+        max: N,
+        H: 6,
+        deckSize: 40,
+        drawn: true,
+        draw: { 1: { n: 2 } },
+        criteria,
+      });
+
+    /** P(success) as an exact reduced fraction: the parts are disjoint and SUM. */
+    const exactP = (problem: Problem, n: readonly number[]): string => {
+      let num = 0n;
+      let den = 1n;
+      for (const part of createBlendScorer(problem).score(n).parts) {
+        num = num * BigInt(part.den) + BigInt(part.successNum) * den;
+        den *= BigInt(part.den);
+        const divide = (a: bigint, b: bigint): bigint => (b === 0n ? a : divide(b, a % b));
+        const g = divide(num < 0n ? -num : num, den);
+        if (g > 1n) {
+          num /= g;
+          den /= g;
+        }
+      }
+      return `${num}/${den}`;
+    };
+
+    const rows: [string, CompiledCriterion, string][] = [
+      [
+        '`1x starter then 1x trap`, which needs none of the `finally` code',
+        { slots: [STARTER], limits: [], sixth: { slots: [TRAP], limits: [] } },
+        '219720061229/1935844730820',
+      ],
+      [
+        'unsplit `1x starter and at most 1x brick`',
+        { slots: [STARTER], limits: [{ mask: BRICK, n: 1 }] },
+        '75741394/179444265',
+      ],
+      [
+        '`1x starter finally at most 1x brick`',
+        { slots: [STARTER], limits: [], whole: { slots: [], limits: [{ mask: BRICK, n: 1 }] } },
+        '365915687/1148443296',
+      ],
+      [
+        '`1x starter then 1x trap finally at most 1x brick`',
+        {
+          slots: [STARTER],
+          limits: [],
+          sixth: { slots: [TRAP], limits: [] },
+          whole: { slots: [], limits: [{ mask: BRICK, n: 1 }] },
+        },
+        '25756927607/238257813024',
+      ],
+    ];
+
+    it.each(rows)('agrees exactly on %s', (_label, criterion, expected) => {
+      expect(exactP(withPots([criterion]), N)).toBe(expected);
+    });
+
+    /**
+     * THE CONJUNCTION IS BELOW BOTH ITS PARTS — the check a single row cannot
+     * make. If the three-window criterion lands between the `then`-only and
+     * `finally`-only ones, the parts are not all being required.
+     */
+    it('scores the three-window criterion below both of its parts', () => {
+      const p = (criterion: CompiledCriterion) => {
+        const [num, den] = exactP(withPots([criterion]), N).split('/');
+        return Number(num) / Number(den);
+      };
+      const thenOnly = p({ slots: [STARTER], limits: [], sixth: { slots: [TRAP], limits: [] } });
+      const finallyOnly = p({
+        slots: [STARTER],
+        limits: [],
+        whole: { slots: [], limits: [{ mask: BRICK, n: 1 }] },
+      });
+      const both = p({
+        slots: [STARTER],
+        limits: [],
+        sixth: { slots: [TRAP], limits: [] },
+        whole: { slots: [], limits: [{ mask: BRICK, n: 1 }] },
+      });
+      expect(both).toBeLessThan(thenOnly);
+      expect(both).toBeLessThan(finallyOnly);
+      // And `finally` is stricter than the unsplit reading, as it is undrawn.
+      expect(finallyOnly).toBeLessThan(p({ slots: [STARTER], limits: [{ mask: BRICK, n: 1 }] }));
+    });
+
+    /**
+     * A CROSS-PATH IDENTITY, and the strongest single check in this file:
+     * `compileValuer` (no draws) and `compileSplitWeigher` (the draw path, and its
+     * stop branch) are separate implementations of one semantics, and this forces
+     * them onto the same exact fraction.
+     *
+     * Take a criterion whose failure DRAWING CANNOT REPAIR: its opening part asks
+     * about positions 0…H−2, which drawing never touches, and its `finally` part
+     * is a limit whose census only grows. Marked `stop`, it is therefore worth
+     * exactly `P(met on the opening six)` — which is its value on a deck with no
+     * draw card at all and the same composition, the three Pots being invisible to
+     * it either way.
+     *
+     * Asserted as equality between two runs rather than against a literal, so it
+     * keeps its meaning if the fixture changes.
+     */
+    describe('`stop` beside a `finally` part', () => {
+      const CRITERION: CompiledCriterion = {
+        slots: [STARTER],
+        limits: [],
+        whole: { slots: [], limits: [{ mask: BRICK, n: 1 }] },
+      };
+      /** The same criterion on a deck holding no draw card: 3 starters, 3 bricks, 34 it cannot see. */
+      const noDraws: Problem = {
+        deckSize: 40,
+        handSizes: [{ H: 6, weight: 1, drawn: true }],
+        classes: [23, 3, 3, 3, 8].map((_, cls) => ({ lineIds: [`c${cls}`], min: 0, max: 40 })),
+        criteria: [CRITERION],
+      };
+
+      it('is worth exactly what the same criterion is worth with no draw card at all', () => {
+        const stopped = exactP(withPots([{ ...CRITERION, stop: true }]), N);
+        expect(stopped).toBe(exactP(noDraws, N));
+      });
+
+      /**
+       * And the stop must CHANGE the answer. Equal ticked and unticked is the
+       * failure mode a partial implementation gives: the flag not reaching the
+       * `finally` part at all. Ticking can only protect hands here — one criterion,
+       * and drawing can only hurt it — so ticked is the larger; that is a fact
+       * about this fixture and not a property to generalise.
+       */
+      it('keeps the hands drawing would have broken, and says so in the number', () => {
+        const ticked = exactP(withPots([{ ...CRITERION, stop: true }]), N);
+        const unticked = exactP(withPots([CRITERION]), N);
+        expect(ticked).not.toBe(unticked);
+        const value = (fraction: string) => {
+          const [num, den] = fraction.split('/');
+          return Number(num) / Number(den);
+        };
+        expect(value(ticked)).toBeGreaterThan(value(unticked));
+      });
     });
   });
 

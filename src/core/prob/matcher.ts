@@ -1,6 +1,7 @@
 import {
   type CompiledCriterion,
   type CompiledRequirement,
+  isSplit,
   MAX_HAND,
   maxCriterionWeight,
   type Problem,
@@ -169,10 +170,14 @@ function chosen(problem: Problem, opts: MatcherOptions): CompiledCriterion[] {
 /**
  * A split criterion's `slots` and `limits` are about the OPENING FIVE, not the
  * whole hand, so anything that reads a hand as one window would read it wrong.
- * `compileValuer` is the one thing that knows a hand has two.
+ * `compileValuer` is the one thing that knows a hand has more than one.
+ *
+ * `isSplit` and not `sixth !== undefined`: a criterion with a `finally` part and
+ * no `then` reads its first window as the cards opened on just the same, so it
+ * must be refused here just the same.
  */
 function refuseSplit(criteria: readonly CompiledCriterion[], because: string): void {
-  const at = criteria.findIndex(({ sixth }) => sixth !== undefined);
+  const at = criteria.findIndex(isSplit);
   if (at >= 0) throw new RangeError(`criterion ${at} is about the card you draw, but ${because}`);
 }
 
@@ -264,10 +269,13 @@ export type SplitWeigher = (
  * precomputing which classes a lone card satisfies does not apply: the drawn
  * part is an ordinary criterion judged over an ordinary composition.
  *
- * A criterion that names no drawn set is judged over the two windows TOGETHER,
- * which is the whole hand — they are disjoint and between them hold all of it.
- * Heaviest first, so the first criterion met is the best one and the loop stops
- * there, exactly as `compileWeigher` does.
+ * A criterion that names no drawn set and no whole hand is judged over the two
+ * windows TOGETHER, which is the whole hand — they are disjoint and between them
+ * hold all of it. So is a `finally` part, which is a question about exactly that
+ * sum (PRD §5.5): with draw cards the whole hand is every card you still hold
+ * when you stop drawing, resolved draw cards excluded, and the two windows
+ * between them are precisely that. Heaviest first, so the first criterion met is
+ * the best one and the loop stops there, exactly as `compileWeigher` does.
  */
 export function compileSplitWeigher(problem: Problem, opts: MatcherOptions = {}): SplitWeigher {
   validateProblem(problem);
@@ -279,29 +287,42 @@ export function compileSplitWeigher(problem: Problem, opts: MatcherOptions = {})
   const drawnPart = ordered.map(({ sixth }) =>
     sixth === undefined ? null : compileCriterion(sixth),
   );
-  /** The two windows together, filled at most once per call and only if something needs it. */
-  const whole = new Int32Array(classCount);
+  /** The `finally` part, judged over the two windows summed. */
+  const wholePart = ordered.map(({ whole }) =>
+    whole === undefined ? null : compileCriterion(whole),
+  );
+  const split = ordered.map(isSplit);
+  /**
+   * The two windows together, filled at most once per call and only if something
+   * needs it: an unsplit criterion, or a `finally` part.
+   */
+  const summed = new Int32Array(classCount);
   return (opened, openedSize, drawn, drawnSize) => {
     let joined = false;
+    const wholeSize = openedSize + drawnSize;
+    const join = () => {
+      if (joined) return;
+      for (let cls = 0; cls < classCount; cls++) summed[cls] = opened[cls]! + drawn[cls]!;
+      joined = true;
+    };
     for (let at = 0; at < ordered.length; at++) {
-      const part = drawnPart[at]!;
       const criterion = opening[at]!;
-      if (part === null) {
-        if (!joined) {
-          for (let cls = 0; cls < classCount; cls++) whole[cls] = opened[cls]! + drawn[cls]!;
-          joined = true;
-        }
-        if (meets(criterion, whole, openedSize + drawnSize) && withinCeilings(criterion, whole))
+      if (!split[at]!) {
+        join();
+        if (meets(criterion, summed, wholeSize) && withinCeilings(criterion, summed))
           return weights[at]!;
         continue;
       }
-      if (
-        meets(criterion, opened, openedSize) &&
-        withinCeilings(criterion, opened) &&
-        meets(part, drawn, drawnSize) &&
-        withinCeilings(part, drawn)
-      )
-        return weights[at]!;
+      if (!(meets(criterion, opened, openedSize) && withinCeilings(criterion, opened))) continue;
+      const part = drawnPart[at]!;
+      if (part !== null && !(meets(part, drawn, drawnSize) && withinCeilings(part, drawn)))
+        continue;
+      const all = wholePart[at]!;
+      if (all !== null) {
+        join();
+        if (!(meets(all, summed, wholeSize) && withinCeilings(all, summed))) continue;
+      }
+      return weights[at]!;
     }
     return 0;
   };
@@ -384,7 +405,22 @@ function acceptsOf(sixth: SixthCard, classCount: number): number {
  *
  * where `best` is the highest weight among the criteria that outcome meets —
  * an unsplit criterion judged over all `H` cards, a split one judged as its
- * five-card part over `h − e_c` and its sixth-card part over `c` alone.
+ * five-card part over `h − e_c`, its sixth-card part over `c` alone, and its
+ * `finally` part over `h`.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A THIRD WINDOW COSTS NOTHING (PRD §5.5, TDD §10.6). A `finally` part is a
+ * predicate on `h` ITSELF, and `h` is fixed in the outer sum — so it enters
+ * `best(h − e_c, c)` as a conjunct that does not depend on `c`, and the identity
+ * above is untouched. Nothing about the sample space changes: an outcome is
+ * still the pair (the opening five, the card drawn), a set of `H` cards is still
+ * `H` of them, the denominator is still `H · C(N, H)`, and
+ * `n · C(n−1, h−1) = h · C(n, h)` is still what makes the factor of `h_c`
+ * right. The walk over compositions is the same walk.
+ *
+ * So a `finally` part is evaluated ONCE per composition rather than once per
+ * outcome, above the per-class loop and under the same early break — which is
+ * also the whole of the implementation.
  *
  * TWO CONSEQUENCES WORTH STATING, because they are why this is cheap:
  *
@@ -416,14 +452,41 @@ export function compileValuer(problem: Problem, H: number, opts: ValuerOptions =
   // the order it was written in.
   const byWeight = (a: CompiledCriterion, b: CompiledCriterion) =>
     (b.weight ?? 1) - (a.weight ?? 1);
-  const whole = [...picked].filter(({ sixth }) => sixth === undefined).sort(byWeight);
-  const split = [...picked].filter(({ sixth }) => sixth !== undefined).sort(byWeight);
-  const wholeWeights = whole.map(({ weight }) => weight ?? 1);
-  const wholeHall = whole.map(compileCriterion);
+  // `unsplit` rather than `whole`: `whole` is now a WINDOW of a split criterion
+  // (what `finally` writes), and one name for two things here is how the diff
+  // stops being readable.
+  const unsplit = [...picked].filter((criterion) => !isSplit(criterion)).sort(byWeight);
+  const split = [...picked].filter(isSplit).sort(byWeight);
+  const unsplitWeights = unsplit.map(({ weight }) => weight ?? 1);
+  const unsplitHall = unsplit.map(compileCriterion);
   const splitWeights = split.map(({ weight }) => weight ?? 1);
   /** A split criterion's own `slots`, `limits` and `reqs` ARE its five-card part. */
   const fiveHall = split.map(compileCriterion);
-  const accepts = split.map(({ sixth }) => acceptsOf(sixth!, classCount));
+  /**
+   * The classes a lone drawn card may be of. A criterion with no `then` part
+   * accepts ANY of them: `finally` says nothing about which card was drawn, only
+   * about the hand it completes.
+   */
+  // `MAX_CLASSES` is 30, so the shift never reaches the sign bit.
+  const everyClass = (1 << classCount) - 1;
+  const accepts = split.map(({ sixth }) =>
+    sixth === undefined ? everyClass : acceptsOf(sixth, classCount),
+  );
+  /** The `finally` part of each split criterion, and `null` where there is none. */
+  const wholeHall = split.map(({ whole }) =>
+    whole === undefined ? null : compileCriterion(whole),
+  );
+  const anyWhole = wholeHall.some((part) => part !== null);
+  /**
+   * Whether each split criterion's `finally` part holds of the hand being valued
+   * — 1 for "holds or has none", 0 for "fails". Filled once per composition, for
+   * the reason `base` is: a `finally` part is a predicate on `h` ITSELF and does
+   * not depend on which card was drawn, so evaluating it inside the per-class
+   * loop would repeat it up to `H` times for one answer.
+   *
+   * Left untouched, and never read, where no criterion has one.
+   */
+  const wholeHolds = new Uint8Array(split.length);
 
   /** The best weight among `criteria` that `h` meets, or `floor` if none beats it. */
   const bestOf = (
@@ -449,7 +512,7 @@ export function compileValuer(problem: Problem, H: number, opts: ValuerOptions =
       maxValue,
       maxPlain: outcomes,
       worth: (h, into) => {
-        const weight = bestOf(wholeHall, wholeWeights, h, H, 0);
+        const weight = bestOf(unsplitHall, unsplitWeights, h, H, 0);
         into.value = outcomes * weight;
         into.plain = weight > 0 ? outcomes : 0;
       },
@@ -465,7 +528,20 @@ export function compileValuer(problem: Problem, H: number, opts: ValuerOptions =
     worth: (h, into) => {
       // The unsplit criteria read the whole hand and so are the same for every
       // outcome of it: judged once, and the floor each outcome starts from.
-      const base = bestOf(wholeHall, wholeWeights, h, H, 0);
+      const base = bestOf(unsplitHall, unsplitWeights, h, H, 0);
+      // THE `finally` PARTS, once per composition and NOT once per outcome.
+      // The early break is kept: sorted heaviest first, a criterion that cannot
+      // beat `base` for any outcome is never reached by the loop below, so its
+      // part is never evaluated either — `0` there is never read.
+      if (anyWhole)
+        for (let at = 0; at < splitWeights.length; at++) {
+          if (splitWeights[at]! <= base) {
+            wholeHolds[at] = 0;
+            continue;
+          }
+          const all = wholeHall[at]!;
+          wholeHolds[at] = all === null || (meets(all, h, H) && withinCeilings(all, h)) ? 1 : 0;
+        }
       let value = 0;
       let plain = 0;
       for (let cls = 0; cls < classCount; cls++) {
@@ -477,6 +553,7 @@ export function compileValuer(problem: Problem, H: number, opts: ValuerOptions =
         for (let at = 0; at < splitWeights.length; at++) {
           if (splitWeights[at]! <= best) break;
           if (((accepts[at]! >>> cls) & 1) === 0) continue;
+          if (anyWhole && wholeHolds[at] === 0) continue;
           const criterion = fiveHall[at]!;
           if (meets(criterion, five, H - 1) && withinCeilings(criterion, five))
             best = splitWeights[at]!;

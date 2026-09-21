@@ -96,9 +96,17 @@ function outcomesOf<C>(
   }
 }
 
-/** The five cards opened on, and the one drawn: the LAST card of the hand. */
-function windows<C>(hand: readonly C[]): { opening: readonly C[]; drawn: readonly C[] } {
-  return { opening: hand.slice(0, -1), drawn: hand.slice(-1) };
+/**
+ * The three windows of a hand dealt in two pieces: the cards opened on, the one
+ * drawn — the LAST card of the hand — and the whole hand, which is their union
+ * and is what a `finally` part is judged over.
+ */
+function windows<C>(hand: readonly C[]): {
+  opening: readonly C[];
+  drawn: readonly C[];
+  whole: readonly C[];
+} {
+  return { opening: hand.slice(0, -1), drawn: hand.slice(-1), whole: hand };
 }
 
 function popcount(mask: number): number {
@@ -120,15 +128,18 @@ function popcount(mask: number): number {
  * is what holding the two against each other checks.
  */
 export function satisfiesTree<C>(expr: Expr, hand: readonly C[], fills: Fills<C>): boolean {
-  // A SPLIT reads the whole of the rest of this over two hands: the cards
-  // opened on, and the single card drawn. Nothing crosses between them, which
-  // is exactly why the same evaluator answers both.
+  // A SPLIT reads the whole of the rest of this over one hand per WINDOW: the
+  // cards opened on, the single card drawn, and the whole hand. Nothing crosses
+  // between them — ASSIGNMENT DOES NOT SPAN WINDOWS, so the one monster in the
+  // opening five answers `1x monster finally 1x monster` twice — which is exactly
+  // why the same evaluator answers all three.
   if (expr.op === 'split') {
     if (hand.length === 0) return false;
-    const { opening, drawn } = windows(hand);
+    const { opening, drawn, whole } = windows(hand);
     return (
-      satisfiesTree(expr.sixth, drawn, fills) &&
-      (expr.five === undefined || satisfiesTree(expr.five, opening, fills))
+      (expr.five === undefined || satisfiesTree(expr.five, opening, fills)) &&
+      (expr.sixth === undefined || satisfiesTree(expr.sixth, drawn, fills)) &&
+      (expr.whole === undefined || satisfiesTree(expr.whole, whole, fills))
     );
   }
   return outcomesOf(expr, 2 ** hand.length - 1, hand, fills).some(({ available, capped }) =>
@@ -150,11 +161,16 @@ export function satisfiesFlat<C>(
   hand: readonly C[],
   fills: Fills<C>,
 ): boolean {
-  if (flat.sixth !== undefined) {
+  if (flat.sixth !== undefined || flat.whole !== undefined) {
     if (hand.length === 0) return false;
-    const { opening, drawn } = windows(hand);
+    const { opening, drawn, whole } = windows(hand);
+    const side = (part: NonNullable<FlatCriterion['sixth']>) => ({
+      reqs: part.reqs,
+      limits: part.limits,
+    });
     return (
-      satisfiesFlat({ reqs: flat.sixth.reqs, limits: flat.sixth.limits }, drawn, fills) &&
+      (flat.sixth === undefined || satisfiesFlat(side(flat.sixth), drawn, fills)) &&
+      (flat.whole === undefined || satisfiesFlat(side(flat.whole), whole, fills)) &&
       satisfiesFlat({ reqs: flat.reqs, limits: flat.limits }, opening, fills)
     );
   }

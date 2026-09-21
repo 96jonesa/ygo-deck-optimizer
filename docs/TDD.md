@@ -318,7 +318,7 @@ An extensional test ("every card in the pool matching $`L`$ also matches $`q`$")
 ### 7.1 Text grammar and AST
 
 ```
-criterion   := orExpr
+criterion   := [ orExpr ] [ "then" orExpr ] [ "finally" orExpr ]   -- at least one part
 orExpr      := andExpr ( "or" andExpr )*
 andExpr     := term ( ( "and" | "," ) term )*
 term        := "(" orExpr ")" | requirement | limit
@@ -328,6 +328,30 @@ limit       := "at most" ONE description | "no" description
 COUNT       := INT [ "-" INT ] [ "x" | "×" ]     -- 1x, 2×, 1-2x, 1-2
 ONE         := INT [ "x" | "×" ]                 -- a range here is an error carrying the rewrite
 ```
+
+`then` and `finally` are the two **window separators** (PRD §5.5), going-second only. `finally`
+binds looser than `then`, which binds looser than `and` and `or` — so no part ever needs
+parentheses to read back as itself, a separator inside parentheses is refused with its own span,
+and a criterion holds at most one of each. Each names the window the part after it is judged over:
+
+| part | window | slots it may ask for |
+| --- | --- | --- |
+| before any separator | the cards OPENED ON, the first $`H-1`$ — or the whole hand when there is no separator | the window's size; more is dropped |
+| after `then` | the cards DRAWN: one where nothing draws, the whole drawn set where something does | `largestDrawnSet`; more is an **error** |
+| after `finally` | the WHOLE hand, which is the union of the other two | the hand's size; more is dropped |
+
+Every part present must hold, and **assignment does not span windows**: each is satisfied over its
+own cards independently, so `1x monster finally 1x monster` is met by the single monster in the
+opening five. `slotsOf` on a split is therefore
+$`\max(\text{five} + \text{sixth},\ \text{whole})`$ and **not** a three-way sum — `whole`'s
+window *is* the union of the other two, so counting its slots again would say that criterion needs
+two cards.
+
+`then` is refused on the text and `finally` is dropped by expansion, which looks inconsistent and
+is not: what the drawn set can hold is a fact about the **template's draw cards** that a silent
+zero would never teach anybody, where `finally`'s window is simply the hand — so it is bounded
+exactly as the unsplit `7x monster` has always been bounded, and the two readings cannot answer
+differently.
 
 The two `or`s (PRD §5.3) are separated with one token of lookahead: after `or`, a `COUNT`, `at most`, `no`, `exactly`, or `(`-followed-by-one-of-those starts a new *term* (criterion-level); anything else continues the *description*. So `1x [C] or 2x [D]` is a criterion-level choice, `1x [C] or [E]` is one slot either card can fill, and `1x ([C] or [E])` says the latter explicitly. Two consequences worth stating: a description-level `or` binds tighter than `and` (`1x [C] or [E] and 1x [D]` is two terms), and the printer always parenthesizes a description-level `or` (`1x (#1 or #2)`) — for the reader, since the lookahead re-parses the bare form identically. `COUNT` is digits then `x` only where the `x` *ends a word*, or `×` anywhere, so `"Warrior":0x2066` keeps its hex code; a hex token where a count belongs gets a message saying so. In the app the criterion structure is built from rows and groups, not typed; the text form is the canonical serialization used by the CLI harness, tests, and copy/paste.
 
@@ -339,10 +363,28 @@ export type Expr =
   | { op: 'and'; args: Expr[] }
   | { op: 'or'; args: Expr[] }        // two members, not 'and' | 'or': the merged form defeats narrowing
   | { op: 'req'; n: number; max?: number; desc: Description }   // `max` only from a range; `1-1x` and `exactly 1x` are one node
-  | { op: 'atMost'; n: number; desc: Description };   // "no X" = atMost 0
+  | { op: 'atMost'; n: number; desc: Description }   // "no X" = atMost 0
+  | { op: 'split'; five?: Expr; sixth?: Expr; whole?: Expr };   // the three windows; at least one of sixth / whole
 
-export interface FlatCriterion { reqs: { n: number; max?: number; desc: Description }[]; limits: { n: number; desc: Description }[] }
+export interface FlatCriterion {
+  reqs: { n: number; max?: number; desc: Description }[];
+  limits: { n: number; desc: Description }[];
+  sixth?: { reqs: ...; limits: ... };   // the cards drawn
+  whole?: { reqs: ...; limits: ... };   // the whole hand, what `finally` writes
+}
 ```
+
+The parts are named for their **windows** and not for the words that write them, which is why the
+`finally` part is `whole`: what a part means is the cards it is judged over, and every reader of
+the node has to know which those are. `split` stands only at the ROOT — `validateExpr` refuses one
+at any depth, which is also what keeps a `then` or a `finally` out of a `finally` part. Keys are
+written in window order and absent rather than `undefined`, because `meaning.ts` decides a stored
+AST is stale by **stringifying** both.
+
+**"Is this criterion split?" is `sixth !== undefined || whole !== undefined`**, never either alone:
+a criterion with a `finally` part and no `then` still reads its first window as the cards opened on.
+`isSplit` in `problem.ts` is that question asked once, since a second copy of it that forgot `whole`
+would judge that window over all six cards and answer a different question in silence.
 
 ### 7.2 Expansion
 
@@ -567,6 +609,85 @@ The refusal message carries the **exact** figure and the multiple (`25,005,120 c
 
   `then` is no longer capped at one slot but at **1 + the most the template can fetch**. `then 2x monster` beside a `stop` that fires can never hold — but whether a stop fires is a property of the **hand**, not the template, so it is **not** refused; the reference says so in words and a test pins that such a run scores the stop's own value and never the split criterion's.
 - Without any draw card the `stop` flag **changes nothing**, which is what protects every template written before this existed.
+
+### 10.6 `finally`: a third window, and why it is free
+
+A going-second criterion may carry a **`finally`** part: a full criterion — requirements, ranges,
+limits, `or`, nesting — over the **whole hand**, standing beside one over the opening five
+(PRD §5.5). It exists for the shape `then` cannot express, **requirements early and limits late**:
+`at most 1x brick` over five does not give you `at most 1x brick` over six, and the card you draw is
+exactly what breaks it.
+
+```mermaid
+flowchart LR
+  A["1x starter<br/>opening 5"] --> C{"all parts<br/>hold"}
+  B["then 1x trap<br/>cards drawn"] --> C
+  D["finally at most 1x brick<br/>the whole hand"] --> C
+```
+
+#### The scoring argument
+
+The sample space does not change. Going second an outcome is still the ordered pair (the opening
+five, the card drawn); a set of $`H`$ cards is still $`H`$ of them; the denominator is still
+$`H\binom{N}{H}`$; and `n·C(n−1,h−1) = h·C(n,h)` is still what makes the factor of $`h_c`$ right
+(§10.2). What a composition is worth is still
+
+```math
+\mathrm{value}(h)\;=\;\sum_c h_c \cdot \mathrm{best}(h - e_c,\, c)
+```
+
+A `finally` part is a **predicate on $`h`$ itself**, and $`h`$ is fixed in that outer sum. So it
+enters `best(h − e_c, c)` as a conjunct that does not depend on $`c`$, and the identity above is
+untouched: no new enumeration, no new sample space, no new denominator, and nothing per deck. The
+walk over compositions is the same walk it was before weighting and before `then`.
+
+Two consequences follow from "does not depend on $`c`$", and the implementation is both of them:
+
+- the part is evaluated **once per composition**, above the per-class loop, rather than up to $`H`$
+  times inside it;
+- it keeps the **early break**. The split criteria are sorted heaviest first and the per-class loop
+  stops at the first weight it cannot beat; the hoisted pass uses the same floor, so a criterion
+  that cannot beat the unsplit base for *any* outcome has its `finally` part evaluated not at all.
+
+That is why no cache is needed. Measured over one build at $`N = 40`$, $`H = 6`$, 10 classes and
+five split criteria each carrying a `finally` part (5,005 compositions):
+
+| strategy | `finally`-part evaluations per walk |
+| --- | --- |
+| hoisted, under the early break (implemented) | 25,025 |
+| inside the per-class loop | 100,100 |
+| a per-composition memo of the in-loop evaluations | 25,025 |
+
+The memo reaches exactly what hoisting reaches and pays a per-composition array fill for it, so the
+simple thing is also the fast thing. The feature's own cost is the five extra windows: 1.72 ms to
+build against 0.81 ms for the same criteria without a `finally` part.
+
+#### With draw cards
+
+`finally`'s window is the whole **end** hand — every card still held when the drawing stops,
+resolved draw cards excluded — which is exactly the two windows of `compileSplitWeigher` summed.
+That function already forms the sum lazily for unsplit criteria, so the whole of the change there is
+one more predicate over the same vector. The two readings cannot drift, because there is one of
+them: with no draw card $`\ell = H`$ and the sum is the six cards.
+
+An earlier version of YGO-41 said draw cards must refuse `finally`, on a positional-bias argument
+about the card at position $`H-1`$. That argument died with YGO-42, which redefined `then` as
+*everything you drew* rather than *the card at position $`H-1`$*; the reading never asks which card
+was the sixth, and `finally` never asks at all.
+
+#### Where it is easiest to get wrong
+
+Two of these are classes of bug this codebase has actually shipped, and both are silent:
+
+- **A missed AST or window branch drops data and nothing throws.** `descsOf`, `passcodesOfExpr`,
+  `exprNamesGroup`, `indexFlat` and `analyze`'s `register` each walk the split node; a branch left
+  out gives a description named only in a `finally` part a column with no appearances, or drops a
+  named card out of a template's `cardSnapshot`. The run then answers a different question.
+- **`compileProblem`'s DEAD-COLUMN set read the top-level window only** — a real bug, and it
+  predates `finally`. A description named after `then` (or now `finally`) by a criterion the run
+  *judges*, and named again by one it does not, was dropped from the class partition; its mask
+  became 0 and that half of the criterion became unmeetable. `columnsOf` now walks every window, and
+  a test pins it.
 
 ## 11. Optimizer
 

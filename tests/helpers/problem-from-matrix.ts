@@ -44,10 +44,12 @@ export function problemFromMatrix(match: MatchProblem, handSizes: readonly numbe
     return mask >>> 0;
   };
 
-  // A hand DRAWS its last card exactly where some alternative names it, which
-  // is the rule `compileProblem` follows — written out again here rather than
-  // borrowed, since this helper is what the engine is checked against.
-  const drawn = match.flat.some(({ sixth }) => sixth !== undefined);
+  // A hand DRAWS its last card exactly where some alternative reads it in more
+  // than one window — a `then` part, which names the card drawn, or a `finally`
+  // part, which makes the alternative's own part a question about the first
+  // `H − 1`. That is the rule `compileProblem` follows, written out again here
+  // rather than borrowed, since this helper is what the engine is checked against.
+  const drawn = match.flat.some(({ sixth, whole }) => sixth !== undefined || whole !== undefined);
 
   const problem: Problem = {
     deckSize: match.deckSize,
@@ -57,7 +59,7 @@ export function problemFromMatrix(match: MatchProblem, handSizes: readonly numbe
       min: 0,
       max: line === null ? 0 : match.deckSize,
     })),
-    criteria: match.flat.map(({ reqs, limits, sixth }): CompiledCriterion => {
+    criteria: match.flat.map(({ reqs, limits, sixth, whole }): CompiledCriterion => {
       // Built here rather than by `compileCriterion`, so that a differential
       // test owes nothing to the code it is checking: a ceiling is kept exactly
       // as written, with none of compile's dropping.
@@ -85,6 +87,7 @@ export function problemFromMatrix(match: MatchProblem, handSizes: readonly numbe
       };
       const criterion: CompiledCriterion = window({ reqs, limits });
       if (sixth !== undefined) criterion.sixth = window(sixth);
+      if (whole !== undefined) criterion.whole = window(whole);
       return criterion;
     }),
   };

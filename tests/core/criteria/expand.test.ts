@@ -400,6 +400,145 @@ describe('expand', () => {
     });
   });
 
+  describe('a `finally` part', () => {
+    type Split = Extract<Expr, { op: 'split' }>;
+    const parts = (over: Omit<Split, 'op'>): Expr => ({ op: 'split', ...over });
+
+    it('keeps all three windows apart, each merged on its own', () => {
+      expect(
+        flatOf(
+          parts({
+            five: and(req(1, A), req(1, A)),
+            sixth: atMost(0, B),
+            whole: and(req(1, C), req(1, C)),
+          }),
+        ),
+      ).toEqual([
+        {
+          reqs: [{ n: 2, desc: A }],
+          limits: [],
+          sixth: { reqs: [], limits: [{ n: 0, desc: B }] },
+          whole: { reqs: [{ n: 2, desc: C }], limits: [] },
+        },
+      ]);
+    });
+
+    it('does not merge across `finally`: one card answers both parts', () => {
+      // `1x A finally 1x A` asks for an A among the five and an A in the hand —
+      // which the SAME card answers, since assignment does not span windows. So
+      // neither side sums, exactly as neither side of a `then` does.
+      expect(flatOf(parts({ five: req(1, A), whole: req(1, A) }))).toEqual([
+        { reqs: [{ n: 1, desc: A }], limits: [], whole: { reqs: [{ n: 1, desc: A }], limits: [] } },
+      ]);
+    });
+
+    it('is the product of every part distributed, in reading order', () => {
+      expect(
+        flatOf(parts({ five: or(req(1, A), req(1, B)), whole: or(req(1, C), req(1, D)) })),
+      ).toEqual([
+        { reqs: [{ n: 1, desc: A }], limits: [], whole: { reqs: [{ n: 1, desc: C }], limits: [] } },
+        { reqs: [{ n: 1, desc: A }], limits: [], whole: { reqs: [{ n: 1, desc: D }], limits: [] } },
+        { reqs: [{ n: 1, desc: B }], limits: [], whole: { reqs: [{ n: 1, desc: C }], limits: [] } },
+        { reqs: [{ n: 1, desc: B }], limits: [], whole: { reqs: [{ n: 1, desc: D }], limits: [] } },
+      ]);
+    });
+
+    it('carries an empty five-card part as an alternative that asks nothing of it', () => {
+      expect(flatOf(parts({ whole: req(1, A) }))).toEqual([
+        { reqs: [], limits: [], whole: { reqs: [{ n: 1, desc: A }], limits: [] } },
+      ]);
+    });
+
+    /**
+     * A `finally` part makes the criterion SPLIT even with no `then`, so its own
+     * part is judged over the cards OPENED ON — which is the whole reading the
+     * clause exists to make writable, and the one thing here most easily lost.
+     */
+    it('judges its own part over the cards opened on, `then` or no `then`', () => {
+      expect(expand(parts({ five: req(5, A), whole: req(1, B) }), HAND)).toMatchObject({
+        ok: true,
+        dropped: 0,
+      });
+      expect(expand(parts({ five: req(6, A), whole: req(1, B) }), HAND)).toMatchObject({
+        ok: true,
+        flat: [],
+        dropped: 1,
+      });
+      // Where the very same text without the `finally` gets all six cards.
+      expect(expand(req(6, A), HAND)).toMatchObject({ ok: true, dropped: 0 });
+    });
+
+    /**
+     * Its OWN window is the whole hand, so it is bounded as an unsplit criterion
+     * is — DROPPED and counted, never refused. `then` is the one part refused on
+     * the text, because the drawn set can never hold more than the draw cards
+     * fetch, where the whole hand is simply the hand.
+     */
+    it('drops a `finally` part the hand cannot hold, rather than refusing it', () => {
+      expect(expand(parts({ five: req(1, A), whole: req(6, B) }), HAND)).toMatchObject({
+        ok: true,
+        dropped: 0,
+      });
+      expect(expand(parts({ five: req(1, A), whole: req(7, B) }), HAND)).toMatchObject({
+        ok: true,
+        flat: [],
+        dropped: 1,
+      });
+      // The same shape of ask, unsplit, is dropped in the same way.
+      expect(expand(req(7, B), HAND)).toMatchObject({ ok: true, flat: [], dropped: 1 });
+      // And `then` asking too much is an ERROR, which is the difference.
+      expect(expandAll([parts({ sixth: and(req(1, A), req(1, B)) })], HAND)).toMatchObject({
+        ok: false,
+        reason: 'sixth-card',
+      });
+    });
+
+    /** Its ceilings count against `MAX_RANGES` against the WHOLE hand's room. */
+    it('counts a ceiling on the whole hand that six cards could break', () => {
+      const ceilings = Array.from({ length: MAX_RANGES + 1 }, (_, at) =>
+        range(0, 1, card(200 + at)),
+      );
+      expect(expandAll([parts({ whole: and(...ceilings) })], HAND)).toMatchObject({
+        ok: false,
+        reason: 'ranges',
+      });
+      // A ceiling of six can never bind on six cards, so it costs nothing.
+      const free = Array.from({ length: MAX_RANGES + 1 }, (_, at) => range(0, 6, card(300 + at)));
+      expect(expandAll([parts({ whole: and(...free) })], HAND)).toMatchObject({ ok: true });
+    });
+
+    it('never lets a split stand below the root, `finally` part included', () => {
+      const nested = parts({ whole: and(req(1, A), parts({ whole: req(1, B) })) });
+      expect(() => expandAll([nested], HAND)).toThrow(/only at the root/);
+    });
+
+    /**
+     * A split that asks NOTHING of the cards drawn and nothing of the whole hand
+     * would flatten to an alternative nothing downstream could tell from an
+     * UNSPLIT one — and would then be judged over five cards here and six there.
+     * No text writes it and `validateExpr` refuses it; this is the backstop.
+     */
+    it('refuses a split with neither a drawn part nor a whole-hand part', () => {
+      expect(() => expandAll([{ op: 'split' } as Expr], HAND)).toThrow(/asks something/);
+    });
+
+    it('counts two alternatives as one only when EVERY window agrees', () => {
+      expect(flatOf(parts({ five: req(1, A), whole: or(req(1, B), req(1, B)) }))).toHaveLength(1);
+      expect(flatOf(parts({ five: req(1, A), whole: or(req(1, B), req(1, C)) }))).toHaveLength(2);
+      // And an unsplit alternative is never the same as a split one asking the
+      // same thing: the first window is a different window.
+      const split = expand(parts({ five: req(1, A), whole: req(1, B) }), HAND);
+      const unsplit = expand(and(req(1, A), req(1, B)), HAND);
+      if (!split.ok || !unsplit.ok) throw new Error('expansion failed');
+      expect(split.flat).not.toEqual(unsplit.flat);
+      const together = expandAll(
+        [parts({ five: req(1, A), whole: req(1, B) }), and(req(1, A), req(1, B))],
+        HAND,
+      );
+      expect(together).toMatchObject({ ok: true, sources: [[0], [1]] });
+    });
+  });
+
   describe('dropping what the hand cannot hold', () => {
     it('drops an alternative with more slots than cards in the hand, and counts it', () => {
       const expr = or(req(1, A), and(req(3, B), req(3, C)), and(req(2, B), req(3, C)));

@@ -179,6 +179,32 @@ describe('matchingSection', () => {
     expect(second(['1x trap then 1x trap'])).toMatch(/^ {2}requirement +1x \/ 1x drawn trap/m);
   });
 
+  /** The third window, in the same words the renderer's readout uses. */
+  it('marks a requirement or a limit asked of the whole hand by a `finally` part', () => {
+    const lines = [line('m', 'monster'), line('t', 'trap')];
+    const second = (texts: string[]) =>
+      matchingSection(
+        analyze(
+          templateOf(
+            lines,
+            texts.map((text, at) => ({ id: `c${at + 1}`, text, when: 'second' as const })),
+            { hand: { size: 6 }, mode: 'second' },
+          ),
+          ctx,
+        ),
+      );
+    expect(second(['1x monster finally 2x trap'])).toMatch(
+      /^ {2}requirement +2x in the whole hand trap/m,
+    );
+    expect(second(['1x monster finally at most 1x trap'])).toMatch(
+      /^ {2}limit +at most 1x in the whole hand trap/m,
+    );
+    // All three windows at once: the criterion's own first, then drawn, then whole.
+    expect(second(['1x trap then 1x trap finally 2x trap'])).toMatch(
+      /^ {2}requirement +1x \/ 1x drawn \/ 2x in the whole hand trap/m,
+    );
+  });
+
   it('writes a limit’s own count, so `no` and `at most 2x` do not print alike', () => {
     const lines = [line('m', 'monster'), line('t', 'trap')];
     const none = matchingSection(analyze(templateOf(lines, ['1x monster, no trap']), ctx));

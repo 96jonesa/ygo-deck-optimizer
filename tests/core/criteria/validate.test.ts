@@ -27,17 +27,50 @@ describe('validateExpr', () => {
         '1x monster then 1x #89631139',
         'then no trap',
         '1x monster or 2x spell then 1x trap or no spell',
+        // Every shape a `finally` part can come in (PRD §5.5).
+        '1x monster then no trap finally 2x spell',
+        '1x monster finally at most 1x trap',
+        'then 1x #89631139 finally 2x monster',
+        'finally 2x monster',
       ])
         expect(errors(ast(text)), text).toEqual([]);
     });
 
-    it('refuses one below the root: a hand comes in two pieces, not four', () => {
+    /**
+     * A split with NEITHER a drawn part nor a whole-hand part asks nothing that
+     * an unsplit criterion does not ask — and would be judged over five cards by
+     * `expand` and over six by anything reading `sixth`. No text writes it, so a
+     * file holding one is a file to refuse rather than to guess about.
+     */
+    it('refuses a split that asks nothing of the cards drawn or of the whole hand', () => {
+      expect(errors({ op: 'split' })).toEqual([
+        'expr: a `split` needs a `sixth` (what you drew) or a `whole` (the whole hand), or both — with neither it asks nothing',
+      ]);
+      expect(errors({ op: 'split', five: REQ })[0]).toContain('needs a `sixth`');
+    });
+
+    it('keeps the keys of a `finally` part in window order, canonical', () => {
+      const result = validateExpr({ op: 'split', whole: REQ, sixth: REQ, five: REQ }, 'expr');
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      expect(Object.keys(result.expr)).toEqual(['op', 'five', 'sixth', 'whole']);
+    });
+
+    it('reports what is wrong inside a `finally` part, located', () => {
+      expect(errors({ op: 'split', whole: { op: 'req' } })[0]).toContain('expr.whole');
+    });
+
+    it('refuses one below the root: a hand comes in three windows, not nine', () => {
       const split = { op: 'split', sixth: REQ };
       expect(errors({ op: 'and', args: [split, REQ] })).toEqual([
-        'expr.args[0]: `split` is the whole of a criterion — the five cards you open on, then the one you draw — and cannot stand inside `and`, `or` or another `split`',
+        'expr.args[0]: `split` is the whole of a criterion — the cards you open on, then the cards you draw, finally the whole hand — and cannot stand inside `and`, `or` or another `split`',
       ]);
       expect(errors({ op: 'split', five: split, sixth: REQ })[0]).toContain('cannot stand inside');
       expect(errors({ op: 'split', sixth: split })[0]).toContain('cannot stand inside');
+      // The same check is what keeps a `then` or a `finally` out of a `finally` part.
+      expect(errors({ op: 'split', whole: split })[0]).toContain('cannot stand inside');
+      expect(errors({ op: 'split', whole: { op: 'split', whole: REQ } })[0]).toContain(
+        'cannot stand inside',
+      );
     });
 
     /**

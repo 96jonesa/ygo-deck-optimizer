@@ -19,6 +19,17 @@ export interface GenExprOptions {
    * draw and every problem the older suites pinned stays the problem it was.
    */
   splitChance?: number;
+  /**
+   * How often a criterion gets a `finally` part — a full criterion over the
+   * WHOLE hand, beside one over the first five (PRD §5.5). 0 by default, and for
+   * the same reason: the draw is not taken at all where it is 0, so every seed
+   * the older suites pinned keeps the criteria it had.
+   *
+   * It applies to a criterion that already split and to one that did not, so a
+   * family asking for it gets `A then B finally C`, `A finally C` and
+   * `finally C` alike.
+   */
+  wholeChance?: number;
 }
 
 /**
@@ -83,13 +94,27 @@ function genNode(rng: Rng, options: GenExprOptions, depth: number, parent?: 'and
  */
 export function genExpr(rng: Rng, options: GenExprOptions): Expr {
   const splitChance = options.splitChance ?? 0;
+  const wholeChance = options.wholeChance ?? 0;
+  /** A `finally` part: a full criterion, over the whole hand. */
+  const finallyPart = () => genNode(rng, options, 0);
   if (splitChance > 0 && rng.chance(splitChance)) {
     const sixth = genSixthPart(rng, options);
     // A fifth of them leave the opening five unasked about, which is the
     // `then 1x [Ash Blossom & Joyous Spring]` form.
-    return rng.chance(0.2)
+    const out: Expr = rng.chance(0.2)
       ? { op: 'split', sixth }
       : { op: 'split', five: genNode(rng, options, 0), sixth };
+    // Keys in window order, which is what `canonicalizeExpr` fixes them to.
+    if (wholeChance > 0 && rng.chance(wholeChance) && out.op === 'split') out.whole = finallyPart();
+    return out;
+  }
+  // A `finally` with no `then`: the opening part is still a question about the
+  // first five, which is the reading YGO-41 exists to make writable.
+  if (wholeChance > 0 && rng.chance(wholeChance)) {
+    const whole = finallyPart();
+    return rng.chance(0.2)
+      ? { op: 'split', whole }
+      : { op: 'split', five: genNode(rng, options, 0), whole };
   }
   return genNode(rng, options, 0);
 }

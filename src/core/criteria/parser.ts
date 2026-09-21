@@ -76,23 +76,43 @@ class Parser {
   ) {}
 
   parseAll(): Expr {
-    // `then` binds looser than everything, and a criterion has one: the hand
-    // comes in two pieces, not three. A LEADING one says the opening five may
-    // be anything and only the card drawn is asked about.
-    if (this.peek()?.t === 'then') {
-      this.next();
-      return { op: 'split', sixth: this.sixthPart() };
-    }
+    // `finally` binds looser than `then`, which binds looser than everything
+    // else, and a criterion holds at most one of each: the hand has three
+    // windows, and `finally`'s is the union of the other two. A LEADING `then`
+    // or `finally` says the opening five may be anything.
+    const leading = this.peek()?.t;
+    if (leading === 'then' || leading === 'finally') return this.splitFrom(undefined);
     const expr = this.orExpr(0);
-    const separator = this.peek();
-    if (separator?.t === 'then') {
-      this.next();
-      return { op: 'split', five: expr, sixth: this.sixthPart() };
-    }
+    const separator = this.peek()?.t;
+    if (separator === 'then' || separator === 'finally') return this.splitFrom(expr);
     const extra = this.peek();
-    // `term` lets only `and`, `or`, `then` and `)` follow it, and the first two are always consumed.
+    // `term` lets only `and`, `or`, `then`, `finally` and `)` follow it, and the
+    // first two are always consumed.
     if (extra !== undefined) throw new Failure('this `)` has no matching `(`', extra.span);
     return expr;
+  }
+
+  /**
+   * The `split` whose opening part is `five` (absent where the text leads with
+   * `then` or `finally`): whichever of the two separators stands here, and the
+   * other after it if it follows. The cursor is ON the separator.
+   *
+   * Written once for both orders so that the KEY ORDER of the node cannot depend
+   * on which parts the text happened to write — `canonicalizeExpr` fixes it, and
+   * a second assembly site is how the two come to disagree.
+   */
+  private splitFrom(five: Expr | undefined): Expr {
+    const out: Extract<Expr, { op: 'split' }> =
+      five === undefined ? { op: 'split' } : { op: 'split', five };
+    if (this.peek()?.t === 'then') {
+      this.next();
+      out.sixth = this.sixthPart();
+    }
+    if (this.peek()?.t === 'finally') {
+      this.next();
+      out.whole = this.wholePart();
+    }
+    return out;
   }
 
   /** What follows `then`: the DRAWN SET's own criterion, over the cards drawn. */
@@ -110,7 +130,9 @@ class Parser {
         'a criterion has one `then`: it separates the cards you open on from the cards you draw, and the hand comes in two pieces, not three',
         extra.span,
       );
-    if (extra !== undefined) throw new Failure('this `)` has no matching `(`', extra.span);
+    // A `finally` here is the next part, not an error: `parseAll` takes it.
+    if (extra !== undefined && extra.t !== 'finally')
+      throw new Failure('this `)` has no matching `(`', extra.span);
     const slots = slotsOf(sixth);
     if (slots > this.maxDrawnSlots)
       throw new Failure(tooManyDrawnSlots(slots, this.maxDrawnSlots), {
@@ -118,6 +140,37 @@ class Parser {
         end: this.spanAt(this.pos - 1).end,
       });
     return sixth;
+  }
+
+  /**
+   * What follows `finally`: a full criterion over the WHOLE hand. It asks for
+   * whatever an unsplit criterion may ask for and is bounded exactly as one is —
+   * an alternative asking more cards than the hand holds is DROPPED by `expand`,
+   * as `7x monster` always has been, rather than refused here. The `then` part
+   * is the one refused on the text, and for a reason that does not apply here:
+   * the cards drawn can never be more than the draw cards fetch, where the whole
+   * hand is simply the hand.
+   */
+  private wholePart(): Expr {
+    if (this.peek() === undefined)
+      throw new Failure(
+        'expected what the whole hand must be after `finally`, as in `2x monster` or `at most 1x trap`',
+        this.spanAt(this.pos),
+      );
+    const whole = this.orExpr(0);
+    const extra = this.peek();
+    if (extra?.t === 'finally')
+      throw new Failure(
+        'a criterion has one `finally`: it is a question about the whole hand, and there is one hand',
+        extra.span,
+      );
+    if (extra?.t === 'then')
+      throw new Failure(
+        '`then` comes before `finally`: the cards you draw first, then the whole hand they leave you with',
+        extra.span,
+      );
+    if (extra !== undefined) throw new Failure('this `)` has no matching `(`', extra.span);
+    return whole;
   }
 
   private peek(): CriterionToken | undefined {
@@ -188,6 +241,7 @@ class Parser {
       after.t !== 'and' &&
       after.t !== 'or' &&
       after.t !== 'then' &&
+      after.t !== 'finally' &&
       !isPunct(after, ')')
     )
       throw new Failure(
@@ -210,6 +264,7 @@ class Parser {
       token.t === 'and' ||
       token.t === 'or' ||
       token.t === 'then' ||
+      token.t === 'finally' ||
       isPunct(token, ')')
     )
       throw new Failure(`expected ${TERM_EXAMPLES}${where}`, this.spanAt(this.pos));
@@ -250,11 +305,16 @@ class Parser {
     if (depth >= MAX_DEPTH) throw new Failure('too many nested parentheses', open.span);
     this.next();
     const inner = this.orExpr(depth + 1);
-    // As in `parseAll`: what stopped `orExpr` is a `)`, a `then` or the end.
+    // As in `parseAll`: what stopped `orExpr` is a `)`, a `then`, a `finally` or the end.
     const stopped = this.peek();
     if (stopped?.t === 'then')
       throw new Failure(
         '`then` separates the five cards you open on from the one you draw, so it stands between them and not inside parentheses',
+        stopped.span,
+      );
+    if (stopped?.t === 'finally')
+      throw new Failure(
+        '`finally` separates the cards you were dealt from the whole hand they make, so it stands between them and not inside parentheses',
         stopped.span,
       );
     if (stopped === undefined) throw new Failure('this `(` is never closed', open.span);
@@ -363,12 +423,14 @@ class Parser {
         depth--;
       } else if (token.t === 'or') {
         if (depth === 0 && this.startsTerm(end + 1)) break;
-      } else if (token.t === 'then') {
-        // `then` ends the term it follows, exactly as `and` does; nothing in a
-        // description's own parentheses can be the sixth card's part.
+      } else if (token.t === 'then' || token.t === 'finally') {
+        // Either separator ends the term it follows, exactly as `and` does;
+        // nothing in a description's own parentheses can be another window's part.
         if (depth === 0) break;
         throw new Failure(
-          "`then` separates the five cards you open on from the one you draw and cannot stand inside a description's parentheses; close the `)` first",
+          token.t === 'then'
+            ? "`then` separates the five cards you open on from the one you draw and cannot stand inside a description's parentheses; close the `)` first"
+            : "`finally` separates the cards you were dealt from the whole hand they make and cannot stand inside a description's parentheses; close the `)` first",
           token.span,
         );
       } else if (token.t === 'and' || isTermWord(token)) {
@@ -434,10 +496,16 @@ class Parser {
  * keeps it.
  *
  * `then` separates the five cards you open on from the one you draw going
- * second (PRD §5.6). It binds looser than everything else, so no parentheses
- * are ever needed around either side, and a criterion holds at most one: the
- * hand comes in two pieces, not three. A LEADING `then` leaves the opening
- * five unasked about. What follows it is about the CARDS DRAWN, so its
+ * second (PRD §5.6), and `finally` separates both from the WHOLE HAND they make
+ * (PRD §5.5). `finally` binds looser than `then`, which binds looser than
+ * everything else, so no parentheses are ever needed around any part, and a
+ * criterion holds at most one of each: the hand has three windows, and
+ * `finally`'s is the union of the other two. They come in that order — `five
+ * then sixth finally whole` — and either may be left out, so `A finally B` makes
+ * `A` a question about the opening five with nothing asked of the card drawn. A
+ * LEADING `then` or `finally` leaves the opening five unasked about.
+ *
+ * What follows `then` is about the CARDS DRAWN, so its
  * requirement slots are counted here — `slotsOf` counts them exactly as
  * expansion would — and a part asking for more than `maxDrawnSlots` is refused
  * with the span of what asks too much, rather than scoring zero for a reason

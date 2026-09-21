@@ -79,6 +79,72 @@ describe('subsumes', () => {
       expect(subsumes(loose, tight, ctx)).toBe(true);
       expect(subsumes(tight, loose, ctx)).toBe(false);
     });
+
+    describe('a `finally` part', () => {
+      const withFinally = (
+        five: readonly Entry[],
+        whole: readonly Entry[],
+        wholeLimits: readonly Entry[] = [],
+      ): FlatCriterion => ({
+        ...flat(five),
+        whole: { reqs: counted(whole), limits: counted(wholeLimits) },
+      });
+
+      it('holds of a criterion with a `finally` part and itself', () => {
+        const A = withFinally([[1, 'level 4 monster']], [[1, 'trap']]);
+        expect(subsumes(A, A, ctx)).toBe(true);
+      });
+
+      it('reads the injection over the `finally` window too', () => {
+        const narrow = withFinally([[1, 'level 4 monster']], [[1, 'quick-play spell']]);
+        const wide = withFinally([[1, 'monster']], [[1, 'spell']]);
+        expect(subsumes(wide, narrow, ctx)).toBe(true);
+        expect(subsumes(narrow, wide, ctx)).toBe(false);
+        // Widening only the opening part is not enough.
+        expect(subsumes(withFinally([[1, 'monster']], [[1, 'monster']]), narrow, ctx)).toBe(false);
+      });
+
+      /**
+       * Two alternatives that do not have the SAME windows are given up on: they
+       * are about different sample spaces and the injection says nothing about
+       * them. `false` here is advice withheld, not a claim.
+       */
+      it('gives up between windows that do not match, every way round', () => {
+        const unsplit = flat([[1, 'monster']]);
+        const finallyOnly = withFinally([[1, 'monster']], [[1, 'monster']]);
+        const thenOnly = splitFlat([[1, 'monster']], [[1, 'monster']]);
+        const both: FlatCriterion = {
+          ...thenOnly,
+          whole: { reqs: counted([[1, 'monster']]), limits: [] },
+        };
+        for (const [B, A] of [
+          [unsplit, finallyOnly],
+          [finallyOnly, unsplit],
+          [thenOnly, finallyOnly],
+          [finallyOnly, thenOnly],
+          [both, finallyOnly],
+          [finallyOnly, both],
+        ] as const)
+          expect(subsumes(B, A, ctx)).toBe(false);
+      });
+
+      /**
+       * The `finally` window IS the whole hand, so a limit there is weighed
+       * against `maxHandSize` — the room an unsplit criterion gets, not the one
+       * card the drawn window gets.
+       */
+      it("covers the `finally` part's limits over the whole hand", () => {
+        const tight = withFinally([[1, 'monster']], [[1, 'monster']], [[1, 'trap']]);
+        const loose = withFinally([[1, 'monster']], [[1, 'monster']], [[2, 'trap']]);
+        expect(subsumes(loose, tight, ctx, 6)).toBe(true);
+        expect(subsumes(tight, loose, ctx, 6)).toBe(false);
+        // A limit of 6 holds of any six-card hand, so it needs no cover at all.
+        const vacuous = withFinally([[1, 'monster']], [[1, 'monster']], [[6, 'trap']]);
+        expect(subsumes(vacuous, withFinally([[1, 'monster']], [[1, 'monster']]), ctx, 6)).toBe(
+          true,
+        );
+      });
+    });
   });
 
   it('holds of a criterion and itself', () => {

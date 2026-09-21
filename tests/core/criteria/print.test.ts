@@ -80,6 +80,104 @@ describe('printCriterion', () => {
       }
       expect(splits).toBeGreaterThan(150);
     });
+
+    /**
+     * O7 — THE ROUND TRIP over every shape the split node can take, which is
+     * four: the two dealt windows with a `finally` part, either one alone with
+     * it, and a `finally` part alone. `parseCriterion(printCriterion(e))` must be
+     * `e` STRUCTURALLY — key order included, since `meaning.ts` decides a stored
+     * AST is stale by stringifying both.
+     */
+    describe('a `finally` part', () => {
+      type Split = Extract<Expr, { op: 'split' }>;
+      const parts = (over: Omit<Split, 'op'>): Expr => ({ op: 'split', ...over });
+
+      const SHAPES: [string, Expr, string][] = [
+        [
+          'five + sixth + whole',
+          parts({
+            five: req(1, 'monster'),
+            sixth: atMost(0, 'trap'),
+            whole: req(2, 'spell'),
+          }),
+          '1x monster then no trap finally 2x spell',
+        ],
+        [
+          'five + whole',
+          parts({ five: req(1, 'monster'), whole: atMost(1, 'trap') }),
+          '1x monster finally at most 1x trap',
+        ],
+        [
+          'sixth + whole',
+          parts({ sixth: req(1, '#89631139'), whole: req(2, 'monster') }),
+          'then 1x #89631139 finally 2x monster',
+        ],
+        ['whole alone', parts({ whole: req(2, 'monster') }), 'finally 2x monster'],
+      ];
+
+      it.each(SHAPES)('writes %s in window order', (_shape, expr, text) => {
+        expect(printCriterion(expr, ctx)).toBe(text);
+      });
+
+      it.each(SHAPES)(
+        'reads %s back as itself, keys and their order alike',
+        (_shape, expr, text) => {
+          const result = parseCriterion(text, ctx);
+          expect(result).toEqual({ ok: true, expr });
+          if (!result.ok) throw new Error(result.message);
+          expect(JSON.stringify(result.expr)).toBe(JSON.stringify(expr));
+        },
+      );
+
+      it('needs no parentheses on any part: `finally` binds loosest of all', () => {
+        const expr = parts({
+          five: or(req(1, 'monster'), req(2, 'spell')),
+          sixth: or(req(1, 'trap'), atMost(0, 'spell')),
+          whole: or(req(1, 'monster'), atMost(1, 'trap')),
+        });
+        const text = printCriterion(expr, ctx);
+        expect(text).toBe(
+          '1x monster or 2x spell then 1x trap or no spell finally 1x monster or at most 1x trap',
+        );
+        expect(parseCriterion(text, ctx)).toEqual({ ok: true, expr });
+      });
+
+      it('round-trips every generated `finally`', () => {
+        const rng = seededRng(0x5171e3);
+        const shapes = new Set<string>();
+        for (let i = 0; i < 600; i++) {
+          const expr = genExpr(rng, {
+            desc: () => d('monster'),
+            maxDepth: 2,
+            maxArgs: 3,
+            limitChance: 0.3,
+            splitChance: 0.5,
+            wholeChance: 0.5,
+          });
+          if (expr.op === 'split')
+            shapes.add(
+              [
+                expr.five === undefined ? '' : 'five',
+                expr.sixth === undefined ? '' : 'sixth',
+                expr.whole === undefined ? '' : 'whole',
+              ]
+                .filter((part) => part !== '')
+                .join('+'),
+            );
+          const text = printCriterion(expr, ctx);
+          expect(parseCriterion(text, ctx), text).toEqual({ ok: true, expr });
+        }
+        // Every shape the node can take, reached by the generator rather than listed.
+        expect([...shapes].sort()).toEqual([
+          'five+sixth',
+          'five+sixth+whole',
+          'five+whole',
+          'sixth',
+          'sixth+whole',
+          'whole',
+        ]);
+      });
+    });
   });
 
   it('prints a requirement as its count and the canonical description', () => {
@@ -288,8 +386,8 @@ describe('parseCriterion/printCriterion round trip (E3)', () => {
         if (expr.op === 'atMost' && expr.n === 0) seen.add('no');
         if (expr.desc.anyOf.length > 1) seen.add(`description-level or in ${expr.op}`);
       } else if (expr.op === 'split') {
-        if (expr.five !== undefined) walk(expr.five, 'split');
-        walk(expr.sixth, 'split');
+        for (const part of [expr.five, expr.sixth, expr.whole])
+          if (part !== undefined) walk(part, 'split');
       } else for (const arg of expr.args) walk(arg, expr.op);
     };
     for (let i = 0; i < 3000; i++) walk(genExpr(rng, options), 'root');

@@ -96,15 +96,26 @@ export function subsumes(
    */
   maxDrawnSet = 1,
 ): boolean {
-  // A SPLIT reads the same argument twice, once per window — the cards you open
-  // on and the cards you draw are disjoint, so nothing crosses between them.
-  // One side split and the other not is simply given up on: the two are about
-  // different sample spaces and the injection says nothing.
+  // A SPLIT reads the same argument once per WINDOW — the cards you open on and
+  // the cards you draw are disjoint, so nothing crosses between them, and the
+  // `finally` part is its own question about the whole hand. Two alternatives
+  // that do not have the SAME windows are simply given up on: they are about
+  // different sample spaces and the injection says nothing about them.
   if ((B.sixth === undefined) !== (A.sixth === undefined)) return false;
+  if ((B.whole === undefined) !== (A.whole === undefined)) return false;
   if (
     B.sixth !== undefined &&
     A.sixth !== undefined &&
     !holdsOver(B.sixth, A.sixth, ctx, maxDrawnSet)
+  )
+    return false;
+  // The `finally` window IS the whole hand, so its room is `maxHandSize` — the
+  // same room the unsplit reading gets, which is what makes `at most 6x` vacuous
+  // there at a hand of six.
+  if (
+    B.whole !== undefined &&
+    A.whole !== undefined &&
+    !holdsOver(B.whole, A.whole, ctx, maxHandSize)
   )
     return false;
   // An alternative the player would STOP for (PRD §5.7) does something no other

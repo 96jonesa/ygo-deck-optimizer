@@ -477,12 +477,12 @@ function descNamesGroup(desc: Description, id: string): boolean {
 
 function exprNamesGroup(expr: CriterionExpr, id: string): boolean {
   if (expr.op === 'req' || expr.op === 'atMost') return descNamesGroup(expr.desc, id);
-  // A group named as the card you draw is named just as much as one named
-  // anywhere else: miss this branch and the stored AST survives a deletion
-  // that made it meaningless.
+  // A group named as the card you draw, or in a `finally` part, is named just as
+  // much as one named anywhere else: miss a branch and the stored AST survives a
+  // deletion that made it meaningless.
   if (expr.op === 'split')
-    return (
-      (expr.five !== undefined && exprNamesGroup(expr.five, id)) || exprNamesGroup(expr.sixth, id)
+    return [expr.five, expr.sixth, expr.whole].some(
+      (part) => part !== undefined && exprNamesGroup(part, id),
     );
   return expr.args.some((arg) => exprNamesGroup(arg, id));
 }

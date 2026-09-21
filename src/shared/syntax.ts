@@ -315,6 +315,41 @@ export const CRITERION_SYNTAX: ExampleSection = {
       note: '`then` is a different question from asking the same of all six cards together: it fixes WHICH cards are which, and it is the question to ask when the extra cards have to be the answer. A row with a `then` must be tagged going second — going first nothing is drawn. With DRAW CARDS in the template it means everything you drew: the card for turn and whatever the draw cards fetched, so `then 2x monster` is then writable and fails on any hand that drew nothing.',
     },
     {
+      heading: 'The whole hand, going second',
+      rows: [
+        {
+          syntax: '1x {starter} finally at most 1x trap',
+          means:
+            'your opening FIVE hold a starter, and all SIX hold at most one trap — both must be true',
+        },
+        {
+          syntax: '1x {starter} then 1x [Ash Blossom & Joyous Spring] finally 2x monster',
+          means:
+            'all three at once: a starter in the five, Ash as the card you draw, and two monsters across the six',
+        },
+        {
+          syntax: 'finally 2x monster',
+          means: 'only the whole hand is asked about; the five and the card drawn may be anything',
+        },
+        {
+          syntax: '1x monster finally 1x monster',
+          means:
+            'one monster in your opening five answers BOTH: each part is judged over its own cards, and nothing is spent twice',
+        },
+        {
+          syntax: '1x monster finally 1x trap finally 1x spell',
+          means: 'an error — there is one hand, so there is one `finally`',
+          fails: 'a criterion has one `finally`',
+        },
+        {
+          syntax: '1x monster finally 1x trap then 1x spell',
+          means: 'an error — `then` comes first: the cards you draw, then the hand they leave you',
+          fails: '`then` comes before `finally`',
+        },
+      ],
+      note: '`finally` is a FULL criterion over all six cards — requirements, limits, ranges, `or`, the lot — standing beside one about the first five. It is what to write when you need something EARLY and a limit LATE: `at most 1x brick` over five does not give you `at most 1x brick` over six, and the card you draw is exactly what breaks it. It may stand with or without a `then`, and either way the part before it becomes a question about the opening five alone. A row with a `finally` must be tagged going second, as a `then` must.',
+    },
+    {
       heading: 'Two errors worth recognizing',
       rows: [
         {
@@ -332,7 +367,7 @@ export const CRITERION_SYNTAX: ExampleSection = {
   ],
   notes: [
     'A hand succeeds if it meets ANY ONE criterion: between criteria it is always `or`.',
-    'Which hand a criterion is judged for — going first, going second, either hand — is the control on the row, not something written in its text. A criterion with a `then` in it has to be the going-second one.',
+    'Which hand a criterion is judged for — going first, going second, either hand — is the control on the row, not something written in its text. A criterion with a `then` or a `finally` in it has to be the going-second one.',
     'What a criterion is WORTH is a control too, not text: turn on “Weight the criteria” and every row gets a number. See “What weighting the criteria does”.',
   ],
 };
@@ -519,6 +554,11 @@ export const DRAW_REFERENCE: FactSection = {
       means:
         'A criterion that stops you fetches nothing, so the hand you keep drew exactly one card. Anything after `then` that needs two cards can never hold in that branch, and scores nothing for it.',
     },
+    {
+      label: '`finally` is the hand you end up holding',
+      means:
+        'It asks about every card still in your hand when the drawing stops — the five you opened on, the card for turn and everything fetched, less the draw cards you played. So it is the one place to put a limit that drawing can break, which is exactly what it is for.',
+    },
   ],
   notes: [
     'ONE DECISION, taken before you draw anything. Either you activate nothing, or you activate everything — every draw card in the hand, and every one those draw into. There is no choosing card by card.',
@@ -527,6 +567,7 @@ export const DRAW_REFERENCE: FactSection = {
     'MORE CARDS CAN BE WORSE. “No hand traps” counts your whole hand, and “exactly one starter” is broken by a second one — so drawing into them turns a hand that worked into one that does not, and the score falls as you add copies. That is what "stop here" is there to stop.',
     'The deck cannot run out: a template whose draw cards could ask for more cards than the deck holds is refused rather than scored as though it could not happen.',
     'THE SPLIT STILL WORKS, and widens. `1x {starter} then 2x monster` going second asks that your opening five hold a starter and that the cards you drew — the one for turn, plus everything the draw cards fetched — hold two monsters. A card you played to draw with has left your hand and is in neither half.',
+    'AND `finally` IS THE ANSWER TO "more cards can be worse". `1x {starter} finally at most 1x brick` asks for the starter in your opening five and counts the bricks over the hand you ended up with — so it scores the thing you actually care about instead of pretending the cards you drew cannot hurt you.',
   ],
 };
 

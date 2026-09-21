@@ -48,6 +48,12 @@ export interface MatchFlat {
    */
   sixth?: { reqs: readonly MatchRange[]; limits: readonly MatchCounted[] };
   /**
+   * The WHOLE HAND's part — what `finally` writes (PRD §5.5). Present: `reqs` and
+   * `limits` above are about the cards you OPENED on, as they are when `sixth` is,
+   * and this is judged over every position of the hand.
+   */
+  whole?: { reqs: readonly MatchRange[]; limits: readonly MatchCounted[] };
+  /**
    * An alternative the player would STOP for: met by the opening hand, no draw
    * card is activated (PRD §5.7). It decides the WINDOW and not which
    * alternatives are eligible — whichever window is chosen, all of them are
@@ -199,10 +205,11 @@ interface JudgedCriterion {
  * the requirements so that each takes a count within its range and no card
  * matching a CAPPED requirement is left over.
  *
- * A SPLIT criterion reads the very same rules over two WINDOWS instead of one:
- * its own `reqs` and `limits` over positions `0 … size - 2`, the cards you
- * opened on, and its `sixth` part over position `size - 1` alone, the card
- * drawn. `drawHand` fills position `i` at step `i`, so the last position IS the
+ * A SPLIT criterion reads the very same rules over each of its WINDOWS instead
+ * of over one: its own `reqs` and `limits` over positions `0 … size - 2`, the
+ * cards you opened on; its `sixth` part over position `size - 1` alone, the card
+ * drawn; and its `whole` part over `0 … size - 1`, the whole hand, which is what
+ * `finally` asks about. `drawHand` fills position `i` at step `i`, so the last position IS the
  * last card drawn, and conditional on the others it is uniform over what is
  * left — the oracle needs no new sampling, only a second window to judge.
  *
@@ -223,7 +230,7 @@ export function createJudge(
   const matches = Array.from({ length: columns }, (_, desc) =>
     problem.matrix.map((row) => row[desc] === true),
   );
-  const judged = ({ reqs, limits }: Omit<MatchFlat, 'sixth'>): JudgedCriterion => {
+  const judged = ({ reqs, limits }: Omit<MatchFlat, 'sixth' | 'whole'>): JudgedCriterion => {
     const bounded = reqs.map(({ n, max, desc }) => ({
       min: n,
       max: max ?? Number.POSITIVE_INFINITY,
@@ -240,6 +247,7 @@ export function createJudge(
     /** The whole hand, or — when it is split — the cards opened on. */
     opening: judged(alternative),
     sixth: alternative.sixth === undefined ? null : judged(alternative.sixth),
+    whole: alternative.whole === undefined ? null : judged(alternative.whole),
   }));
 
   let hand: ArrayLike<number> = [];
@@ -289,14 +297,17 @@ export function createJudge(
   return (cards, cardCount = cards.length) => {
     hand = cards;
     size = cardCount;
-    for (const { opening, sixth } of criteria) {
-      if (sixth === null) {
+    for (const { opening, sixth, whole } of criteria) {
+      if (sixth === null && whole === null) {
         if (holds(opening, 0, size)) return true;
         continue;
       }
       // The card drawn is the last position; the cards opened on are the rest.
+      // A `finally` part is judged over every position, which is their union.
       if (size < 1) continue;
-      if (holds(sixth, size - 1, size) && holds(opening, 0, size - 1)) return true;
+      if (sixth !== null && !holds(sixth, size - 1, size)) continue;
+      if (whole !== null && !holds(whole, 0, size)) continue;
+      if (holds(opening, 0, size - 1)) return true;
     }
     return false;
   };

@@ -33,6 +33,33 @@ describe('lexCriterion', () => {
     });
   });
 
+  describe('finally', () => {
+    it('reads it as a word of its own, in any case', () => {
+      for (const text of ['finally', 'FINALLY', 'Finally'])
+        expect(bodies(text), text).toEqual([{ t: 'finally' }]);
+    });
+
+    it('leaves it alone inside a word, and inside a bracketed name', () => {
+      expect(bodies('[Finally, Peace]')).toEqual([{ t: 'cardName', text: 'Finally, Peace' }]);
+      expect(bodies('finallyish')).toEqual([{ t: 'word', text: 'finallyish' }]);
+      // `final` is not `finally`, and neither is the prefix of one.
+      expect(bodies('final')).toEqual([{ t: 'word', text: 'final' }]);
+    });
+
+    it('spans exactly the word, beside a `then`', () => {
+      expect(spansOf('1x monster then no trap finally 2x spell')).toEqual([
+        '1x',
+        'monster',
+        'then',
+        'no',
+        'trap',
+        'finally',
+        '2x',
+        'spell',
+      ]);
+    });
+  });
+
   it('returns no tokens for empty or blank text', () => {
     expect(bodies('')).toEqual([]);
     expect(bodies(' \n\t')).toEqual([]);

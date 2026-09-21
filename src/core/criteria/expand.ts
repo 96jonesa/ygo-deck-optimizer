@@ -73,6 +73,17 @@ interface Draft {
    * `validateExpr` both refuse.
    */
   sixth?: Parts;
+  /** The WHOLE HAND's own draft, when the criterion has a `finally` part; the same rule. */
+  whole?: Parts;
+  /**
+   * Whether this draft came from a `split` at all — which `sixth` and `whole`
+   * no longer answer between them, since `then 1x A` has no `whole` and
+   * `finally 1x A` has no `sixth`. It decides which WINDOW `reqs` and `limits`
+   * above are about: the cards opened on where it is set, the whole hand where
+   * it is not. Without it a `finally`-only criterion would have its opening part
+   * judged over six cards, which is the one reading `finally` exists to deny.
+   */
+  split?: true;
 }
 
 /** The two lists a draft is, without the split: one side of a split criterion. */
@@ -142,9 +153,17 @@ function identityOf(draft: Draft): string {
     [...reqs].map(([key, { n, max }]) => `${n}-${max ?? ''}x${key}`).sort(),
     [...limits].map(([key, { n }]) => `${n}x${key}`).sort(),
   ];
-  // The sixth card's part is part of what the alternative ASKS, so two
-  // alternatives agreeing on the five and differing on the card drawn are two.
-  return JSON.stringify([sideOf(draft), draft.sixth === undefined ? null : sideOf(draft.sixth)]);
+  // Every window is part of what the alternative ASKS, so two alternatives
+  // agreeing on the five and differing on the cards drawn — or on what the whole
+  // hand must be — are two. `split` is in the identity as well: it says which
+  // window the first side is about, and an unsplit alternative asking the same
+  // of six cards is a different question from a split one asking it of five.
+  return JSON.stringify([
+    draft.split === true,
+    sideOf(draft),
+    draft.sixth === undefined ? null : sideOf(draft.sixth),
+    draft.whole === undefined ? null : sideOf(draft.whole),
+  ]);
 }
 
 /**
@@ -172,22 +191,45 @@ function* flatMapped(exprs: readonly Expr[]): Iterable<Draft> {
   for (const expr of exprs) yield* alternativesOf(expr);
 }
 
-function* splitProducts(five: readonly Draft[], sixth: readonly Draft[]): Iterable<Draft> {
+/** One draft per (way to open, way to draw, way for the whole hand to be). */
+function* splitProducts(
+  five: readonly Draft[],
+  sixth: readonly Draft[] | null,
+  whole: readonly Draft[] | null,
+): Iterable<Draft> {
+  const parted = ({ reqs, limits }: Draft): Parts => ({ reqs, limits });
   for (const a of five)
-    for (const b of sixth)
-      yield { reqs: a.reqs, limits: a.limits, sixth: { reqs: b.reqs, limits: b.limits } };
+    for (const b of sixth ?? [null])
+      for (const c of whole ?? [null]) {
+        const out: Draft = { reqs: a.reqs, limits: a.limits, split: true };
+        if (b !== null) out.sixth = parted(b);
+        if (c !== null) out.whole = parted(c);
+        yield out;
+      }
 }
 
 /**
  * The alternatives of a criterion at its ROOT, which is the one place a
- * `split` may stand. Both sides distribute `and` over `or` on their own and
- * the alternatives are their product: `(1x A or 1x B) then 1x C` is two ways
- * to open and one card to draw, and each pairing is one alternative.
+ * `split` may stand. Every part distributes `and` over `or` on its own and the
+ * alternatives are their product: `(1x A or 1x B) then 1x C` is two ways to open
+ * and one card to draw, and each pairing is one alternative. A part the criterion
+ * does not have contributes no factor rather than an empty one, so
+ * `finally 1x A` expands to as many alternatives as `1x A` does.
  */
 function rootAlternativesOf(expr: Expr): Draft[] {
   if (expr.op !== 'split') return alternativesOf(expr);
+  // A split with neither dealt part nor a whole-hand part would flatten to an
+  // alternative nothing downstream could tell from an UNSPLIT one, and would
+  // then be judged over six cards here and over five there. The grammar and
+  // `validateExpr` both refuse it; reaching here is a bug, not bad input.
+  if (expr.sixth === undefined && expr.whole === undefined)
+    throw new RangeError(
+      'a `split` asks something of the cards you drew, of the whole hand, or both',
+    );
   const five = expr.five === undefined ? [nothing()] : alternativesOf(expr.five);
-  return distinct(splitProducts(five, alternativesOf(expr.sixth)));
+  const sixth = expr.sixth === undefined ? null : alternativesOf(expr.sixth);
+  const whole = expr.whole === undefined ? null : alternativesOf(expr.whole);
+  return distinct(splitProducts(five, sixth, whole));
 }
 
 /**
@@ -262,12 +304,19 @@ function alternativesOf(expr: Expr): Draft[] {
  *    more than `MAX_FLAT_CRITERIA` DISTINCT alternatives at any point is an
  *    error, found while distributing and not after. Dropping (3) never rescues
  *    an expansion from the cap.
- * A SPLIT criterion (`five then sixth`) distributes on both sides and its
- * alternatives are the product: each pairs one way to open with one way of
- * drawing. The opening part is then judged over `maxHandSize - 1` cards, and
- * the drawn part over `maxDrawnSlots` — more slots than that is an ERROR and
- * not a drop, because the cards drawn can never be more than the draw cards
- * fetch and a hand that silently scores 0 teaches nobody why.
+ * A SPLIT criterion (`five then sixth finally whole`) distributes on every part
+ * it has and its alternatives are the product: each pairs one way to open with
+ * one way of drawing and one way for the whole hand to be. The opening part is
+ * then judged over `maxHandSize - 1` cards — whether or not there is a `then`,
+ * since a `finally` alone still makes the opening part a question about the five
+ * — the drawn part over `maxDrawnSlots`, and the `finally` part over
+ * `maxHandSize`, which is the whole hand.
+ *
+ * More slots than `maxDrawnSlots` after `then` is an ERROR and not a drop,
+ * because the cards drawn can never be more than the draw cards fetch and a hand
+ * that silently scores 0 teaches nobody why. A `finally` part asking more than
+ * the hand holds is DROPPED, exactly as an unsplit criterion asking it is: its
+ * window IS the whole hand, and the two readings must not answer differently.
  *
  * 3. An alternative whose requirement LOWER bounds need more than
  *    `maxHandSize` cards can never be satisfied and is dropped, and counted.
@@ -310,18 +359,28 @@ export function expandAll(exprs: readonly Expr[], opts: ExpandOptions): ExpandRe
   const flat: FlatCriterion[] = [];
   const sources: number[][] = [];
   for (const [index, draft] of drafts.entries()) {
-    const { sixth } = draft;
+    const { sixth, whole } = draft;
     // A split criterion's opening part is judged over the cards OPENED ON —
-    // going second you see five and then draw the sixth — and an unsplit one
-    // over the whole hand, which draw cards make larger than either.
-    const room = sixth === undefined ? opts.maxHandSize : openedRoom;
+    // going second you see five and then draw the rest — and an unsplit one
+    // over the whole hand, which draw cards make larger than either. A criterion
+    // with a `finally` part and no `then` is still SPLIT: its opening part is
+    // about the first five, which is what `finally` is for.
+    const room = draft.split === true ? openedRoom : opts.maxHandSize;
     if (slotsIn(draft) > room) continue;
+    // The `finally` part is judged over the WHOLE hand, so it is bounded exactly
+    // as an unsplit criterion is — dropped, not refused. `then` is the one part
+    // refused on the text, because the cards drawn can never be more than the
+    // draw cards fetch, where the whole hand is simply the hand.
+    if (whole !== undefined && slotsIn(whole) > opts.maxHandSize) continue;
     if (sixth !== undefined) {
       const asked = slotsIn(sixth);
       if (asked > drawnRoom)
         return { ok: false, reason: 'sixth-card', message: tooManyDrawnSlots(asked, drawnRoom) };
     }
-    const ranges = rangesIn(draft, room) + (sixth === undefined ? 0 : rangesIn(sixth, drawnRoom));
+    const ranges =
+      rangesIn(draft, room) +
+      (sixth === undefined ? 0 : rangesIn(sixth, drawnRoom)) +
+      (whole === undefined ? 0 : rangesIn(whole, opts.maxHandSize));
     if (ranges > MAX_RANGES)
       return {
         ok: false,
@@ -330,6 +389,7 @@ export function expandAll(exprs: readonly Expr[], opts: ExpandOptions): ExpandRe
       };
     const alternative: FlatCriterion = listed(draft);
     if (sixth !== undefined) alternative.sixth = listed(sixth);
+    if (whole !== undefined) alternative.whole = listed(whole);
     flat.push(alternative);
     sources.push(from[index]!);
   }

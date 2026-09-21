@@ -407,10 +407,11 @@ describe('modes and criterion tags', () => {
       expect(splitNeedsSecond('both')).toContain('this one is judged for both hands');
       for (const when of ['first', 'both'] as const) {
         expect(splitNeedsSecond(when), when).toContain(
-          '`then` is about the card you draw going second',
+          '`then` and `finally` split the hand you draw going second',
         );
         expect(splitNeedsSecond(when), when).toContain('tag it going second');
-        expect(splitNeedsSecond(when), when).toContain('drop the `then`');
+        // Both ways out are named, because a criterion may hold either separator.
+        expect(splitNeedsSecond(when), when).toContain('drop the `then` or `finally`');
       }
     });
   });

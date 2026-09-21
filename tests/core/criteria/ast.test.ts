@@ -60,6 +60,25 @@ describe('slotsOf', () => {
   });
 
   /**
+   * THE `finally` WINDOW IS THE UNION of the other two, so its slots are asked
+   * of the very same cards: the answer is a MAXIMUM and not a three-way sum.
+   * Summed, `1x A finally 1x A` would say two cards — and it needs one, since
+   * assignment does not span windows.
+   */
+  it('takes the worse of the dealt windows and the whole hand, never their sum', () => {
+    expect(slotsOf({ op: 'split', five: A, whole: A })).toBe(1);
+    expect(slotsOf({ op: 'split', five: A, sixth: A, whole: A })).toBe(2);
+    // The whole hand can ask for more than the two dealt windows do, and then it decides.
+    expect(slotsOf({ op: 'split', five: A, whole: C })).toBe(3);
+    expect(slotsOf({ op: 'split', five: A, sixth: A, whole: C })).toBe(3);
+    expect(slotsOf({ op: 'split', five: B, sixth: A, whole: C })).toBe(3);
+    // And the dealt windows can ask for more, and then they do.
+    expect(slotsOf({ op: 'split', five: C, sixth: A, whole: B })).toBe(4);
+    expect(slotsOf({ op: 'split', whole: C })).toBe(3);
+    expect(slotsOf({ op: 'split', whole: limit })).toBe(0);
+  });
+
+  /**
    * The reason this lives in the AST rather than in the parser: it has to agree
    * with what `expand` counts per alternative, which merges requirements on one
    * description by ADDING their lower bounds — the same sum.
@@ -103,6 +122,40 @@ describe('canonicalizeExpr', () => {
       expect(canonical).toEqual({ op: 'split', sixth: A });
       expect(Object.keys(canonical)).toEqual(['op', 'sixth']);
       expect(JSON.stringify(canonical)).toBe(JSON.stringify({ op: 'split', sixth: A }));
+    });
+
+    /**
+     * The KEY ORDER is part of the contract for the same reason it is for
+     * `five` and `sixth`: `meaning.ts` decides a stored AST is stale by
+     * stringifying both, so a key written out of order would silently
+     * invalidate saved work. Window order, whichever parts there are.
+     */
+    it('canonicalizes a `finally` part and writes the keys in window order', () => {
+      const canonical = canonicalizeExpr({
+        op: 'split',
+        whole: { op: 'or', args: [and(A, and(B))] },
+        five: and(A, and(B)),
+        sixth: { op: 'or', args: [A] },
+      });
+      expect(canonical).toEqual({
+        op: 'split',
+        five: and(A, B),
+        sixth: A,
+        whole: and(A, B),
+      });
+      expect(Object.keys(canonical)).toEqual(['op', 'five', 'sixth', 'whole']);
+    });
+
+    it('leaves out whichever parts are absent, rather than writing undefined', () => {
+      for (const [expr, keys] of [
+        [{ op: 'split', whole: A } as Expr, ['op', 'whole']],
+        [{ op: 'split', five: A, whole: B } as Expr, ['op', 'five', 'whole']],
+        [{ op: 'split', sixth: A, whole: B } as Expr, ['op', 'sixth', 'whole']],
+      ] as const) {
+        const canonical = canonicalizeExpr(expr);
+        expect(Object.keys(canonical), JSON.stringify(expr)).toEqual([...keys]);
+        expect(JSON.stringify(canonical)).toBe(JSON.stringify(expr));
+      }
     });
 
     it('is not spliced into anything: it is the whole criterion', () => {
