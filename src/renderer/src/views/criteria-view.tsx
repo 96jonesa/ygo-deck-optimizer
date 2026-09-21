@@ -1,4 +1,4 @@
-import { CRITERION_SYNTAX } from '../../../shared/syntax';
+import { CRITERION_SYNTAX, WEIGHTING_REFERENCE } from '../../../shared/syntax';
 import { criterionAnalysisOf } from '../model/analysis-view';
 import {
   criteriaIssues,
@@ -9,10 +9,11 @@ import {
   type RequirementRow,
   requirementRows,
 } from '../model/criteria-readout';
+import { STOP_MOMENT_NOTE, stopIssues, templateDraws } from '../model/draw-view';
 import { selectAnalysis, useApp } from '../store';
 import { CriterionRow } from './criterion-row';
 import { IssueList } from './line-row';
-import { SyntaxReference } from './syntax-reference';
+import { FactReference, SyntaxReference } from './syntax-reference';
 
 // The criteria editor (PRD §8.3), and the two readouts that make the tool's
 // semantics visible: which lines fill which requirement and why the others do
@@ -188,6 +189,11 @@ export function CriteriaView() {
   const criteria = useApp((state) => state.template.criteria);
   const handSize = useApp((state) => state.template.hand.size);
   const templateWeighted = useApp((state) => state.template.weighted === true);
+  // Whether any line DRAWS, which is what makes "stop here" mean anything. A
+  // fact about the template on screen: the controls have to appear on the
+  // keystroke that asked for them, and a refused template has no classes to
+  // read draw-ness out of.
+  const drawing = useApp((state) => templateDraws(state.template));
   const analysis = useApp(selectAnalysis);
   const problem = useApp((state) => state.analysis.problem);
   const addCriterion = useApp((state) => state.addCriterion);
@@ -196,6 +202,7 @@ export function CriteriaView() {
   const setCriterionName = useApp((state) => state.setCriterionName);
   const setCriterionWhen = useApp((state) => state.setCriterionWhen);
   const setCriterionWeight = useApp((state) => state.setCriterionWeight);
+  const setCriterionStop = useApp((state) => state.setCriterionStop);
   const setWeighted = useApp((state) => state.setWeighted);
   const moveCriterion = useApp((state) => state.moveCriterion);
   // Whether weighting is on is the ANALYSIS's answer, like every other
@@ -220,12 +227,14 @@ export function CriteriaView() {
       handSize={handSize}
       uncounted={foundOf(criterion.id)?.counted === false}
       weighted={weighted}
+      drawing={drawing}
       first={at === 0}
       last={at === criteria.length - 1}
       onText={(text) => setCriterionText(criterion.id, text)}
       onName={(name) => setCriterionName(criterion.id, name)}
       onWhen={(when) => setCriterionWhen(criterion.id, when)}
       onWeight={(weight) => setCriterionWeight(criterion.id, weight)}
+      onStop={(stop) => setCriterionStop(criterion.id, stop)}
       onMove={(by) => moveCriterion(criterion.id, by)}
       onRemove={() => dropCriterion(criterion.id)}
     />
@@ -266,7 +275,32 @@ export function CriteriaView() {
             ? 'A hand is worth the HIGHEST weight among the criteria it meets — never their sum — and the run ranks by the expected weight per hand. The plain chance of meeting any criterion is still reported beside it.'
             : 'Every criterion counts the same, and the run ranks by the chance of meeting any one of them. Turn this on to say that some are worth more than others.'}
         </p>
+        {/* The reference for weighting, which M2's weighted-criteria slice wrote
+            and tested and never put on screen: the section existed in
+            `FACT_SECTIONS` with no component rendering it. */}
+        <FactReference section={WEIGHTING_REFERENCE} />
       </div>
+
+      {/*
+        Drawing (PRD §5.7), and only while some line draws — without one the
+        stop flag changes nothing, which is what protects every template written
+        before this existed.
+
+        Two things go here rather than beside the lines. The CORRECTION the
+        control's name invites a reader to miss, because it is about the criteria
+        and is read while looking at them. And `drawing-can-fail`, whose remedy
+        IS one of these checkboxes: a limit is a census over the whole hand, so
+        drawing into it turns a hand that worked into one that does not, and the
+        score falls as copies are added. Told here, that reads as a thing to do;
+        told beside the lines it would read as a thing to worry about.
+      */}
+      {drawing && (
+        <div className="drawing-note" data-testid="criteria-drawing">
+          <h3 className="criteria-heading">Drawing</h3>
+          <p className="hint flush">{STOP_MOMENT_NOTE}</p>
+          <IssueList issues={stopIssues(analysis)} />
+        </div>
+      )}
 
       {SECTIONS.map((section) => {
         const mine = criteria

@@ -8,6 +8,7 @@ import {
   commitWeight,
   WHEN_LABELS,
 } from '../model/deck-form';
+import { STOP_LABEL, stopStateNote } from '../model/draw-view';
 import { CompletingInput } from './completing-input';
 import { useField } from './fields';
 import { IssueList, ParseFailure } from './line-row';
@@ -27,12 +28,15 @@ export interface CriterionRowProps {
   uncounted: boolean;
   /** The template weights its criteria (PRD §5.6): the weight is a control rather than a fact. */
   weighted: boolean;
+  /** Some line of the template DRAWS (PRD §5.7): without one there is nothing to stop. */
+  drawing: boolean;
   first: boolean;
   last: boolean;
   onText: (text: string) => void;
   onName: (name: string) => void;
   onWhen: (when: CriterionWhen) => void;
   onWeight: (weight: number) => void;
+  onStop: (stop: boolean) => void;
   onMove: (by: number) => void;
   onRemove: () => void;
 }
@@ -43,12 +47,14 @@ export function CriterionRow({
   handSize,
   uncounted,
   weighted,
+  drawing,
   first,
   last,
   onText,
   onName,
   onWhen,
   onWeight,
+  onStop,
   onMove,
   onRemove,
 }: CriterionRowProps) {
@@ -67,6 +73,13 @@ export function CriterionRow({
   // The tag comes off the ANALYSIS, which is where the default lives (TDD
   // §3); the template's own field is only what the picker writes back.
   const when = found?.when ?? criterion.when ?? 'both';
+  // The stop flag is the one that comes off the TEMPLATE and not the analysis,
+  // and deliberately: `analyze` reports `stop: false` for every criterion of a
+  // template that DRAWS NOTHING (there being nothing to stop), so reading it
+  // from there would blank every tick for the one analysis after a line is
+  // marked as a draw card — the user's tick, apparently lost. Whether the flag
+  // is in force is `drawing`, which is what decides the box is shown at all.
+  const stop = criterion.stop ?? false;
 
   return (
     <li
@@ -141,6 +154,23 @@ export function CriterionRow({
             />
           </label>
         )}
+        {/* Whether an opening hand that already meets it should STOP you (PRD
+            §5.7). Only while some line draws: without one there is nothing to
+            stop, and the box would be a control that changes nothing. Ticked is
+            the state that stops — the label has to be true of the tick, or this
+            is the worst control in the app. */}
+        {drawing && (
+          <label className="criterion-stop" htmlFor={`criterion-stop-${id}`}>
+            <input
+              type="checkbox"
+              id={`criterion-stop-${id}`}
+              data-testid={`criterion-stop-${id}`}
+              checked={stop}
+              onChange={(event) => onStop(event.target.checked)}
+            />{' '}
+            {STOP_LABEL}
+          </label>
+        )}
         {/* Which hand judges it (PRD §5.5). A select rather than toggles: it
             sits on the row beside a 70-character criterion, and three buttons
             would not fit; the section it is filed under is the visible half
@@ -197,6 +227,14 @@ export function CriterionRow({
         {uncounted && (
           <p className="line-echo dim" data-testid={`criterion-uncounted-${id}`}>
             This run does not judge it: it is for {WHEN_LABELS[when]}.
+          </p>
+        )}
+        {/* What the tick says, in Andy's own two sentences (PRD §5.7): the state
+            the box is in is worth a line of prose, since "stop here" is the one
+            control in this editor whose meaning nobody guesses right twice. */}
+        {drawing && (
+          <p className="line-echo" data-testid={`criterion-stop-note-${id}`}>
+            {stopStateNote(stop)}
           </p>
         )}
         {failure !== null ? (

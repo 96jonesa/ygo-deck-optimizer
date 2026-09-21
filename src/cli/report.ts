@@ -246,6 +246,17 @@ export function classesSection(a: Analysis): string {
   return out.join('\n');
 }
 
+/**
+ * `a hand of 5, nothing drawn`, `a hand of 5, 2 drawn`: one part of a drawing
+ * hand. The PREFIX is how deep into the deck it read, so the cards drawn are
+ * `prefix − H` — and the hand is named too, since two hand sizes each reach
+ * their own lengths and `2 drawn` alone would not say which.
+ */
+export function drawnLabel(H: number, prefix: number): string {
+  const drawn = prefix - H;
+  return `a hand of ${H}, ${drawn === 0 ? 'nothing' : `${drawn} card${drawn === 1 ? '' : 's'}`} drawn`;
+}
+
 export function workSection(a: Analysis): string {
   const { rawRatios, classVectors, hands, estimatedMs } = a.work;
   const rows = [
@@ -260,7 +271,11 @@ export function workSection(a: Analysis): string {
               // With draw cards a hand size has one row per PREFIX LENGTH, and
               // the ordering factors are a per-deck cost of their own: one
               // multiply-add per group, which no term count shows.
-              const where = prefix === undefined ? `a hand of ${H}` : `${prefix} cards drawn`;
+              //
+              // `prefix` is the DEPTH the part read, so the cards it drew are
+              // `prefix − H`: the part at `prefix === H` drew nothing. Naming it
+              // `${prefix} cards drawn` was wrong by exactly `H`.
+              const where = prefix === undefined ? `a hand of ${H}` : drawnLabel(H, prefix);
               const rationals = groups > 1 ? `, ${int(groups)} ordering factors` : '';
               const side = complemented ? ' (failing hands, subtracted)' : '';
               return `${int(terms)} at ${where}${side}${rationals}`;

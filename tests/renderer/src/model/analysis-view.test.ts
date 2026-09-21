@@ -355,6 +355,32 @@ describe('templateErrorText', () => {
     expect(templateErrorText(analysis)).toBeNull();
   });
 
+  /**
+   * A `compile` error has a home of its own now (`refusalIssues`), beside the
+   * lines and whole rather than joined into this one grey line. The draw-card
+   * refusals are all of that code and each carries its own remedies — a
+   * refusal message is code that runs only when someone is already stuck, so
+   * it is the last text in the product to squash into a run-on sentence.
+   */
+  it('leaves a compile refusal to the readout that shows it whole', () => {
+    const analysis = analysisOf({
+      ok: false,
+      issues: [
+        { severity: 'error', code: 'infeasible', message: 'the ranges cannot sum' },
+        { severity: 'error', code: 'compile', message: 'a hand of 5: the deck would run out' },
+      ],
+    });
+    expect(templateErrorText(analysis)).toBe('the ranges cannot sum');
+  });
+
+  it('is nothing when every error of the template is a compile refusal', () => {
+    const analysis = analysisOf({
+      ok: false,
+      issues: [{ severity: 'error', code: 'compile', message: 'a hand of 5: 17 cards deep' }],
+    });
+    expect(templateErrorText(analysis)).toBeNull();
+  });
+
   it('is nothing before the first analysis', () => {
     expect(templateErrorText(null)).toBeNull();
   });

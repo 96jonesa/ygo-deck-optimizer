@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { DESCRIPTION_SYNTAX, RUN_MODE_REFERENCE } from '../../../shared/syntax';
+import { DESCRIPTION_SYNTAX, DRAW_REFERENCE, RUN_MODE_REFERENCE } from '../../../shared/syntax';
 import {
   kindTotals,
   lineAnalysisOf,
@@ -15,6 +15,7 @@ import {
   MODE_LABELS,
   RUN_MODES,
 } from '../model/deck-form';
+import { drawingIssues, drawReadout, refusalIssues } from '../model/draw-view';
 import { exampleTemplate } from '../model/example-template';
 import { EMPTY_TEMPLATE } from '../model/template-edit';
 import {
@@ -28,7 +29,7 @@ import { CardPicker } from './card-picker';
 import { useField } from './fields';
 import { FileActions } from './file-actions';
 import { GroupsEditor } from './groups-editor';
-import { LineRow } from './line-row';
+import { IssueList, LineRow } from './line-row';
 import { FactReference, SyntaxReference } from './syntax-reference';
 
 // The template editor (PRD §8.2). Everything it says about what a template
@@ -116,13 +117,68 @@ function DeckControls() {
   );
 }
 
-/** The mode control, and — closed — what the three runs actually differ in. */
+/** The mode control, and — closed — what the three runs actually differ in, and what drawing does. */
 function DeckSection() {
   return (
     <>
       <DeckControls />
       <FactReference section={RUN_MODE_REFERENCE} />
+      {/* Drawing is set on a LINE, so the reference for it lives in this panel
+          — the one place any of it is explained, the rule `src/shared/syntax.ts`
+          follows for every section. It is shown whether or not the template
+          draws: the marker on a line is where the feature is discovered. */}
+      <FactReference section={DRAW_REFERENCE} />
     </>
+  );
+}
+
+/**
+ * What the template's draw cards do, and the two things a reader has to be TOLD
+ * about them (PRD §5.7): that the number is a floor rather than a forecast, and
+ * that past a certain size the editor stops counting the work while the run
+ * still does it. Absent entirely for a template that draws nothing.
+ */
+function Drawing() {
+  const template = useApp((state) => state.template);
+  const analysis = useApp(selectAnalysis);
+  const readout = drawReadout(template, analysis);
+  if (readout === null) return null;
+
+  return (
+    <div className="readout drawing" data-testid="drawing">
+      <p className="readout-head">Draw cards</p>
+      <p className="drawing-fact" data-testid="drawing-hand">
+        {readout.hand}
+      </p>
+      {readout.lengths !== null && (
+        <p className="drawing-fact dim" data-testid="drawing-lengths">
+          {readout.lengths}
+        </p>
+      )}
+      <IssueList issues={drawingIssues(analysis)} />
+    </div>
+  );
+}
+
+/**
+ * Why the engine will not score this template at all.
+ *
+ * Every refusal of PRD §5.7 — the deck running out, the prefix cap, the build
+ * cap, `then` beside draw cards — arrives as a `compile` error carrying the
+ * exact figure and the remedies for it. It is shown WHOLE, and here rather than
+ * in the totals line, because it is about the lines directly above it. A refusal
+ * message is code that runs only when someone is already stuck.
+ */
+function Refusals() {
+  const analysis = useApp(selectAnalysis);
+  const refusals = refusalIssues(analysis);
+  if (refusals.length === 0) return null;
+
+  return (
+    <div className="readout bad" data-testid="refusals">
+      <p className="readout-head">This template cannot be scored</p>
+      <IssueList issues={refusals} />
+    </div>
   );
 }
 
@@ -175,6 +231,7 @@ export function TemplateView() {
   const dropLine = useApp((state) => state.dropLine);
   const setLineText = useApp((state) => state.setLineText);
   const setLineRange = useApp((state) => state.setLineRange);
+  const setLineDraw = useApp((state) => state.setLineDraw);
   const moveLine = useApp((state) => state.moveLine);
   const setTemplate = useApp((state) => state.setTemplate);
   useResolveNamedCards();
@@ -213,6 +270,7 @@ export function TemplateView() {
             last={at === lines.length - 1}
             onText={(text) => setLineText(line.id, text)}
             onRange={(range) => setLineRange(line.id, range)}
+            onDraw={(draw) => setLineDraw(line.id, draw)}
             onMove={(by) => moveLine(line.id, by)}
             onRemove={() => dropLine(line.id)}
           />
@@ -230,6 +288,9 @@ export function TemplateView() {
           </div>
         </li>
       </ul>
+
+      <Refusals />
+      <Drawing />
 
       <div className="actions">
         <button type="button" onClick={addDescriptionLine} data-testid="add-description">

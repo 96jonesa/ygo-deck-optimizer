@@ -463,6 +463,18 @@ describe('DRAW_REFERENCE', () => {
     expect(DRAW_REFERENCE.notes.join(' ')).toContain('Exactly one moment is ever scored');
   });
 
+  /**
+   * The parts SUM, and saying they are "one fraction per size" was wrong twice
+   * over: a prefix length is not a hand size (two compositions of the same depth
+   * can leave different hands), and nothing said that the fractions add rather
+   * than average — which is what the first/second blend beside it does.
+   */
+  it('says the per-length fractions ADD UP, and does not call a length a hand size', () => {
+    const text = DRAW_REFERENCE.rows.map((row) => row.means).join(' ');
+    expect(text).toContain('ADD UP to the score');
+    expect(text).not.toContain('one exact fraction per size');
+  });
+
   it('says the two things the engine refuses, so a reader meets them here first', () => {
     const notes = DRAW_REFERENCE.notes.join(' ');
     expect(notes).toContain('The deck cannot run out');

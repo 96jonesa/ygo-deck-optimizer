@@ -1774,3 +1774,91 @@ ul.readout {
   padding-top: 0;
   border-top: none;
 }
+
+/* --- draw cards ---------------------------------------------------------- */
+
+/*
+ * The draw marker on a line (PRD §5.7), on a second row of the grid in the
+ * TEXT's column — the same placement the criterion's name takes, and for the
+ * same reason: the row above is already id, text, range and three buttons, and
+ * a description is long. The two checkboxes and the number wrap as a group at
+ * narrow widths rather than pushing the row wider.
+ */
+.line-draw {
+  display: flex;
+  grid-column: 2 / -1;
+  grid-row: 2;
+  flex-wrap: wrap;
+  gap: 0.2rem var(--sp-3);
+  align-items: center;
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.line-draw label {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.line-draw input.count {
+  width: 3.2rem;
+}
+
+/* A line that draws matches nothing and changes the odds all the same, so its
+   echo is the ordinary colour rather than the dim one an echo has. */
+.line-echo.draws {
+  color: var(--text);
+}
+
+/* Whether an opening hand that already meets the criterion stops you. It takes
+   the column the weight does not — the weight only appears while the template
+   weights its criteria — and wraps under it when both are there. */
+.line.criterion .criterion-stop {
+  display: flex;
+  grid-column: 3;
+  grid-row: 2;
+  gap: 0.3rem;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+/* With a weight in column 3 the stop moves under it rather than fighting for
+   the space: one criterion may be worth 1000 and stop, and both have to read. */
+.line.criterion .criterion-weight + .criterion-stop {
+  grid-column: 3;
+  grid-row: 3;
+}
+
+/* What the template's draw cards build, in the template panel. */
+.drawing-fact {
+  margin: 0 0 2px;
+  max-width: 72ch;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The drawing block in the criteria panel: the correction the control's name
+ * invites a reader to miss, and the notice whose remedy is one of the boxes
+ * beneath it. Set off, because it is the one thing on this panel that is about
+ * a decision rather than about a criterion.
+ */
+.drawing-note {
+  margin: 0.5rem 0 0.75rem;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-1);
+  background: var(--bg-sunken);
+}
+
+.drawing-note > .criteria-heading {
+  margin-top: 0;
+}
+
+.drawing-note > .hint {
+  max-width: 72ch;
+}

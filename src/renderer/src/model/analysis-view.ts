@@ -158,9 +158,21 @@ export function kindTotals(analysis: Analysis | null): KindTotalRow[] {
   }));
 }
 
-/** The errors of the template as a whole — the ranges not summing to the deck size, above all. */
+/**
+ * The errors of the template as a whole — the ranges not summing to the deck
+ * size, above all — joined into the one line under the totals.
+ *
+ * A `compile` error is left out: it is the engine REFUSING to build, not a fact
+ * about the totals, and each of them (the draw-card caps of PRD §5.7 above all)
+ * carries the exact figure and its own remedies. `refusalIssues` shows those
+ * whole, beside the lines they are about; joining a paragraph of remedies into a
+ * `·`-separated run-on is how the least-exercised text in the product becomes
+ * the worst.
+ */
 export function templateErrorText(analysis: Analysis | null): string | null {
-  const errors = (analysis?.issues ?? []).filter((found) => found.severity === 'error');
+  const errors = (analysis?.issues ?? []).filter(
+    (found) => found.severity === 'error' && found.code !== 'compile',
+  );
   return errors.length === 0 ? null : errors.map((found) => found.message).join(' · ');
 }
 

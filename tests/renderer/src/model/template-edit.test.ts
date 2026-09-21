@@ -12,6 +12,7 @@ import {
   withCardLine,
   withCriterion,
   withCriterionName,
+  withCriterionStop,
   withCriterionText,
   withCriterionWeight,
   withCriterionWhen,
@@ -21,6 +22,7 @@ import {
   withGroupCard,
   withHandSize,
   withImportedDeck,
+  withLineDraw,
   withLineRange,
   withLineText,
   withMode,
@@ -250,6 +252,72 @@ describe('withLineRange', () => {
   it('leaves the template alone when the id is not there', () => {
     const template = three();
     expect(withLineRange(template, 'nope', { min: 1, max: 2 })).toBe(template);
+  });
+});
+
+describe('withLineDraw', () => {
+  it('marks a line as a draw card', () => {
+    const edited = withLineDraw(three(), 'line2', { n: 2 });
+    expect(edited.lines[1]).toEqual({ id: 'line2', text: 'spell', min: 0, max: 3, draw: { n: 2 } });
+  });
+
+  it('marks a named card line too: a draw card is usually one', () => {
+    const named = withCardLine(EMPTY_TEMPLATE, ASH);
+    const edited = withLineDraw(named, named.lines[0]!.id, { n: 1, oncePerTurn: true });
+    expect(edited.lines[0]).toMatchObject({
+      card: { passcode: ASH.passcode },
+      draw: { n: 1, oncePerTurn: true },
+    });
+  });
+
+  /**
+   * `null` takes the field away rather than storing `draw: undefined`: a line
+   * IS a draw card exactly when it has the field (PRD §5.7), and a template
+   * file records nothing for one that is not, so unticking the box must give
+   * back the line the template would have had if the box had never been ticked.
+   */
+  it('takes the field away entirely when it is cleared', () => {
+    const drawn = withLineDraw(three(), 'line2', { n: 2, oncePerTurn: true });
+    const cleared = withLineDraw(drawn, 'line2', null);
+    expect(cleared.lines[1]).not.toHaveProperty('draw');
+    expect(cleared.lines[1]).toEqual(three().lines[1]);
+  });
+
+  /**
+   * Once-per-turn is `oncePerTurn?: true` and not a boolean: `false` is spelled
+   * by the field being absent, so turning it off has to delete it. A stored
+   * `false` would be a second spelling of the same template, and one the file
+   * format does not write.
+   */
+  it('spells "not once per turn" as no field at all', () => {
+    const once = withLineDraw(three(), 'line2', { n: 2, oncePerTurn: true });
+    const again = withLineDraw(once, 'line2', { n: 2, oncePerTurn: false });
+    expect(again.lines[1]).toMatchObject({ draw: { n: 2 } });
+    expect((again.lines[1] as { draw: object }).draw).not.toHaveProperty('oncePerTurn');
+  });
+
+  it('keeps the range, the text and the parsed form beside it', () => {
+    const template = withLineRange(groupUser(), 'line1', { min: 1, max: 2 });
+    const edited = withLineDraw(template, 'line1', { n: 3 });
+    expect(edited.lines[0]).toEqual({ ...template.lines[0], draw: { n: 3 } });
+    expect(descOf(edited, 'line1')).toEqual(descOf(template, 'line1'));
+  });
+
+  it('gives back the same template when nothing changed', () => {
+    const drawn = withLineDraw(three(), 'line2', { n: 2, oncePerTurn: true });
+    expect(withLineDraw(drawn, 'line2', { n: 2, oncePerTurn: true })).toBe(drawn);
+    const plain = three();
+    expect(withLineDraw(plain, 'line2', null)).toBe(plain);
+  });
+
+  it('leaves the template alone when the id is not there', () => {
+    const template = three();
+    expect(withLineDraw(template, 'nope', { n: 2 })).toBe(template);
+  });
+
+  it('writes a line `core` accepts', () => {
+    const edited = withLineDraw(three(), 'line2', { n: 6, oncePerTurn: true });
+    expect(validateTemplate(edited).ok).toBe(true);
   });
 });
 
@@ -969,6 +1037,64 @@ describe('withCriterionWeight', () => {
   });
 });
 
+describe('withCriterionStop', () => {
+  const template: Template = {
+    ...EMPTY_TEMPLATE,
+    criteria: [
+      {
+        id: 'c1',
+        text: '1x spell',
+        name: 'a spell',
+        when: 'first' as const,
+        weight: 4,
+        expr: {
+          op: 'req',
+          n: 1,
+          desc: { anyOf: [{ t: 'clause', clause: { kinds: ['spell'] } }] },
+        } as const,
+      },
+      { id: 'c2', text: '1x trap' },
+    ],
+  };
+
+  it('stops the criterion it names, and no other', () => {
+    const next = withCriterionStop(template, 'c2', true);
+    expect(next.criteria.map((criterion) => criterion.stop)).toEqual([undefined, true]);
+  });
+
+  /**
+   * `stop` says WHEN the criterion is asked, not what it asks for — the same
+   * reason `withCriterionWhen` and `withCriterionWeight` keep the AST.
+   */
+  it('keeps the stored AST, the name, the tag and the weight', () => {
+    const next = withCriterionStop(template, 'c1', true);
+    expect(next.criteria[0]).toEqual({ ...template.criteria[0], stop: true });
+  });
+
+  /**
+   * Not stopping is the identity: it is what every criterion of every template
+   * written before draw cards existed already means (`stopsFor`), and what
+   * `writeTemplate` records as nothing at all. So unticking the box must give
+   * back the criterion byte for byte, not one carrying `stop: false`.
+   */
+  it('stores "would not stop" as no field at all', () => {
+    const stopped = withCriterionStop(template, 'c1', true);
+    expect(withCriterionStop(stopped, 'c1', false).criteria[0]).not.toHaveProperty('stop');
+    expect(withCriterionStop(stopped, 'c1', false).criteria[0]).toEqual(template.criteria[0]);
+  });
+
+  it('gives back the SAME template when the flag does not move, false included', () => {
+    expect(withCriterionStop(template, 'c1', false)).toBe(template);
+    const stopped = withCriterionStop(template, 'c1', true);
+    expect(withCriterionStop(stopped, 'c1', true)).toBe(stopped);
+    expect(withCriterionStop(template, 'nobody', true)).toBe(template);
+  });
+
+  it('writes a criterion `core` accepts', () => {
+    expect(validateTemplate(withCriterionStop(template, 'c1', true)).ok).toBe(true);
+  });
+});
+
 /**
  * The half of the authoritative-AST rule that had gone wrong: an edit to a
  * criterion's TEXT drops the parsed form beside it (TDD §14) and NOTHING else.
@@ -988,6 +1114,7 @@ describe('a criterion keeps everything but its parsed form', () => {
         name: 'the opener',
         when: 'second' as const,
         weight: 6,
+        stop: true as const,
         expr: {
           op: 'req',
           n: 1,
@@ -997,7 +1124,7 @@ describe('a criterion keeps everything but its parsed form', () => {
     ],
   };
 
-  it('keeps the tag and the weight through a text edit, and drops only the AST', () => {
+  it('keeps the tag, the weight and the stop through a text edit, dropping only the AST', () => {
     const next = withCriterionText(tagged, 'c1', '1x trap');
     expect(next.criteria[0]).toEqual({
       id: 'c1',
@@ -1005,19 +1132,20 @@ describe('a criterion keeps everything but its parsed form', () => {
       name: 'the opener',
       when: 'second',
       weight: 6,
+      stop: true,
     });
   });
 
-  it('keeps the tag, the weight and the AST through a name edit', () => {
+  it('keeps the tag, the weight, the stop and the AST through a name edit', () => {
     const next = withCriterionName(tagged, 'c1', 'renamed');
     expect(next.criteria[0]).toEqual({ ...tagged.criteria[0], name: 'renamed' });
     const cleared = withCriterionName(tagged, 'c1', '  ');
     expect(cleared.criteria[0]).not.toHaveProperty('name');
-    expect(cleared.criteria[0]).toMatchObject({ when: 'second', weight: 6 });
+    expect(cleared.criteria[0]).toMatchObject({ when: 'second', weight: 6, stop: true });
     expect(cleared.criteria[0]!.expr).toEqual(tagged.criteria[0]!.expr);
   });
 
-  it('keeps the tag and the weight when a deleted group takes the AST', () => {
+  it('keeps the tag, the weight and the stop when a deleted group takes the AST', () => {
     const next = withoutGroup(tagged, 'g1');
     expect(next.criteria[0]).toEqual({
       id: 'c1',
@@ -1025,6 +1153,7 @@ describe('a criterion keeps everything but its parsed form', () => {
       name: 'the opener',
       when: 'second',
       weight: 6,
+      stop: true,
     });
   });
 
@@ -1067,6 +1196,7 @@ describe('a criterion keeps everything but its parsed form', () => {
         name: 'the opener',
         when: 'second',
         weight: 6,
+        stop: true,
       });
     });
 
@@ -1161,6 +1291,17 @@ describe('a line’s `draw` survives the edits that are not about it', () => {
     const moved = withMovedLine(drawn(), 'line1', 1);
     expect(drawOf(moved, 'line1').draw).toEqual({ n: 2, oncePerTurn: true });
   });
+
+  /**
+   * And the other way round: the transform that sets `draw` must not be the one
+   * that loses something. It is the newest of these and so the one with the
+   * shortest list of fields in its author's head.
+   */
+  it('is set without taking the text, the range or the parsed form', () => {
+    const template = withLineRange(drawn(), 'line1', { min: 1, max: 3 });
+    const edited = withLineDraw(template, 'line1', { n: 3 });
+    expect(edited.lines[0]).toEqual({ ...template.lines[0], draw: { n: 3 } });
+  });
 });
 
 describe('a criterion’s `stop` survives the edits that are not about it', () => {
@@ -1182,5 +1323,22 @@ describe('a criterion’s `stop` survives the edits that are not about it', () =
   it('survives naming it', () => {
     const id = toggled().criteria[0]!.id;
     expect(stopOfId(withCriterionName(toggled(), id, 'opening'), id)).toBe(true);
+  });
+
+  it('survives a change of tag and a change of weight', () => {
+    const id = toggled().criteria[0]!.id;
+    expect(stopOfId(withCriterionWhen(toggled(), id, 'second'), id)).toBe(true);
+    expect(stopOfId(withCriterionWeight(toggled(), id, 9), id)).toBe(true);
+  });
+
+  it('survives dropping a group the criterion named', () => {
+    const base = groupUser();
+    const stopped = {
+      ...base,
+      criteria: base.criteria.map((criterion) => ({ ...criterion, stop: true as const })),
+    };
+    const after = withoutGroup(stopped, 'g1');
+    expect(stopOfId(after, 'c1')).toBe(true);
+    expect(after.criteria[0]).not.toHaveProperty('expr');
   });
 });
