@@ -467,9 +467,62 @@ export const EXPORT_REFERENCE: FactSection = {
   ],
 };
 
+/**
+ * DRAW CARDS (PRD §5.7). A setting on a line and a checkbox on each criterion,
+ * so there is no grammar for it — but everything a user SETS belongs in this
+ * reference, and the numbers below are held to the engine's own by its test.
+ */
+export const DRAW_REFERENCE: FactSection = {
+  id: 'drawing',
+  title: 'Lines that draw cards',
+  blurb:
+    'Mark a line as a draw card and its copies are no longer just cards in the hand: drawing one gives you more of them.',
+  rows: [
+    {
+      label: 'Draws n',
+      means:
+        'A whole number from 1 to 6. Every copy you draw is played and replaced by that many fresh cards off the top — and those can be draw cards too, which then draw in turn.',
+    },
+    {
+      label: 'Once per turn',
+      means:
+        'Only the first copy is played. The rest stay in your hand and are judged like any other card, which is what a hard once-per-turn card really does.',
+    },
+    {
+      label: 'The hand is no longer five cards',
+      means:
+        'Three copies of a card that draws two reach eleven cards deep and leave a hand of eight. The criteria judge whatever hand you end up with, and the run reports one exact fraction per size.',
+    },
+    {
+      label: '“Stop here”, on each criterion',
+      means:
+        'Unticked — the default — you draw regardless. Ticked, an opening hand that already meets this criterion stops you: nothing is activated, and you keep the hand you had.',
+    },
+    {
+      label: 'What “stop here” is for',
+      means:
+        'A hand that already works is a hand you should not have to play a draw card out of. Ticking it protects those hands, and nothing else.',
+    },
+    {
+      label: 'It picks the moment, not the criteria',
+      means:
+        'Whichever way you stopped or drew, EVERY criterion is then judged on the hand you have. A criterion you tick is still checked after drawing when your opening did not stop you, and one you leave alone still counts when something else stopped you.',
+    },
+  ],
+  notes: [
+    'ONE DECISION, taken before you draw anything. Either you activate nothing, or you activate everything — every draw card in the hand, and every one those draw into. There is no choosing card by card.',
+    'So for a deck with draw cards the number is a LOWER bound on careful play: someone holding two Pots can play the first, see the hand is now fine, and keep the second. Ticking "stop here" on a criterion is the only part of that judgement the tool scores.',
+    'Exactly one moment is ever scored. If your opening stopped you, your opening is what counts; if you drew, the hand you ended up with is what counts — even when it is worth less, and even when it is worth nothing.',
+    'MORE CARDS CAN BE WORSE. “No hand traps” counts your whole hand, and “exactly one starter” is broken by a second one — so drawing into them turns a hand that worked into one that does not, and the score falls as you add copies. That is what "stop here" is there to stop.',
+    'The deck cannot run out: a template whose draw cards could ask for more cards than the deck holds is refused rather than scored as though it could not happen.',
+    'Draw cards and the going-second split (`then`) cannot be used together. The card you draw for turn stops being one of six equally likely ones once a draw card has to be among your opening cards to be played at all.',
+  ],
+};
+
 export const FACT_SECTIONS: readonly FactSection[] = [
   RUN_MODE_REFERENCE,
   WEIGHTING_REFERENCE,
+  DRAW_REFERENCE,
   FILE_REFERENCE,
   EXPORT_REFERENCE,
 ];

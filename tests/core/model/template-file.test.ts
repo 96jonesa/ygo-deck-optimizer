@@ -306,3 +306,69 @@ describe('templateToFile and weighting', () => {
     expect(reread.template.criteria.map((criterion) => criterion.weight)).toEqual([4, undefined]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Draw cards (PRD §5.7)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE SILENT REBUILD. A transform that lists the fields it knows about drops
+ * the ones it does not, and that trap has already shipped once here — the
+ * criterion transforms used to reset the `when` tag of any criterion whose text
+ * was typed into. `draw` and `stop` are the new fields, and these are the tests
+ * that keep them.
+ */
+describe('templateToFile with draw cards', () => {
+  const potLine = {
+    id: 'pot',
+    text: 'spell',
+    min: 0,
+    max: 3,
+    draw: { n: 2, oncePerTurn: true as const },
+  };
+
+  it('keeps what a line DRAWS, beside the parsed form it writes out', () => {
+    const template = templateOf({ lines: [potLine] });
+    const { template: saved } = templateToFile(template, ctxFor(template));
+    expect(saved.lines[0]).toMatchObject({ draw: { n: 2, oncePerTurn: true } });
+    expect(saved.lines[0]).toHaveProperty('desc');
+  });
+
+  it('keeps it on a line whose text does NOT parse, where only the AST is dropped', () => {
+    const template = templateOf({ lines: [{ ...potLine, text: 'monstr' }] });
+    const { template: saved, warnings } = templateToFile(template, ctxFor(template));
+    expect(warnings).toHaveLength(1);
+    expect(saved.lines[0]).toMatchObject({ draw: { n: 2, oncePerTurn: true } });
+    expect(saved.lines[0]).not.toHaveProperty('desc');
+  });
+
+  it('writes `stop` only where it says something, as a weight is written', () => {
+    const template = templateOf({
+      lines: [potLine],
+      criteria: [
+        { id: 'draws-past', text: '1x monster' },
+        { id: 'stops', text: '1x monster', stop: true },
+        { id: 'ticked', text: '1x monster', stop: false },
+      ],
+    });
+    const { template: saved } = templateToFile(template, ctxFor(template));
+    expect(saved.criteria[0]).not.toHaveProperty('stop');
+    expect(saved.criteria[1]).toHaveProperty('stop', true);
+    expect(saved.criteria[2]).not.toHaveProperty('stop');
+  });
+
+  it('round-trips through the file validator unchanged', () => {
+    const template = templateOf({
+      lines: [potLine, { id: 'plain', text: 'monster', min: 0, max: 3 }],
+      criteria: [{ id: 'stops', text: '1x monster', stop: true }],
+    });
+    const { template: saved } = templateToFile(template, ctxFor(template));
+    const reread = validateTemplate(JSON.parse(JSON.stringify(saved)));
+    expect(reread.ok).toBe(true);
+    if (reread.ok) {
+      expect(reread.template.lines[0]).toMatchObject({ draw: { n: 2, oncePerTurn: true } });
+      expect(reread.template.lines[1]).not.toHaveProperty('draw');
+      expect(reread.template.criteria[0]!.stop).toBe(true);
+    }
+  });
+});

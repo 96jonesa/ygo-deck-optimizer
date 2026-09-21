@@ -8,8 +8,10 @@ import {
   SAMPLE_SIZE,
 } from '../../../src/core/model/analyze';
 import { compileProblem, REMAINDER_ID, resolveTemplate } from '../../../src/core/model/compile';
+import type { DrawSpec } from '../../../src/core/model/problem';
 import type { Template, TemplateLine } from '../../../src/core/model/template';
 import { createScorer } from '../../../src/core/prob/scorer';
+import { countToNumber } from '../../../src/core/util/count';
 import { same } from '../../helpers/assert';
 import { CODE } from '../../helpers/fixture-cards';
 import { rawRatiosOf } from '../../helpers/gen-ranged-problem';
@@ -193,7 +195,7 @@ describe('analyze', () => {
       expect(a.work).toEqual({
         rawRatios: 4096,
         classVectors: 128,
-        hands: [{ H: 5, part: 'first', weight: 1, terms, complemented }],
+        hands: [{ H: 5, part: 'first', weight: 1, terms, complemented, groups: 1 }],
         estimatedMs: (128 * (0.05 + 0.006 * terms)) / 1000,
         cost: DEFAULT_COST,
       });
@@ -1237,5 +1239,316 @@ describe('analyze of a split criterion', () => {
     expect(a.work.hands).toHaveLength(1);
     expect(a.work.hands![0]).toMatchObject({ H: 6, part: 'second' });
     expect(a.work.hands![0]!.terms).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Draw cards (PRD §5.7)
+// ---------------------------------------------------------------------------
+
+describe('analyze with draw cards', () => {
+  const potLine = (draw: DrawSpec = { n: 2 }, max = 3): TemplateLine => ({
+    id: 'pot',
+    text: 'spell',
+    min: 0,
+    max,
+    draw,
+  });
+
+  it('says the largest hand the criteria are judged against, which is not the hand size', () => {
+    const a = analyze(templateOf([potLine(), line('starter', 'monster')], ['1x monster']), ctx);
+    expect(a.handSize).toBe(5);
+    expect(a.judgedHand).toBe(8);
+  });
+
+  it('leaves `judgedHand` at the hand size for a template that draws nothing', () => {
+    const a = analyze(templateOf([line('starter', 'monster')], ['1x monster']), ctx);
+    expect(a.judgedHand).toBe(5);
+  });
+
+  it('shows what each class draws', () => {
+    const a = analyze(
+      templateOf(
+        [potLine({ n: 2, oncePerTurn: true }), line('starter', 'monster')],
+        ['1x monster'],
+      ),
+      ctx,
+    );
+    expect(a.classes?.classes.some((cls) => cls.draw?.oncePerTurn === true)).toBe(true);
+  });
+
+  /**
+   * The work model gains two things draw cards make real: a row per PREFIX
+   * LENGTH, and the ordering factors, which cost one multiply-add each per deck
+   * and which no term count shows.
+   */
+  it('counts the work per prefix length, with the ordering factors beside it', () => {
+    const a = analyze(templateOf([potLine(), line('starter', 'monster')], ['1x monster']), ctx);
+    expect(a.work.hands?.map((hand) => hand.prefix)).toEqual([5, 7, 9, 11]);
+    for (const hand of a.work.hands ?? []) {
+      expect(hand.H).toBe(5);
+      expect(hand.groups).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('counts it the way it always did for a template without draw cards', () => {
+    const a = analyze(templateOf([line('starter', 'monster')], ['1x monster']), ctx);
+    expect(a.work.hands).toHaveLength(1);
+    expect(a.work.hands?.[0]).toMatchObject({ H: 5, groups: 1 });
+    expect(a.work.hands?.[0]).not.toHaveProperty('prefix');
+  });
+
+  it('says whether the player would stop for each criterion', () => {
+    const a = analyze(
+      templateOf([potLine(), line('starter', 'monster')], [], {
+        criteria: [
+          { id: 'draws-past', text: '1x monster' },
+          { id: 'stops', text: '2x monster', stop: true },
+        ],
+      }),
+      ctx,
+    );
+    expect(criterionOf(a, 'draws-past').stop).toBe(false);
+    expect(criterionOf(a, 'stops').stop).toBe(true);
+  });
+
+  /**
+   * DRAWING CAN MAKE A HAND FAIL, and that must be visible rather than merely
+   * true: a limit is a census over the whole hand and a ceiling makes a surplus
+   * card fatal, so the score falls as copies of the draw card are added. Nobody
+   * expects that, and the readout is where they find out.
+   */
+  describe('the warning that more cards can be worse', () => {
+    const noticed = (a: Analysis) => codes(a.issues).includes('drawing-can-fail');
+
+    it('is given where a criterion counts the whole hand and the template draws', () => {
+      expect(
+        noticed(
+          analyze(templateOf([potLine(), line('starter', 'monster')], ['1-1x monster']), ctx),
+        ),
+      ).toBe(true);
+      expect(
+        noticed(
+          analyze(
+            templateOf(
+              [potLine(), line('trap', 'trap'), line('starter', 'monster')],
+              ['1x monster and no trap'],
+            ),
+            ctx,
+          ),
+        ),
+      ).toBe(true);
+    });
+
+    it('is NOT given where nothing counts the whole hand: more cards is then only more chances', () => {
+      expect(
+        noticed(analyze(templateOf([potLine(), line('starter', 'monster')], ['1x monster']), ctx)),
+      ).toBe(false);
+    });
+
+    it('is NOT given without draw cards, however many ceilings there are', () => {
+      expect(
+        noticed(analyze(templateOf([line('starter', 'monster')], ['1-1x monster']), ctx)),
+      ).toBe(false);
+    });
+
+    /**
+     * A `stop` criterion is STILL warned about, and that is the correction the
+     * name invites a reader to miss: the flag decides the window, so a criterion
+     * the player would stop for is judged after the draws all the same whenever
+     * the opening did not stop them — and can still be broken by them there.
+     */
+    it('is given for a criterion the player would stop for, which the draws still reach', () => {
+      const a = analyze(
+        templateOf([potLine(), line('starter', 'monster')], [], {
+          criteria: [{ id: 'c1', text: '1-1x monster', stop: true }],
+        }),
+        ctx,
+      );
+      expect(noticed(a)).toBe(true);
+      // And the advice names the escape hatch rather than a window.
+      const message = a.issues.find((issue) => issue.code === 'drawing-can-fail')!.message;
+      expect(message).toContain('"stop here"');
+    });
+  });
+
+  /**
+   * THE NUMBER IS A LOWER BOUND, and a reader has to be told rather than left to
+   * infer it: there is one decision point, so a player who stops halfway — two
+   * Pots, activate one, keep the other — can do better than the model.
+   */
+  describe('the notice that the number is a lower bound', () => {
+    const noticed = (a: Analysis) => codes(a.issues).includes('drawing-is-a-lower-bound');
+
+    it('is given for every template that draws, ceiling or no ceiling', () => {
+      expect(
+        noticed(analyze(templateOf([potLine(), line('starter', 'monster')], ['1x monster']), ctx)),
+      ).toBe(true);
+      expect(
+        noticed(
+          analyze(templateOf([potLine(), line('starter', 'monster')], ['1-1x monster']), ctx),
+        ),
+      ).toBe(true);
+    });
+
+    it('is not given for a template that draws nothing', () => {
+      expect(noticed(analyze(templateOf([line('starter', 'monster')], ['1x monster']), ctx))).toBe(
+        false,
+      );
+    });
+
+    it('says the two things it is about: one decision, and a lower bound', () => {
+      const a = analyze(templateOf([potLine(), line('starter', 'monster')], ['1x monster']), ctx);
+      const message = a.issues.find((issue) => issue.code === 'drawing-is-a-lower-bound')!.message;
+      expect(message).toContain('one decision');
+      expect(message).toContain('LOWER bound');
+    });
+  });
+
+  describe('what it refuses', () => {
+    it('reports the deck running out as an error on the template, not as a thrown exception', () => {
+      const a = analyze(
+        templateOf([potLine({ n: 2 }, 3), line('starter', 'monster')], ['1x monster'], {
+          deckSize: 40,
+        }),
+        ctx,
+      );
+      expect(a.ok).toBe(true);
+      const deep = analyze(
+        templateOf([potLine({ n: 5 }, 3), line('starter', 'monster')], ['1x monster']),
+        ctx,
+      );
+      expect(deep.ok).toBe(false);
+      expect(codes(deep.issues)).toContain('!compile');
+    });
+
+    it('reports `then` with draw cards as an error, in the engine’s own words', () => {
+      const a = analyze(
+        templateOf([potLine(), line('starter', 'monster')], [], {
+          hand: { size: 6 },
+          mode: 'second',
+          criteria: [{ id: 'c1', text: 'then 1x monster', when: 'second' }],
+        }),
+        ctx,
+      );
+      expect(a.ok).toBe(false);
+      expect(a.issues.some((issue) => /`then` and draw cards/.test(issue.message))).toBe(true);
+    });
+  });
+});
+
+describe('the work estimate with draw cards', () => {
+  /**
+   * A term of a longer PREFIX costs more than a term of a hand — it holds cards
+   * of more classes, so it multiplies more binomials — and `perTermNs` is
+   * calibrated on a hand. The estimate scales by `prefix / H`, which is 1 for
+   * every template that draws nothing.
+   */
+  it('scales a part’s terms by how deep into the deck it reads', () => {
+    const cost = { perVectorUs: 0, perTermNs: 1000 };
+    const a = analyze(
+      templateOf(
+        [{ id: 'pot', text: 'spell', min: 0, max: 3, draw: { n: 2 } }, line('starter', 'monster')],
+        ['1x monster'],
+      ),
+      ctx,
+      { cost },
+    );
+    const hands = a.work.hands!;
+    const expected =
+      countToNumber(a.work.classVectors!) *
+      hands.reduce((sum, { terms, H, prefix }) => sum + terms * ((prefix ?? H) / H), 0) *
+      1e-3;
+    expect(a.work.estimatedMs).toBeCloseTo(expected, 9);
+    // And the scaling is not the identity: the deeper parts count for more.
+    expect(hands.some(({ prefix }) => (prefix ?? 5) > 5)).toBe(true);
+  });
+
+  it('leaves the estimate of a template without draw cards exactly where it was', () => {
+    const cost = { perVectorUs: 0.05, perTermNs: 6 };
+    const a = analyze(templateOf([line('starter', 'monster')], ['1x monster']), ctx, { cost });
+    const { terms } = a.work.hands![0]!;
+    expect(a.work.estimatedMs).toBeCloseTo(
+      (countToNumber(a.work.classVectors!) * (0.05 + (6 / 1000) * terms)) / 1000,
+      9,
+    );
+  });
+});
+
+/**
+ * `analyze` runs on every edit, SYNCHRONOUSLY IN THE MAIN PROCESS, so a build
+ * it cannot afford is not a slow readout but a frozen application. Past
+ * `ANALYZE_DRAW_WORK` it declines to build and says so — everything else in the
+ * analysis is still there, and the run itself is unaffected.
+ */
+describe('a draw template too wide to analyse on a keystroke', () => {
+  const LEVELS = Array.from({ length: 12 }, (_, at) => `level ${at + 1} monster`);
+  /**
+   * `classes` lines the criteria can tell apart — each Level is its own
+   * column, so none of them merges into the blank class — three copies of a
+   * draw-2, and one criterion that may stop.
+   */
+  const wide = (classes: number, stop: boolean): Template =>
+    templateOf(
+      [
+        { id: 'pot', text: 'spell', min: 0, max: 3, draw: { n: 2 } },
+        ...Array.from({ length: classes }, (_, at) => line(`l${at}`, LEVELS[at]!, 0, 13)),
+      ],
+      [],
+      {
+        criteria: [
+          {
+            id: 'c1',
+            text: LEVELS.slice(0, classes)
+              .map((level) => `1x ${level}`)
+              .join(' or '),
+            ...(stop ? { stop: true } : {}),
+          },
+        ],
+      },
+    );
+  it('counts the work for an ordinary drawing template', () => {
+    const a = analyze(wide(3, true), ctx);
+    expect(a.work.hands).not.toBeNull();
+    expect(a.work.estimatedMs).not.toBeNull();
+    expect(codes(a.issues)).not.toContain('work-not-counted');
+  });
+
+  it('declines to count it for one that would freeze the editor, and says why', () => {
+    const a = analyze(wide(12, true), ctx);
+    expect(a.work.hands).toBeNull();
+    expect(a.work.estimatedMs).toBeNull();
+    expect(codes(a.issues)).toContain('work-not-counted');
+    const message = a.issues.find((issue) => issue.code === 'work-not-counted')!.message;
+    expect(message).toContain('runs on every edit');
+    expect(message).toContain('The run itself is unaffected');
+    // The real figure and how far over it is, never a rounded pair that reads
+    // as the same number twice.
+    expect(message).toMatch(/\d{1,3}(,\d{3})+ compositions/);
+    expect(message).toMatch(/\d+(\.\d\d)?× what an analysis will build/);
+  });
+
+  /**
+   * Declining is a NOTICE and not an error: the template is perfectly runnable,
+   * and everything the analysis is really for is still in it.
+   */
+  it('is a notice, so the template still runs and everything else is still reported', () => {
+    const a = analyze(wide(12, true), ctx);
+    expect(a.ok).toBe(true);
+    expect(a.classes).not.toBeNull();
+    expect(a.work.classVectors).not.toBeNull();
+    expect(a.work.rawRatios).not.toBeNull();
+  });
+
+  it('never declines for a template that draws nothing, however wide', () => {
+    const a = analyze(
+      templateOf(
+        Array.from({ length: 12 }, (_, at) => line(`l${at}`, LEVELS[at]!, 0, 13)),
+        ['1x level 1 monster'],
+      ),
+      ctx,
+    );
+    expect(codes(a.issues)).not.toContain('work-not-counted');
+    expect(a.work.hands).not.toBeNull();
   });
 });

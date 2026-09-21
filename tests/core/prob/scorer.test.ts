@@ -9,12 +9,15 @@ import {
   compareScores,
   createBlendScorer,
   createScorer,
+  createScorers,
   scoreBlend,
 } from '../../../src/core/prob/scorer';
 import { same } from '../../helpers/assert';
 // The multiplicative formula and plain listing: the routes the engine does not take.
 import { choose, combinations } from '../../helpers/combinatorics';
 import { satisfiesAnyFlat, satisfiesFlat, satisfiesTree } from '../../helpers/criteria-oracle';
+import { estimate as estimateDraws, exhaustive } from '../../helpers/draw-oracle';
+import { bit, drawProblem, withoutDraws } from '../../helpers/draw-problem';
 import { genClassProblem, genCriterion, genMask } from '../../helpers/gen-class-problem';
 import {
   columnOf,
@@ -52,6 +55,13 @@ function problemOf(
 
 const A = 0b010;
 const B = 0b100;
+
+/** `1x` of the classes in `mask` — the shortest criterion there is. */
+const drawNeeds = (mask: number, over: Partial<CompiledCriterion> = {}): CompiledCriterion => ({
+  slots: [mask],
+  limits: [],
+  ...over,
+});
 
 /**
  * An UNWEIGHTED score: the weighted numerator and the plain success count are
@@ -495,9 +505,11 @@ describe('compareScores', () => {
   });
 
   it('refuses to compare scores of different shapes', () => {
-    expect(() => compareScores(single(1), blendOf([1, 1]))).toThrow(/same hand sizes and weights/);
+    expect(() => compareScores(single(1), blendOf([1, 1]))).toThrow(
+      /same hand sizes, weights and prefix lengths/,
+    );
     expect(() => compareScores(blendOf([1, 1], [1, 1]), blendOf([1, 1], [1, 2]))).toThrow(
-      /same hand sizes and weights/,
+      /same hand sizes, weights and prefix lengths/,
     );
   });
 
@@ -1596,5 +1608,422 @@ describe('the sixth card against exhaustive enumeration of every outcome', () =>
             `exact ${p} outside the 95% interval [${ci95[0]}, ${ci95[1]}] for problem ${i}: ${JSON.stringify(g.problem)}`,
           );
       });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Draw cards (PRD §5.7)
+// ---------------------------------------------------------------------------
+
+/**
+ * A hand is then a PREFIX of the shuffled deck, so a hand size has one part per
+ * length its draw cards can reach and the score is their sum. Everything below
+ * is held against oracles that share no code with the exact route: `exhaustive`
+ * walks every distinct class order of the deck and plays it out, which is
+ * CERTAIN for a small deck, and `estimate` shuffles.
+ *
+ * The procedure both sides model is ONE decision, taken before any card is
+ * drawn: if a `stop` criterion is met by the opening the player stops there and
+ * the OPENING is valued; otherwise every draw card resolves and the hand that is
+ * left is valued. Never a maximum over the two, and the `stop` flag decides the
+ * window rather than which criteria may be read.
+ */
+describe('createScorers', () => {
+  const H = 2;
+  /** The exact score, and the certain oracle's, of one small draw problem. */
+  const both = (problem: Problem, n: number[], hand = H) => ({
+    exact: createBlendScorer(problem).score(n),
+    certain: exhaustive(problem, n, hand),
+  });
+
+  it('is one scorer per hand size without draw cards, as it always was', () => {
+    const plain = drawProblem({ n: [5, 3], H, criteria: [drawNeeds(bit(1))] });
+    const scorers = createScorers(plain, H);
+    expect(scorers).toHaveLength(1);
+    expect(scorers[0]!.prefix).toBeUndefined();
+    expect(scorers[0]!.groups).toBe(1);
+  });
+
+  it('sends a draw problem to `createScorers`, and says so, rather than score one part of it', () => {
+    const problem = drawProblem({
+      n: [4, 2, 2],
+      H,
+      draw: { 1: { n: 2 } },
+      criteria: [drawNeeds(bit(2))],
+    });
+    expect(() => createScorer(problem, H)).toThrow(/createScorers/);
+    expect(createScorers(problem, H).map((scorer) => scorer.prefix)).toEqual([2, 4, 6]);
+  });
+
+  describe('against the certain oracle', () => {
+    const cases: [string, Problem, number[]][] = [
+      [
+        'one draw class',
+        drawProblem({ n: [4, 2, 2], H, draw: { 1: { n: 2 } }, criteria: [drawNeeds(bit(2))] }),
+        [4, 2, 2],
+      ],
+      [
+        'once-per-turn: the further copies sit in hand and are judged like any card',
+        drawProblem({
+          n: [4, 2, 2],
+          H,
+          draw: { 1: { n: 2, oncePerTurn: true } },
+          criteria: [drawNeeds(bit(1) | bit(2))],
+        }),
+        [4, 2, 2],
+      ],
+      [
+        'a ceiling, which a drawn card can break',
+        drawProblem({
+          n: [3, 2, 3],
+          H,
+          draw: { 1: { n: 2 } },
+          criteria: [{ slots: [bit(2)], limits: [], reqs: [{ mask: bit(2), min: 1, max: 1 }] }],
+        }),
+        [3, 2, 3],
+      ],
+      [
+        'a limit, which is a census over the whole hand',
+        drawProblem({
+          n: [2, 2, 3, 2],
+          H,
+          draw: { 1: { n: 2 } },
+          criteria: [{ slots: [bit(2)], limits: [{ mask: bit(3), n: 0 }] }],
+        }),
+        [2, 2, 3, 2],
+      ],
+      [
+        'weighted: the highest weight among the criteria met',
+        drawProblem({
+          n: [3, 2, 3],
+          H,
+          draw: { 1: { n: 2 } },
+          criteria: [
+            { slots: [bit(2), bit(2)], limits: [], weight: 5 },
+            { slots: [bit(2)], limits: [], weight: 1 },
+          ],
+        }),
+        [3, 2, 3],
+      ],
+      [
+        'two draw classes, one of them once-per-turn',
+        drawProblem({
+          n: [4, 2, 2, 2],
+          H,
+          draw: { 1: { n: 2, oncePerTurn: true }, 2: { n: 1 } },
+          criteria: [drawNeeds(bit(3))],
+        }),
+        [4, 2, 2, 2],
+      ],
+      [
+        'stopping on a ceiling drawing would break, else drawing for two',
+        drawProblem({
+          n: [3, 2, 3],
+          H,
+          draw: { 1: { n: 2 } },
+          criteria: [
+            {
+              slots: [bit(2)],
+              limits: [],
+              reqs: [{ mask: bit(2), min: 1, max: 1 }],
+              stop: true,
+            },
+            { slots: [bit(2), bit(2)], limits: [] },
+          ],
+        }),
+        [3, 2, 3],
+      ],
+      [
+        'stopping and WEIGHTED: one window, decided before anything is drawn',
+        drawProblem({
+          n: [2, 2, 3],
+          H,
+          draw: { 1: { n: 2, oncePerTurn: true } },
+          criteria: [
+            { slots: [bit(1)], limits: [], weight: 3, stop: true },
+            { slots: [bit(2), bit(2)], limits: [], weight: 4 },
+          ],
+        }),
+        [2, 2, 3],
+      ],
+      [
+        // The stop TEST reads only the criteria the player would stop for. An
+        // opening that meets a criterion they would NOT stop for keeps drawing
+        // — and may draw itself out of that very criterion.
+        'a ceiling met by the opening that the player would NOT stop for: they draw anyway',
+        drawProblem({
+          n: [2, 2, 2, 2],
+          H,
+          draw: { 1: { n: 2 } },
+          criteria: [
+            { slots: [bit(3)], limits: [], stop: true },
+            { slots: [bit(2)], limits: [], reqs: [{ mask: bit(2), min: 1, max: 1 }] },
+          ],
+        }),
+        [2, 2, 2, 2],
+      ],
+      [
+        'a stop criterion is still judged after the draws when nothing stopped them',
+        drawProblem({
+          n: [3, 2, 3],
+          H,
+          draw: { 1: { n: 2 } },
+          // The ONLY criterion is one the player would stop for. A hand whose
+          // opening misses it still draws, and can still meet it afterwards.
+          criteria: [{ slots: [bit(2), bit(2)], limits: [], stop: true }],
+        }),
+        [3, 2, 3],
+      ],
+    ];
+
+    it.each(cases)('agrees exactly: %s', (_label, problem, n) => {
+      const { exact, certain } = both(problem, n);
+      expect(exact.pDisplay).toBeCloseTo(certain.weight, 12);
+    });
+
+    it.each(cases)('agrees on P(success) too: %s', (_label, problem, n) => {
+      const { exact, certain } = both(problem, n);
+      const p = exact.parts.reduce((sum, part) => sum + part.successNum / part.den, 0);
+      expect(p).toBeCloseTo(certain.p, 12);
+    });
+
+    it.each(cases)('reaches exactly the lengths the process reaches: %s', (_label, problem, n) => {
+      const { exact, certain } = both(problem, n);
+      // A part with no mass is still a part; the oracle only ever sees lengths
+      // it reaches, so the engine's lengths must include all of the oracle's.
+      const reached = exact.parts.map((part) => part.prefix);
+      for (const length of certain.lengths.keys()) expect(reached).toContain(length);
+    });
+  });
+
+  /**
+   * WHAT THE STOP FLAG DOES AND DOES NOT DO. Three claims, and the first two are
+   * the ones the name invites a reader to get backwards.
+   */
+  describe('the stop flag', () => {
+    const ceiling = (over: { stop?: true } = {}): CompiledCriterion => ({
+      slots: [bit(2)],
+      limits: [],
+      reqs: [{ mask: bit(2), min: 1, max: 2 }],
+      ...over,
+    });
+    const n = [25, 3, 12];
+    const max = [25, 3, 12];
+    const of = (criteria: CompiledCriterion[], draws = true) =>
+      createBlendScorer(
+        drawProblem({
+          n,
+          max,
+          H: 5,
+          criteria,
+          ...(draws ? { draw: { 1: { n: 2 } } } : {}),
+        }),
+      ).score(n);
+
+    /**
+     * WITHOUT DRAW CARDS IT DOES NOTHING. The two windows are the same hand, so
+     * whichever branch the stop decision lands on it values the same cards —
+     * which is why a template written before draw cards existed is untouched by
+     * any of this, whatever its flags happen to say.
+     */
+    it('changes nothing at all without draw cards', () => {
+      const off = of([ceiling()], false);
+      const on = of([ceiling({ stop: true })], false);
+      expect(on.parts).toHaveLength(1);
+      expect(on.parts[0]!.num).toBe(off.parts[0]!.num);
+      expect(on.parts[0]!.den).toBe(off.parts[0]!.den);
+      expect(on.pDisplay).toBe(off.pDisplay);
+      expect(on.pDisplay).toBeCloseTo(0.701991465149, 12);
+    });
+
+    /**
+     * MARKING EVERY CRITERION `stop` IS NOT THE NO-DRAW PROBLEM. The player
+     * still draws when the opening meets nothing — so the answer DOMINATES both
+     * the no-draw number and the number where nothing stops. That union is
+     * optimal stopping, and it is the whole point of the flag.
+     */
+    it('dominates both the no-draw answer and the draw-everything answer', () => {
+      const noDraw = of([ceiling()], false).pDisplay;
+      const alwaysDraws = of([ceiling()]).pDisplay;
+      const stops = of([ceiling({ stop: true })]).pDisplay;
+      expect(stops).toBeGreaterThan(noDraw);
+      expect(stops).toBeGreaterThan(alwaysDraws);
+      // And it is still a probability: stopping cannot manufacture mass.
+      expect(stops).toBeLessThanOrEqual(1);
+    });
+
+    it('still reads the prefix when every criterion would stop: the parts are the lengths', () => {
+      const stops = of([ceiling({ stop: true })]);
+      expect(stops.parts.map((part) => part.prefix)).toEqual([5, 7, 9, 11]);
+    });
+
+    /**
+     * IT DECIDES THE WINDOW, NOT ELIGIBILITY. In the stop branch every criterion
+     * counts towards the weight, the ones left alone included — so a hand that
+     * stopped on a cheap criterion is still worth the expensive one it also
+     * happens to meet.
+     */
+    it('counts every criterion in the window it lands on, weights included', () => {
+      const cheapStop: CompiledCriterion = { slots: [bit(1)], limits: [], weight: 1, stop: true };
+      const dear: CompiledCriterion = { slots: [bit(1), bit(2)], limits: [], weight: 9 };
+      const problem = drawProblem({
+        n: [2, 2, 2],
+        H: 2,
+        draw: { 1: { n: 2 } },
+        criteria: [cheapStop, dear],
+      });
+      const exact = createBlendScorer(problem).score([2, 2, 2]);
+      const certain = exhaustive(problem, [2, 2, 2], 2);
+      expect(exact.pDisplay).toBeCloseTo(certain.weight, 12);
+      // An opening of one draw card and one starter stops (the cheap criterion
+      // is met) AND meets the dear one, so such a hand is worth 9, not 1 — which
+      // a score that valued only the stopping criterion could never reach.
+      expect(exact.pDisplay).toBeGreaterThan(1);
+    });
+  });
+
+  /**
+   * MORE CARDS CAN BE WORSE. A limit is a census over the whole hand and a
+   * ceiling makes a surplus card fatal, so drawing into one turns a hand that
+   * worked into one that does not — monotonically in the copies held.
+   */
+  it('scores a ceiling LOWER the more copies of the draw card the deck holds', () => {
+    const exactlyOne: CompiledCriterion = {
+      slots: [bit(2)],
+      limits: [],
+      reqs: [{ mask: bit(2), min: 1, max: 1 }],
+    };
+    const scores = [0, 1, 2, 3].map((pots) => {
+      const problem = drawProblem({
+        n: [40 - pots - 12, pots, 12],
+        max: [40, 3, 12],
+        H: 5,
+        deckSize: 40,
+        ...(pots === 0 ? {} : { draw: { 1: { n: 2 } } }),
+        criteria: [exactlyOne],
+      });
+      return createBlendScorer(problem).score([40 - pots - 12, pots, 12]).pDisplay;
+    });
+    expect(scores[0]).toBeCloseTo(0.3734, 4);
+    for (let at = 1; at < scores.length; at++) expect(scores[at]!).toBeLessThan(scores[at - 1]!);
+  });
+
+  /**
+   * `pDisplay` divides by the total weight of the HAND SIZES, not of the parts.
+   * Dividing by the parts would report the score divided by the number of prefix
+   * lengths — a wrong number under a correct ranking, which is the worst place
+   * for a bug to sit.
+   */
+  it('reports the whole score, not the score divided by the number of lengths', () => {
+    const everyHand: CompiledCriterion = { slots: [], limits: [] };
+    const problem = drawProblem({ n: [4, 2], H: 2, draw: { 1: { n: 2 } }, criteria: [everyHand] });
+    const score = createBlendScorer(problem).score([4, 2]);
+    expect(score.parts.length).toBeGreaterThan(1);
+    expect(score.pDisplay).toBeCloseTo(1, 12);
+  });
+
+  it('agrees with Monte Carlo on a deck too large to walk', () => {
+    const n = [22, 3, 15];
+    const problem = drawProblem({
+      n,
+      max: [25, 3, 15],
+      H: 5,
+      deckSize: 40,
+      draw: { 1: { n: 2 } },
+      criteria: [
+        { slots: [bit(2)], limits: [], reqs: [{ mask: bit(2), min: 1, max: 2 }], stop: true },
+        { slots: [bit(2), bit(2)], limits: [] },
+      ],
+    });
+    const exact = createBlendScorer(problem).score(n);
+    const p = exact.parts.reduce((sum, part) => sum + part.successNum / part.den, 0);
+    const sampled = estimateDraws(problem, n, 5, { samples: 400_000, seed: 20250920 });
+    // Five sigma of a 400,000-sample estimate is under half a percentage point.
+    expect(Math.abs(sampled.p - p)).toBeLessThan(5 * sampled.stderr);
+  });
+
+  /**
+   * A criterion may ask for MORE cards than the opening hand holds, and a hand
+   * the draw cards have filled can meet it. The matcher builds its subset
+   * conditions up to the largest hand rather than the largest opening, and this
+   * is the test that needs it to.
+   */
+  it('meets a criterion of more slots than the opening hand holds', () => {
+    // H = 2, one copy of a draw-3: the prefix reaches 5 and the hand 4.
+    const problem = drawProblem({
+      n: [1, 1, 6],
+      max: [1, 1, 6],
+      H: 2,
+      deckSize: 8,
+      draw: { 1: { n: 3 } },
+      criteria: [{ slots: [bit(2), bit(2), bit(2), bit(2)], limits: [] }],
+    });
+    const score = createBlendScorer(problem).score([1, 1, 6]);
+    const certain = exhaustive(problem, [1, 1, 6], 2);
+    expect(certain.p).toBeGreaterThan(0);
+    expect(score.pDisplay).toBeCloseTo(certain.weight, 12);
+  });
+
+  describe('compareScores', () => {
+    const problem = drawProblem({
+      n: [4, 2, 2],
+      max: [8, 2, 2],
+      H: 2,
+      deckSize: 8,
+      draw: { 1: { n: 2 } },
+      criteria: [drawNeeds(bit(2))],
+    });
+
+    it('orders two decks of one draw problem, and a tie is a true tie', () => {
+      const blend = createBlendScorer(problem);
+      const few = blend.score([6, 2, 0]);
+      const many = blend.score([4, 2, 2]);
+      expect(compareScores(many, few)).toBe(1);
+      expect(compareScores(few, many)).toBe(-1);
+      expect(compareScores(many, blend.score([4, 2, 2]))).toBe(0);
+    });
+
+    it('refuses a score of another shape, the prefix lengths included', () => {
+      const drawn = createBlendScorer(problem).score([4, 2, 2]);
+      const inert = createBlendScorer(withoutDraws(problem)).score([4, 2, 2]);
+      expect(() => compareScores(drawn, inert)).toThrow(/prefix lengths/);
+    });
+
+    /**
+     * The part COUNT can agree while the lengths do not — one copy of a draw-2
+     * reaches 2 and 4, one copy of a draw-3 reaches 2 and 5 — and then only the
+     * prefix tells the two shapes apart. A comparison position by position
+     * would answer confidently about two different questions.
+     */
+    it('refuses two shapes of the same number of parts whose lengths differ', () => {
+      const shapeOf = (n: number) =>
+        createBlendScorer(
+          drawProblem({
+            n: [5, 1, 2],
+            max: [8, 1, 2],
+            H: 2,
+            deckSize: 8,
+            draw: { 1: { n } },
+            criteria: [drawNeeds(bit(2))],
+          }),
+        ).score([5, 1, 2]);
+      const two = shapeOf(2);
+      const three = shapeOf(3);
+      expect(two.parts.map((part) => part.prefix)).toEqual([2, 4]);
+      expect(three.parts.map((part) => part.prefix)).toEqual([2, 5]);
+      expect(() => compareScores(two, three)).toThrow(/prefix lengths/);
+    });
+  });
+
+  it('refuses a deck outside the class ranges: the set was enumerated within them', () => {
+    const problem = drawProblem({
+      n: [4, 2, 2],
+      max: [8, 2, 2],
+      H: 2,
+      deckSize: 8,
+      draw: { 1: { n: 2 } },
+      criteria: [drawNeeds(bit(2))],
+    });
+    expect(() => createBlendScorer(problem).score([3, 3, 2])).toThrow(/outside its range/);
   });
 });

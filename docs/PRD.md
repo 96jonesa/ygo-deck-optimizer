@@ -195,6 +195,32 @@ Weights are a ratio of positive integers, so the 50/50 default is $`1 : 1`$ and 
   - a **sweep view**: $`P`$ against copies of one chosen line (others re-optimized, or held fixed) — the direct answer to "how many copies of X?".
 - Long runs report progress (done / total, percent, elapsed, ETA) and are cancellable; the CLI harness prints the same to stderr.
 
+### 5.7 Draw cards
+
+Requested by Andy, 2026-09-20. A line may be marked a **draw card**: drawn, it is replaced by $`n > 0`$ further drawn cards, optionally **once-per-turn** so only the first copy draws and the rest sit in hand. Draw cards drawn by draw cards draw in turn, and the criteria judge whatever hand you end with. Pot of Greed takes five cards to six; Upstart Goblin keeps five but digs one deeper.
+
+**There is one decision, taken before anything is drawn**: either nothing is activated, or everything resolves. There is no choosing card by card — that is a decision tree rather than a question with an answer, and it is the simplification that makes this exact rather than approximate.
+
+Each criterion carries **"stop here"**, off by default. Unchecked means *"I would stop for this"*; checked means *"I am willing to lose this by drawing."*
+
+```
+look at your opening hand
+  does it already meet something you would stop for?
+    yes -> stop. the hand is worth the best of everything it meets
+    no  -> activate everything. the hand is worth the best of
+           everything the bigger hand meets — and nothing, if
+           drawing broke what you had
+```
+
+The flag picks **the moment, not the criteria**: whichever way you stopped or drew, every criterion is then judged on the hand you have.
+
+**Two things this model will tell you that look wrong and are not**, both of which the app says on screen rather than leaving to be discovered:
+
+- **Drawing can lower your odds.** A limit counts the whole hand and a range's ceiling makes a surplus card fatal, so more cards is more ways to break both — `1-1x starter` measures 0.3734 with the Pot inert and 0.3181 with it live, falling further with each copy. Marking the criterion "stop here" is the answer, and is why the flag exists.
+- **A drawing template's number is a floor, not a forecast.** A real player holding two Pots could activate one, see the hand is fine, and keep the other; this model resolves both. So careful play does at least as well as the number, and sometimes better.
+
+`then` (§5.5) cannot be combined with draw cards yet, and the app refuses it rather than answering approximately.
+
 ## 6. Template semantics (decision D1 — resolved)
 
 ### 6.1 The rule: disjoint lines, known exactly to their stated specificity

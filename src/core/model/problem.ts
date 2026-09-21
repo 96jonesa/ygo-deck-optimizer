@@ -12,14 +12,92 @@ import { choose } from '../prob/binomial';
 export const MAX_CLASSES = 30;
 
 /**
- * The largest deck and hand the engine scores. Exactness rests on them (TDD
- * §10.3): every numerator is at most C(60, 6) = 50,063,860, far below 2^53.
+ * The largest deck and OPENING hand the engine scores. Exactness rests on them
+ * (TDD §10.3): every numerator is at most C(60, 6) = 50,063,860, far below
+ * 2^53. With DRAW CARDS the hand grows past `MAX_HAND_SIZE` — `MAX_PREFIX` and
+ * `MAX_HAND` below are the bounds that then apply.
  */
 export const MAX_DECK_SIZE = 60;
 export const MAX_HAND_SIZE = 6;
 
+/**
+ * The longest PREFIX of the deck a hand may reach through draw cards
+ * (`longestPrefix`), in the `MAX_CLASSES` style: past it the template is an
+ * error rather than a slow run.
+ *
+ * The justification is BUILD TIME alone. `analyze` rebuilds the success set on
+ * every keystroke, and the enumeration grows with the prefix: at ten classes a
+ * prefix of 16 stays under ~50 ms, where 23 costs 254 ms and 29 costs 705 ms.
+ * It is NOT an exactness frontier — C(60, 16) = 149,608,375,854,525 is a long
+ * way below 2^53, and `createScorer` checks the exactness of what it actually
+ * builds rather than trusting a length.
+ */
+export const MAX_PREFIX = 16;
+
+/**
+ * The largest HAND the engine judges: the prefix less the copies that resolved
+ * and left it (`largestHand`). It bounds the requirement slots a criterion may
+ * ask for, and so the `2^slots` subset tables the matcher builds — 4,096
+ * entries per alternative at this size. Three copies of a card that draws three
+ * reach 11 from a hand of five and 12 from a hand of six, so it is the largest
+ * hand any ordinary draw card builds; a card that drew ten at once would be
+ * refused here rather than allocate for it.
+ */
+export const MAX_HAND = 12;
+
+/**
+ * The compositions `drawSet` will visit before the engine refuses to build at
+ * all (`drawWork`), at roughly 200–400 ms a million: about five seconds.
+ *
+ * It is a SECOND bound and not a restatement of `MAX_PREFIX`, which is the
+ * mistake this constant exists to correct. The prefix bounds how DEEP the
+ * enumeration reads; the cost is that depth spread over the CLASSES, and with a
+ * stop criterion over the openings too. Three copies of Pot of Greed at fifteen
+ * classes reach a prefix of 11 — comfortably inside `MAX_PREFIX` — and with a
+ * stop criterion cost 22 million visits, where eighteen classes cost 88 million
+ * and three draw-3 lines cost 2.6 BILLION. A cap on the prefix alone lets every
+ * one of those through.
+ *
+ * A run pays this once and then scores millions of decks against it, so five
+ * seconds is affordable there. What is NOT affordable is paying it on a
+ * keystroke: `analyze` has its own, far lower bound (`ANALYZE_DRAW_WORK`) past
+ * which it declines to build rather than freeze the editor.
+ */
+export const MAX_DRAW_WORK = 25_000_000;
+
 /** Bit 0: the blank class, which fills no requirement and counts against no limit. */
 export const BLANK_BIT = 1;
+
+/**
+ * A class whose cards DRAW (PRD §5.7): a copy that RESOLVES leaves the hand and
+ * is replaced by `n` cards off the top of the deck. Cards so drawn draw in
+ * turn, so the hand is a PREFIX of a shuffled deck whose length is the least
+ * fixed point of `ℓ = H + draws(first ℓ)` — not a fixed number of cards. A draw
+ * card ALWAYS resolves once the player commits; whether an opening hand that
+ * already works commits at all is the criteria's own `stop`.
+ */
+export interface DrawSpec {
+  /**
+   * How many cards one resolved copy draws: a positive whole number.
+   *
+   * A DELIBERATE SIMPLIFICATION, and the one most likely to be mistaken for a
+   * bug: there is ONE decision point, before any card is drawn. Either no draws
+   * at all, or every draw card in the prefix resolves — bounded only by
+   * `oncePerTurn`. A player holding two Pots could activate the first, see the
+   * hand is now fine and keep the second; the model resolves both. So for a
+   * template that draws, **the number is a LOWER bound on careful play**, and
+   * marking a criterion `stop` is the only escape hatch the model offers.
+   * Anything finer would be a decision tree, where this is a single fraction.
+   */
+  n: number;
+  /**
+   * Only the FIRST copy resolves; further copies sit in the hand unactivated,
+   * and are judged like any other card. It is a property of the CARD and not of
+   * the class, which is why two once-per-turn lines never share a class
+   * (`compileProblem`): each names its own card and each gets its own once.
+   */
+  oncePerTurn?: true;
+}
 
 export interface ClassInfo {
   /** The template lines merged into this class; the blank class may have none. */
@@ -27,6 +105,231 @@ export interface ClassInfo {
   /** The range of the class TOTAL: the sum of its lines' ranges. */
   min: number;
   max: number;
+  /** Set when the class's cards DRAW (PRD §5.7); absent is every class the engine had before. */
+  draw?: DrawSpec;
+}
+
+/** One draw class with what bounds its copies: all the prefix arithmetic reads. */
+export interface DrawClass extends DrawSpec {
+  cls: number;
+  /** The class's `max`: the most copies any deck of the template can hold. */
+  max: number;
+}
+
+/** The draw classes of a problem, ascending; empty for every problem without them. */
+export function drawClassesOf(classes: readonly ClassInfo[]): DrawClass[] {
+  return classes.flatMap(({ draw, max }, cls) =>
+    draw === undefined ? [] : [{ cls, max, ...draw }],
+  );
+}
+
+/**
+ * Copies of one draw class that RESOLVE when a prefix holds `held` of them:
+ * all of them, or one when the card is once-per-turn.
+ */
+export function copiesUsed(held: number, { oncePerTurn }: DrawSpec): number {
+  return oncePerTurn === true ? Math.min(held, 1) : held;
+}
+
+/** The cards the draw cards of a prefix ask for: `Σ n_c · used_c`. */
+export function drawsOf(held: ArrayLike<number>, draws: readonly DrawClass[]): number {
+  let sum = 0;
+  for (const spec of draws) sum += spec.n * copiesUsed(held[spec.cls] ?? 0, spec);
+  return sum;
+}
+
+/**
+ * THE LONGEST PREFIX: `H + Σ n_c · (oncePerTurn ? 1 : max_c)`. It drives
+ * `C(N, ℓ)`, the enumeration and the cost — and it is NOT the largest hand.
+ * Three copies of Pot of Greed reach a prefix of 11 from a hand of five, and a
+ * hand of 8; three Upstart Goblins reach a prefix of 8 and a hand of 5.
+ */
+export function longestPrefix(H: number, draws: readonly DrawClass[]): number {
+  let out = H;
+  for (const spec of draws) out += spec.n * (spec.oncePerTurn === true ? 1 : spec.max);
+  return out;
+}
+
+/**
+ * THE LARGEST HAND: the prefix less the copies that resolved and left it,
+ * `H + Σ (n_c − 1) · (oncePerTurn ? 1 : max_c)`. It drives the requirement
+ * slots, `MAX_HAND` and `expand`'s `maxHandSize` — everything about what a
+ * criterion may ASK, where `longestPrefix` drives what a score COSTS.
+ */
+export function largestHand(H: number, draws: readonly DrawClass[]): number {
+  let out = H;
+  for (const spec of draws) out += (spec.n - 1) * (spec.oncePerTurn === true ? 1 : spec.max);
+  return out;
+}
+
+/**
+ * THE COMPOSITIONS `drawSet` WOULD VISIT, counted without visiting them — the
+ * cost of a BUILD, known before paying it.
+ *
+ * It exists because `MAX_PREFIX` does not bound the build. The prefix bounds
+ * how DEEP the enumeration reads; the cost is that depth spread over the
+ * CLASSES, and with a stop criterion over the openings as well. Three copies of
+ * Pot of Greed at fifteen classes reach a prefix of 11 — comfortably inside
+ * `MAX_PREFIX` — and with a stop criterion take 6.5 seconds to build. `analyze`
+ * runs on every edit, in the main process, synchronously: that is not a slow
+ * editor but a frozen application, so it is refused rather than attempted.
+ *
+ * Counted EXACTLY, by the recursion `drawSet` itself walks with the inner
+ * composition replaced by a count of it: a few thousand operations, whatever
+ * the answer, so asking is always cheap even when the answer is "far too much".
+ *
+ * It lives HERE rather than beside the recursion it mirrors, so that
+ * `problem.ts` and `draw-set.ts` do not import each other — and because two
+ * copies of one recursion is how they drift, a test counts the visits of the
+ * real enumeration and holds this equal to them.
+ */
+export function drawWork(problem: Problem, H: number): number {
+  const draws = drawClassesOf(problem.classes);
+  if (draws.length === 0) return 0;
+  const classCount = problem.classes.length;
+  const longest = longestPrefix(H, draws);
+  const rest: number[] = [];
+  for (let cls = 0; cls < classCount; cls++)
+    if (draws.every((spec) => spec.cls !== cls)) rest.push(cls);
+  const capOf = rest.map((cls) => Math.min(problem.classes[cls]!.max, longest));
+  const stopping = problem.criteria.some(({ stop }) => stop === true);
+
+  /** The ways to give `total` cards to the non-draw classes within their maxima. */
+  const spread = new Map<number, number>();
+  const spreadOf = (total: number): number => {
+    const known = spread.get(total);
+    if (known !== undefined) return known;
+    let ways = new Float64Array(total + 1);
+    ways[0] = 1;
+    for (const cap of capOf) {
+      const next = new Float64Array(total + 1);
+      for (let had = 0; had <= total; had++) {
+        const from = ways[had]!;
+        if (from === 0) continue;
+        for (let take = 0; take <= cap && had + take <= total; take++) next[had + take]! += from;
+      }
+      ways = next;
+    }
+    const out = ways[total]!;
+    spread.set(total, out);
+    return out;
+  };
+
+  /** The (prefix, opening) PAIRS: the same spread, split into what was opened on. */
+  const pairs = new Map<string, number>();
+  const pairsOf = (opened: number, after: number): number => {
+    const key = `${opened},${after}`;
+    const known = pairs.get(key);
+    if (known !== undefined) return known;
+    const width = after + 1;
+    let ways = new Float64Array((opened + 1) * width);
+    ways[0] = 1;
+    for (const cap of capOf) {
+      const next = new Float64Array((opened + 1) * width);
+      for (let u = 0; u <= opened; u++)
+        for (let w = 0; w <= after; w++) {
+          const from = ways[u * width + w]!;
+          if (from === 0) continue;
+          for (let take = 0; take <= cap; take++)
+            for (let mine = 0; mine <= take; mine++) {
+              const toU = u + mine;
+              const toW = w + take - mine;
+              if (toU <= opened && toW <= after) next[toU * width + toW]! += from;
+            }
+        }
+      ways = next;
+    }
+    const out = ways[opened * width + after]!;
+    pairs.set(key, out);
+    return out;
+  };
+
+  let work = 0;
+  if (!stopping) {
+    const held = draws.map(() => 0);
+    const walk = (at: number, prefix: number): void => {
+      if (at === draws.length) {
+        const fillers = prefix - held.reduce((sum, count) => sum + count, 0);
+        if (fillers >= 0) work += spreadOf(fillers);
+        return;
+      }
+      const spec = draws[at]!;
+      for (let copies = 0; copies <= Math.min(spec.max, longest); copies++) {
+        held[at] = copies;
+        walk(at + 1, prefix + spec.n * copiesUsed(copies, spec));
+      }
+      held[at] = 0;
+    };
+    walk(0, H);
+    return work;
+  }
+
+  /**
+   * Whether the process can reach an extension at all — `splitFactor` would
+   * answer 0 otherwise, and `drawSet` skips such a split without composing
+   * anything, so counting it would over-state the build by a third.
+   *
+   * Decided GREEDILY rather than by the DP the factor uses: place the copies
+   * that add most to the budget first, since that maximises every prefix of the
+   * path at once, and a valid arrangement exists exactly when that one is valid.
+   */
+  const reachable = (
+    opened: readonly number[],
+    later: readonly number[],
+    fillersAfter: number,
+  ): boolean => {
+    const placed = later.map(() => 0);
+    let budget = H;
+    for (let i = 0; i < draws.length; i++)
+      budget += draws[i]!.n * copiesUsed(opened[i]!, draws[i]!);
+    const extension = fillersAfter + later.reduce((sum, count) => sum + count, 0);
+    for (let step = 0; step < extension; step++) {
+      if (budget <= H + step) return false;
+      // The next copy that adds most; a filler adds nothing and goes last.
+      let best = -1;
+      let gain = 0;
+      for (let i = 0; i < later.length; i++) {
+        if (placed[i]! >= later[i]!) continue;
+        const spec = draws[i]!;
+        const held = opened[i]! + placed[i]!;
+        const adds = spec.n * (copiesUsed(held + 1, spec) - copiesUsed(held, spec));
+        if (adds > gain || best < 0) {
+          best = i;
+          gain = adds;
+        }
+      }
+      if (best < 0) continue;
+      placed[best]!++;
+      budget += gain;
+    }
+    return true;
+  };
+
+  const a = draws.map(() => 0);
+  const b = draws.map(() => 0);
+  const walk = (at: number, prefix: number, inOpening: number): void => {
+    if (at === draws.length) {
+      if (inOpening > H) return;
+      const later = b.reduce((sum, count) => sum + count, 0);
+      const fillersAfter = prefix - H - later;
+      const fillersOpen = H - inOpening;
+      if (fillersAfter < 0 || fillersOpen < 0) return;
+      if (reachable(a, b, fillersAfter)) work += pairsOf(fillersOpen, fillersAfter);
+      return;
+    }
+    const spec = draws[at]!;
+    const cap = Math.min(spec.max, longest);
+    for (let opened = 0; opened <= cap; opened++)
+      for (let later = 0; later + opened <= cap; later++) {
+        a[at] = opened;
+        b[at] = later;
+        walk(at + 1, prefix + spec.n * copiesUsed(opened + later, spec), inOpening + opened);
+      }
+    a[at] = 0;
+    b[at] = 0;
+  };
+  walk(0, H, 0);
+  return work;
 }
 
 export interface CompiledLimit {
@@ -100,6 +403,40 @@ export interface CompiledCriterion {
    * pieces, and going first there is no sixth card to speak of.
    */
   sixth?: SixthCard;
+  /**
+   * A criterion the player would STOP for (PRD §5.7): if the OPENING hand
+   * already meets it, no draw card is activated at all. Absent is the default,
+   * and every criterion the engine had before draw cards.
+   *
+   * **It governs the stop DECISION and nothing else.** Whichever window that
+   * decision lands on, EVERY criterion of the problem is then judged in it — a
+   * criterion marked `stop` is not "a criterion that may only be read
+   * pre-draw", and one left alone is not barred from the opening. Read the two
+   * states as: unchecked (`stop`) is *"I would stop for this"*, and checked is
+   * *"I am willing to lose this by drawing"*.
+   *
+   * ONE DECISION POINT, taken before any card is drawn (`compileValuer`'s
+   * counterpart for prefixes, `drawSet`):
+   *
+   *     look at the opening H cards
+   *       any `stop` criterion met?
+   *         yes -> STOP. worth the best weight among ALL criteria the OPENING meets
+   *         no  -> DRAW every draw card. worth the best weight among ALL criteria
+   *                the POST-DRAW hand meets — 0 if drawing broke them, with no
+   *                falling back on what the opening would have been worth
+   *
+   * There is deliberately no MAXIMUM over the two windows and no per-card
+   * choice: the draw decision is *determined* by the opening, so exactly one
+   * window is ever in play. A criterion worth 5 that draws into a 2 scores 2. A
+   * hand that draws out of everything scores 0 even though its opening would
+   * have scored. That is what makes the value strategy-achievable rather than an
+   * upper bound with hindsight — and it is why the ordering factor exists at
+   * all, since the continuation is fixed once the player commits.
+   *
+   * Without draw cards the two windows are the same hand, so this changes
+   * nothing whichever way it is set — a fact a test pins.
+   */
+  stop?: true;
 }
 
 export interface HandSize {
@@ -251,11 +588,20 @@ export function validateProblem(problem: Problem): void {
     throw new RangeError(
       `a problem has at most ${MAX_CLASSES} classes, the blank class included, not ${classes.length}`,
     );
-  classes.forEach(({ min, max }, cls) => {
+  classes.forEach(({ min, max, draw }, cls) => {
     if (!isCount(min) || !isCount(max) || min > max)
       throw new RangeError(
         `class ${cls}: a range is 0 <= min <= max in whole cards, not ${min} to ${max}`,
       );
+    if (draw === undefined) return;
+    if (!Number.isInteger(draw.n) || draw.n < 1)
+      throw new RangeError(
+        `class ${cls}: a draw card draws a positive whole number of cards, not ${draw.n} — a card that draws nothing is not a draw card`,
+      );
+    // The blank class is the cards no criterion can see. A card that DRAWS is
+    // seen by every criterion at once, through the hand it builds.
+    if (cls === 0)
+      throw new RangeError('the blank class cannot draw: its cards are the ones nothing can see');
   });
 
   criteria.forEach(({ weight, sixth, ...part }, criterion) => {
@@ -272,8 +618,85 @@ export function validateProblem(problem: Problem): void {
     checkPart(sixth, classes.length, `criterion ${criterion}, the sixth card`);
   });
 
-  for (const hand of problem.handSizes)
-    checkWeightBound(deckSize, hand.H, maxCriterionWeight(problem), outcomesOf(hand));
+  const draws = drawClassesOf(classes);
+  const most = maxCriterionWeight(problem);
+  if (draws.length === 0) {
+    for (const hand of problem.handSizes)
+      checkWeightBound(deckSize, hand.H, most, outcomesOf(hand));
+    return;
+  }
+  for (const hand of problem.handSizes) checkDraws(problem, hand, draws, most);
+}
+
+/**
+ * A count as the reader needs it, in full. Rounding to millions here once said
+ * "25 million compositions to build, and the engine builds at most 25 million"
+ * — the same number twice, reading as a contradiction, and telling someone who
+ * must drop copies nothing about how many.
+ */
+const exactly = (value: number) => value.toLocaleString('en-US');
+
+/** `1.06×` just over a bound, `32×` well past it: both say how far, neither rounds to `1×`. */
+export function overBy(value: number, bound: number): string {
+  const times = value / bound;
+  return times >= 10 ? `${Math.round(times)}×` : `${times.toFixed(2)}×`;
+}
+
+/**
+ * What draw cards make of one hand size — the whole of the engine's refusal
+ * list for them, in the `MAX_CLASSES` style: an error where it enters, never a
+ * silently wrong probability.
+ */
+function checkDraws(
+  problem: Problem,
+  hand: HandSize,
+  draws: readonly DrawClass[],
+  maxWeight: number,
+): void {
+  const { deckSize, criteria } = problem;
+  const { H } = hand;
+  const where = `a hand of ${H}`;
+  // `then` (PRD §5.6) reads a set of `H` cards as `H` equally likely (opening,
+  // drawn) pairs. With draw cards it is not: a draw card has to land in the
+  // first `H` positions or it never resolves, so the card at position `H − 1`
+  // is biased towards them — measured at 0.3333 against the 0.2000 a uniform
+  // reading assumes. The two features are refused together rather than one of
+  // them quietly reading the other's sample space.
+  const split = criteria.findIndex(({ sixth }) => sixth !== undefined);
+  if (split >= 0)
+    throw new RangeError(
+      `criterion ${split} is about the card you draw, and this template has draw cards — \`then\` and draw cards cannot be judged together: the card you draw for turn is no longer one of six equally likely ones once a draw card has to be among the first ${H} to resolve`,
+    );
+  if (hand.drawn === true)
+    throw new RangeError(
+      `${where}: a hand whose last card is drawn separately cannot hold draw cards — the two read the same hand as two different sample spaces`,
+    );
+
+  const prefix = longestPrefix(H, draws);
+  // DECK-OUT, refused rather than modelled: the model would drop that mass
+  // rather than mis-count it, and refusing is what buys the standing invariant
+  // that the reachable prefixes carry probability exactly 1.
+  if (prefix > deckSize)
+    throw new RangeError(
+      `${where}: these draw cards can ask for ${prefix} cards from a deck of ${deckSize} — the deck would run out; hold fewer copies, or draw fewer cards`,
+    );
+  if (prefix > MAX_PREFIX)
+    throw new RangeError(
+      `${where}: these draw cards reach ${prefix} cards deep, and the engine scores at most ${MAX_PREFIX} — hold fewer copies of a draw card, or draw fewer cards`,
+    );
+  const work = drawWork(problem, H);
+  if (work > MAX_DRAW_WORK)
+    throw new RangeError(
+      `${where}: these draw cards would take ${exactly(work)} compositions to build, ${overBy(work, MAX_DRAW_WORK)} the ${exactly(MAX_DRAW_WORK)} the engine allows — hold fewer copies of a draw card, merge lines the criteria cannot tell apart, or drop a "stop here"`,
+    );
+  const largest = largestHand(H, draws);
+  if (largest > MAX_HAND)
+    throw new RangeError(
+      `${where}: these draw cards build a hand of up to ${largest} cards, and the engine judges at most ${MAX_HAND}`,
+    );
+  // The prefix, not the hand: a score sums over the ℓ-card prefixes, so
+  // `C(N, ℓ)` is what a numerator is bounded by.
+  checkWeightBound(deckSize, prefix, maxWeight, 1, 'prefix');
 }
 
 /** The slots, limits and ranges of one window: a whole hand, or the card drawn. */
@@ -315,12 +738,14 @@ export function checkWeightBound(
   H: number,
   maxWeight: number,
   outcomes = 1,
+  /** What `H` counts: the cards of a hand, or — with draw cards — of a prefix. */
+  what: 'hand' | 'prefix' = 'hand',
 ): void {
   const den = choose(deckSize, H) * outcomes;
   if (Number.isSafeInteger(maxWeight * den)) return;
   const drawn = outcomes === 1 ? '' : `${outcomes} × `;
   throw new RangeError(
-    `a weight of ${maxWeight} cannot be scored exactly at a hand of ${H}: the score would reach ${maxWeight} × ${drawn}C(${deckSize}, ${H}) = ${maxWeight} × ${den}, past 2^53 — the largest weight this deck and hand allow is ${Math.floor(Number.MAX_SAFE_INTEGER / den)}`,
+    `a weight of ${maxWeight} cannot be scored exactly at a ${what} of ${H}: the score would reach ${maxWeight} × ${drawn}C(${deckSize}, ${H}) = ${maxWeight} × ${den}, past 2^53 — the largest weight this deck and ${what} allow is ${Math.floor(Number.MAX_SAFE_INTEGER / den)}`,
   );
 }
 

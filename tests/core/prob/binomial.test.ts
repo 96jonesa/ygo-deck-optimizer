@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_DECK_SIZE, MAX_PREFIX } from '../../../src/core/model/problem';
 import { binomialTable, choose } from '../../../src/core/prob/binomial';
 // The multiplicative formula: a different route from the table's Pascal's rule.
 import { choose as chooseByProduct } from '../../helpers/combinatorics';
@@ -7,11 +8,18 @@ describe('binomialTable', () => {
   const table = binomialTable();
   const at = (n: number, r: number) => table.values[n * (table.maxR + 1) + r]!;
 
-  it('covers n up to 60 and r up to 6 by default, one row of maxR + 1 entries per n', () => {
-    expect(table.maxN).toBe(60);
-    expect(table.maxR).toBe(6);
+  it('covers the largest deck and the longest prefix by default, one row of maxR + 1 entries per n', () => {
+    expect(table.maxN).toBe(MAX_DECK_SIZE);
+    // Written out in `binomial.ts` rather than imported, to keep `problem.ts`
+    // and it from importing each other; this is the test that holds them equal.
+    expect(table.maxR).toBe(MAX_PREFIX);
     expect(table.values).toBeInstanceOf(Float64Array);
-    expect(table.values).toHaveLength(61 * 7);
+    expect(table.values).toHaveLength((MAX_DECK_SIZE + 1) * (MAX_PREFIX + 1));
+  });
+
+  it('holds the longest prefix of the largest deck as an exact integer', () => {
+    expect(at(60, 16)).toBe(149608375854525);
+    expect(Number.isSafeInteger(at(60, 16))).toBe(true);
   });
 
   it('pins the two denominators the app divides by', () => {
@@ -112,7 +120,7 @@ describe('choose', () => {
   it('throws outside its table rather than answer inexactly', () => {
     expect(() => choose(61, 3)).toThrow(RangeError);
     expect(() => choose(60, 30)).toThrow(RangeError);
-    expect(() => choose(20, 7)).toThrow(RangeError);
+    expect(() => choose(40, 17)).toThrow(RangeError);
     expect(() => choose(-1, 0)).toThrow(RangeError);
     expect(() => choose(10.5, 2)).toThrow(RangeError);
     expect(() => choose(10, 2.5)).toThrow(RangeError);

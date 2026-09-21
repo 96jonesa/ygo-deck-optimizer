@@ -16,7 +16,7 @@ import {
   nearMiss,
 } from '../desc/near-miss';
 import { echo, print } from '../desc/print';
-import { successSet } from '../prob/success-set';
+import { createScorers } from '../prob/scorer';
 import { type Count, countToNumber, toCount } from '../util/count';
 import {
   type CompileInput,
@@ -29,7 +29,15 @@ import {
   REMAINDER_ID,
 } from './compile';
 import { criterionMeaning, lineMeaning } from './meaning';
-import { type HandSize, MAX_DECK_SIZE, partProblem } from './problem';
+import {
+  type DrawSpec,
+  drawWork,
+  type HandSize,
+  largestHand,
+  MAX_DECK_SIZE,
+  overBy,
+  partProblem,
+} from './problem';
 import { achievableRange, countSums, type IntRange } from './ranges';
 import {
   type CriterionWhen,
@@ -44,6 +52,7 @@ import {
   partsOfMode,
   type RunMode,
   splitNeedsSecond,
+  stopsFor,
   type Template,
   whenOf,
 } from './template';
@@ -87,7 +96,10 @@ export type IssueCode =
   | 'deck-size'
   | 'hand-size'
   | 'no-criteria'
+  | 'drawing-can-fail'
+  | 'drawing-is-a-lower-bound'
   | 'subsumption-skipped'
+  | 'work-not-counted'
   | 'infeasible'
   | 'compile'
   | 'internal';
@@ -240,6 +252,12 @@ export interface CriterionAnalysis {
    * actually in force rather than one that is being ignored.
    */
   weight: number;
+  /**
+   * Whether the player would STOP for it (`stopsFor`): an opening hand that
+   * already meets it activates no draw card (PRD §5.7). False for every
+   * criterion of a template without draw cards, where there is nothing to stop.
+   */
+  stop: boolean;
   /** Whether the template's MODE judges it at all: false for a going-second criterion in a going-first run. */
   counted: boolean;
   parsed: ParsedText;
@@ -287,6 +305,8 @@ export interface ClassAnalysis {
   lines: string[];
   min: number;
   max: number;
+  /** What its cards DRAW (PRD §5.7); absent for every class that draws nothing. */
+  draw?: DrawSpec;
 }
 
 export interface ClassesAnalysis {
@@ -325,6 +345,27 @@ export interface CostModel {
 
 export const DEFAULT_COST: CostModel = { perVectorUs: 0.05, perTermNs: 6 };
 
+/** What one part of a run costs, per class vector: a hand size, or one prefix length of it. */
+export interface HandWork {
+  H: number;
+  part: Part;
+  weight: number;
+  terms: number;
+  complemented: boolean;
+  /**
+   * The PREFIX of the deck this part scores (PRD §5.7); absent without draw
+   * cards. A hand size then has one part per length its draw cards can reach,
+   * and the hand's score is their sum.
+   */
+  prefix?: number;
+  /**
+   * Rational groups combined per score: with draw cards, the ordering factors
+   * applied outside the float64 sums. It is a per-deck cost of its own that the
+   * term count cannot show — one multiply-add each — and 1 without them.
+   */
+  groups: number;
+}
+
 export interface WorkAnalysis {
   /**
    * Valid raw line ratios. A `Count`: a number up to 2^53, exact decimal
@@ -333,8 +374,8 @@ export interface WorkAnalysis {
   rawRatios: Count | null;
   /** Class-total vectors the optimizer would score; `null` when the template does not compile. */
   classVectors: Count | null;
-  /** Per part of the mode, the products summed per score: `createScorer(...).terms`. */
-  hands: { H: number; part: Part; weight: number; terms: number; complemented: boolean }[] | null;
+  /** Per part of the mode, the products summed per score: `createScorers(...)`' own. */
+  hands: HandWork[] | null;
   estimatedMs: number | null;
   cost: CostModel;
 }
@@ -343,7 +384,14 @@ export interface Analysis {
   /** No `error` anywhere: the template can be run. */
   ok: boolean;
   deckSize: number;
+  /** The OPENING hand: 5 going first, 6 going second. */
   handSize: number;
+  /**
+   * The largest hand the criteria are judged against: `handSize` without draw
+   * cards, and the hand they can build with them (PRD §5.7). It is what an
+   * alternative was dropped against, and what a ceiling can bind in.
+   */
+  judgedHand: number;
   /** What the run ranks by (`modeOf`): going first, going second, or their average. */
   mode: RunMode;
   /**
@@ -406,6 +454,25 @@ export const SAMPLE_SIZE = 5;
  * `analyze` stays fast on criteria that expand towards the cap of 256 each.
  */
 export const MAX_SUBSUMPTION_ALTERNATIVES = 128;
+
+/**
+ * The compositions (`drawWork`) past which `analyze` will NOT build a draw
+ * template's success set — with a notice, and nothing scored depends on it, for
+ * the reason `MAX_SUBSUMPTION_ALTERNATIVES` exists.
+ *
+ * `analyze` runs on every edit, SYNCHRONOUSLY IN THE MAIN PROCESS, so its cost
+ * is not a slow readout but a frozen application: the 150 ms debounce coalesces
+ * keystrokes and cannot cancel a build already under way. At roughly 200–400 ms
+ * a million this is some 300–450 ms in the worst case — sluggish, and the price
+ * of the feature — where three copies of Pot of Greed at twelve classes with a
+ * "stop here" would cost 800 ms and at fifteen classes 4.4 seconds.
+ *
+ * It is FAR below `MAX_DRAW_WORK`, deliberately: a RUN pays the build once and
+ * then scores millions of decks against it, so five seconds is affordable
+ * there. Only the per-keystroke call is not, so only the per-keystroke call
+ * declines. The template still runs.
+ */
+export const ANALYZE_DRAW_WORK = 1_500_000;
 
 const error = (code: IssueCode, message: string): Issue => ({ severity: 'error', code, message });
 const warning = (code: IssueCode, message: string): Issue => ({
@@ -500,6 +567,15 @@ function summarize(desc: Description, members: Groups, ctx: AnalyzeContext): Mat
 function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostModel): Analysis {
   const { deckSize } = template;
   const handSize = template.hand.size;
+  // The largest hand the criteria are held against (PRD §5.7). Without draw
+  // cards it IS the hand size, so nothing about a template that has none is
+  // read differently — and `compileProblem` is held to the same number.
+  const judgedHand = largestHand(
+    handSize,
+    template.lines.flatMap(({ draw, max }, at) =>
+      draw === undefined ? [] : [{ cls: at, max, ...draw }],
+    ),
+  );
   const mode = modeOf(template);
   const weighted = template.weighted === true;
   const parts = partsOfMode(mode);
@@ -785,6 +861,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       text: criterion.text,
       when,
       weight: weights[at]!,
+      stop: stopsFor(criterion),
       counted: parts.some((part) => countsFor(when, part)),
       parsed: { ok: true, canonical: '' },
       alternatives: [],
@@ -811,7 +888,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     // disagreeing about whether the template is runnable.
     if (result.expr.op === 'split' && when !== 'second')
       out.issues.push(error('sixth-card', splitNeedsSecond(when)));
-    const expanded = expand(result.expr, { maxHandSize: handSize });
+    const expanded = expand(result.expr, { maxHandSize: judgedHand });
     if (!expanded.ok) {
       out.issues.push(
         error(expanded.reason === 'sixth-card' ? 'sixth-card' : 'expansion-cap', expanded.message),
@@ -1022,7 +1099,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       out.issues.push(
         warning(
           'never-satisfiable',
-          `can never be met: every alternative needs more than the ${handSize} cards of a hand`,
+          `can never be met: every alternative needs more than the ${judgedHand} cards of a hand`,
         ),
       );
     } else if (unfilled.every((cols) => cols.length > 0)) {
@@ -1073,7 +1150,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     ? findSubsumed(
         owners.map((owner) => owner.flat),
         columnImplies,
-        handSize,
+        judgedHand,
       )
     : [];
   for (const [index, owner] of owners.entries()) {
@@ -1126,7 +1203,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
   if (resolves) {
     const all = expandAll(
       parsedCriteria.map((criterion) => criterion!.expr),
-      { maxHandSize: handSize },
+      { maxHandSize: judgedHand },
     );
     if (!all.ok)
       issues.push(error(all.reason === 'sixth-card' ? 'sixth-card' : 'expansion-cap', all.message));
@@ -1134,12 +1211,17 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       const input: CompileInput = {
         deckSize,
         handSize,
-        lines: rows.map((row) => ({
-          id: row.id,
-          isRemainder: row.isRemainder,
-          min: ranges[row.at]!.min,
-          max: row.isRemainder ? remainder.max : ranges[row.at]!.max,
-        })),
+        judgedHand,
+        lines: rows.map((row) => {
+          const draw = template.lines[row.at]?.draw;
+          return {
+            id: row.id,
+            isRemainder: row.isRemainder,
+            min: ranges[row.at]!.min,
+            max: row.isRemainder ? remainder.max : ranges[row.at]!.max,
+            ...(draw === undefined ? {} : { draw }),
+          };
+        }),
         matrix: rows.map((_, i) => columns.map((col) => col.fills[i]!)),
         // `compile`'s own, not a copy of it: the bounds — and now the weights —
         // cross this boundary once. An alternative several criteria produced is
@@ -1148,6 +1230,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
           all.flat,
           (desc) => columnAt(desc),
           (at) => all.sources[at]!.reduce((most, who) => Math.max(most, weights[who]!), 0),
+          (at) => all.sources[at]!.some((who) => stopsFor(template.criteria[who]!)),
         ),
         weighted,
       };
@@ -1169,10 +1252,11 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       if (!compiled.ok) issues.push(...compiled.errors.map((message) => error('compile', message)));
       else {
         classes = {
-          classes: compiled.problem.classes.map(({ lineIds, min, max }) => ({
+          classes: compiled.problem.classes.map(({ lineIds, min, max, draw }) => ({
             lines: lineIds,
             min,
             max,
+            ...(draw === undefined ? {} : { draw }),
           })),
           alternatives: compiled.problem.criteria.length,
           irrelevant: compiled.problem.classes[0]!.lineIds,
@@ -1190,24 +1274,85 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
             reason,
           })),
         };
+        const draws = compiled.problem.classes.some(({ draw }) => draw !== undefined);
+        // DRAWING CAN MAKE A HAND FAIL, and that has to be visible rather than
+        // merely true. A limit is a census over the whole hand and a ceiling
+        // makes a surplus card fatal, so more cards is not more chances: a
+        // template with both draw cards and one of those gets a lower number
+        // the more copies of the draw card it holds, monotonically. Nobody
+        // expects that, and the readout is where they find out.
+        //
+        // EVERY alternative counts here, `stop` ones included: the stop flag
+        // decides the window, not eligibility, so an alternative the player
+        // would stop for is still judged after the draws whenever nothing
+        // stopped them — and can still be broken by them there.
+        const censuses = compiled.problem.criteria.filter(
+          ({ limits, reqs }) => limits.length > 0 || reqs?.some(({ max }) => max !== null) === true,
+        ).length;
+        if (censuses > 0 && draws)
+          issues.push(
+            notice(
+              'drawing-can-fail',
+              `this template draws cards, and ${censuses === 1 ? 'one of its alternatives counts' : `${censuses} of its alternatives count`} the whole hand — a limit, or a requirement with a ceiling. Drawing more cards can then make a hand FAIL that would otherwise have succeeded, so holding more copies of a draw card can lower the score. Mark such a criterion "stop here" to keep the hands that already meet it: the opening is then checked first, and nothing is drawn when it does`,
+            ),
+          );
+        // THE NUMBER IS A LOWER BOUND on careful play, and that is the other
+        // thing a reader has to be told rather than left to infer. There is one
+        // decision point, before any card is drawn: either nothing is drawn, or
+        // every draw card resolves. A player holding two Pots could activate
+        // the first, see the hand is fine and keep the second — the model
+        // resolves both.
+        if (draws)
+          issues.push(
+            notice(
+              'drawing-is-a-lower-bound',
+              'a draw card here is either not activated at all or activated to the last copy: there is one decision, taken before anything is drawn, and no choice card by card. So this number is a LOWER bound on careful play — someone who stops halfway can do better, and marking a criterion "stop here" is the only part of that the model scores',
+            ),
+          );
         work.classVectors = toCount(countSums(compiled.problem.classes, deckSize));
-        work.hands = compiled.problem.handSizes.map((hand, at) => {
-          // Each part costs what ITS success set costs: the classes are the
-          // union's, but the hands that succeed are only its own criteria's.
-          const { count, complemented } = successSet(partProblem(compiled.problem, hand), hand.H);
-          return {
-            H: hand.H,
-            part: parts[at]!,
-            weight: hand.weight,
-            terms: count,
-            complemented,
-          };
-        });
-        const perVectorUs = work.hands.reduce(
-          (sum, { terms }) => sum + cost.perVectorUs + (cost.perTermNs / 1000) * terms,
+        const building = compiled.problem.handSizes.reduce(
+          (most, hand) => Math.max(most, drawWork(compiled.problem, hand.H)),
           0,
         );
-        work.estimatedMs = (countToNumber(work.classVectors) * perVectorUs) / 1000;
+        if (building > ANALYZE_DRAW_WORK)
+          issues.push(
+            notice(
+              'work-not-counted',
+              `these draw cards would take ${building.toLocaleString('en-US')} compositions to enumerate, ${overBy(building, ANALYZE_DRAW_WORK)} what an analysis will build — and an analysis runs on every edit, so the terms per score and the time estimate built on them are not counted here. The run itself is unaffected: it builds once and then scores every deck against it`,
+            ),
+          );
+        // Each part costs what ITS OWN success set costs: the classes are the
+        // union's, but the hands that succeed are only its own criteria's. With
+        // draw cards a hand size has a part per prefix length, and `createScorers`
+        // is the one thing that knows which lengths those are.
+        if (building <= ANALYZE_DRAW_WORK)
+          work.hands = compiled.problem.handSizes.flatMap((hand, at) =>
+            createScorers(partProblem(compiled.problem, hand), hand.H).map(
+              (scorer): HandWork => ({
+                H: hand.H,
+                part: parts[at]!,
+                weight: hand.weight,
+                terms: scorer.terms,
+                complemented: scorer.complemented,
+                ...(scorer.prefix === undefined ? {} : { prefix: scorer.prefix }),
+                groups: scorer.groups,
+              }),
+            ),
+          );
+        // A term of a longer PREFIX costs more than a term of a hand, because it
+        // holds cards of more classes and so multiplies more binomials together:
+        // measured at 9.7 ns a term over an 11-card prefix against 5.2 ns over a
+        // hand of five, which is what `perTermNs` is calibrated on. Scaling by
+        // `prefix / H` is that ratio, and it is 1 for every template that draws
+        // nothing — so no estimate the tool already gave moves.
+        if (work.hands !== null) {
+          const perVectorUs = work.hands.reduce(
+            (sum, { terms, H, prefix }) =>
+              sum + cost.perVectorUs + (cost.perTermNs / 1000) * terms * ((prefix ?? H) / H),
+            0,
+          );
+          work.estimatedMs = (countToNumber(work.classVectors) * perVectorUs) / 1000;
+        }
       }
     }
   }
@@ -1223,6 +1368,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     ok: !everyIssue.some((issue) => issue.severity === 'error'),
     deckSize,
     handSize,
+    judgedHand,
     mode,
     weighted,
     lines,
@@ -1279,6 +1425,7 @@ export function analyze(
       ok: false,
       deckSize: template.deckSize,
       handSize: template.hand.size,
+      judgedHand: template.hand.size,
       mode: modeOf(template),
       weighted: template.weighted === true,
       lines: [],

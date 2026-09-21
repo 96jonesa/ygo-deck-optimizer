@@ -95,6 +95,11 @@ export function subsumes(
   if ((B.sixth === undefined) !== (A.sixth === undefined)) return false;
   if (B.sixth !== undefined && A.sixth !== undefined && !holdsOver(B.sixth, A.sixth, ctx, 1))
     return false;
+  // An alternative the player would STOP for (PRD §5.7) does something no other
+  // can: it decides, on the opening hand, that no draw card is activated. So one
+  // that stops is never subsumed by one that does not, however much more the
+  // other asks — it would still be giving up the stop.
+  if (A.stop === true && B.stop !== true) return false;
   return holdsOver(B, A, ctx, maxHandSize);
 }
 

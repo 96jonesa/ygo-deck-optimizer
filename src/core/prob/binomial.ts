@@ -1,7 +1,9 @@
 /**
  * Binomial coefficients as EXACT integers in float64 (TDD §10.3), by Pascal's
  * rule: additions only, so nothing is ever rounded. The default table covers
- * every deck and hand the engine scores — C(60, 6) = 50,063,860.
+ * every deck and PREFIX the engine scores — C(60, 16) = 149,608,375,854,525,
+ * still a long way below 2^53. Without draw cards a hand is six cards and only
+ * the first seven columns are ever read.
  */
 export interface BinomialTable {
   maxN: number;
@@ -10,7 +12,12 @@ export interface BinomialTable {
   values: Float64Array;
 }
 
-export function binomialTable(maxN = 60, maxR = 6): BinomialTable {
+/**
+ * `MAX_DECK_SIZE` and `MAX_PREFIX` of `src/core/model/problem.ts`, written out
+ * rather than imported: that module reads `choose`, and a cycle between the two
+ * would be worse than a pair of numbers a test holds equal.
+ */
+export function binomialTable(maxN = 60, maxR = 16): BinomialTable {
   if (!Number.isInteger(maxN) || !Number.isInteger(maxR) || maxN < 0 || maxR < 0)
     throw new RangeError(`a binomial table is sized by whole numbers, not ${maxN} and ${maxR}`);
   const stride = maxR + 1;

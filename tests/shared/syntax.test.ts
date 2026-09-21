@@ -10,10 +10,11 @@ import { matcher } from '../../src/core/desc/evaluate';
 import { type ImpliesContext, implies } from '../../src/core/desc/implies';
 import { type DescContext, parse } from '../../src/core/desc/parser';
 import { print } from '../../src/core/desc/print';
-import { CRITERION_WEIGHT_MAX, RUN_MODES } from '../../src/core/model/template';
+import { CRITERION_WEIGHT_MAX, DRAW_CARDS_MAX, RUN_MODES } from '../../src/core/model/template';
 import {
   CRITERION_SYNTAX,
   DESCRIPTION_SYNTAX,
+  DRAW_REFERENCE,
   EXAMPLE_SECTIONS,
   EXPORT_REFERENCE,
   FACT_SECTIONS,
@@ -332,10 +333,11 @@ describe('CRITERION_SYNTAX', () => {
 });
 
 describe('FACT_SECTIONS', () => {
-  it('holds the run modes, weighting, the files and the exports, in that order', () => {
+  it('holds the run modes, weighting, drawing, the files and the exports, in that order', () => {
     expect(FACT_SECTIONS).toEqual([
       RUN_MODE_REFERENCE,
       WEIGHTING_REFERENCE,
+      DRAW_REFERENCE,
       FILE_REFERENCE,
       EXPORT_REFERENCE,
     ]);
@@ -421,5 +423,61 @@ describe('src/shared/syntax.ts', () => {
   it('requires nothing at runtime either', () => {
     expect(code).not.toMatch(/\brequire\s*\(/);
     expect(code).not.toMatch(/\bimport\s*\(/);
+  });
+});
+
+/**
+ * Draw cards add no grammar either — a setting on a line and a checkbox on a
+ * criterion — so what there is to hold is that the numbers the prose quotes are
+ * the numbers the code enforces, and that the two warnings a reader most needs
+ * are actually in it.
+ */
+describe('DRAW_REFERENCE', () => {
+  it('quotes the bound the editor actually enforces', () => {
+    expect(DRAW_CARDS_MAX).toBe(6);
+    const bounds = DRAW_REFERENCE.rows.filter((row) =>
+      row.means.includes(`1 to ${DRAW_CARDS_MAX}`),
+    );
+    expect(bounds).toHaveLength(1);
+  });
+
+  it('says the surprising thing: more cards can be worse', () => {
+    const notes = DRAW_REFERENCE.notes.join(' ');
+    expect(notes).toContain('MORE CARDS CAN BE WORSE');
+    expect(notes).toContain('the score falls as you add copies');
+  });
+
+  /**
+   * The two things the user is most likely to think are bugs: that every draw
+   * card resolves once you commit, and that the number is therefore a floor
+   * rather than the value of perfect play.
+   */
+  it('says there is ONE decision and that the number is a lower bound', () => {
+    const notes = DRAW_REFERENCE.notes.join(' ');
+    expect(notes).toContain('ONE DECISION');
+    expect(notes).toContain('LOWER bound');
+    expect(notes).toContain('no choosing card by card');
+  });
+
+  it('says exactly one moment is scored, never the better of two', () => {
+    expect(DRAW_REFERENCE.notes.join(' ')).toContain('Exactly one moment is ever scored');
+  });
+
+  it('says the two things the engine refuses, so a reader meets them here first', () => {
+    const notes = DRAW_REFERENCE.notes.join(' ');
+    expect(notes).toContain('The deck cannot run out');
+    expect(notes).toContain('cannot be used together');
+  });
+
+  /**
+   * And the correction the checkbox's name invites a reader to miss: it picks
+   * the MOMENT, not which criteria may be read.
+   */
+  it('describes the checkbox as a moment rather than an eligibility list', () => {
+    expect(FACT_SECTIONS).toContain(DRAW_REFERENCE);
+    const text = DRAW_REFERENCE.rows.map((row) => row.means).join(' ');
+    expect(text).toContain('EVERY criterion is then judged on the hand you have');
+    expect(text).toContain('still checked after drawing');
+    expect(DRAW_REFERENCE.rows.some((row) => row.label.includes('Stop here'))).toBe(true);
   });
 });

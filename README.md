@@ -19,7 +19,7 @@ combinatorial probability plus a card-database lookup layer.
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | **Done**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), range requirements (`1-2x monster`: a ceiling that binds the cards it does not take, so the range means "in addition to the rest"), `exactly nx` for a range whose ends agree, the sixth-card split (`1x {starter} then 1x [Ash]`: what the opening five must hold, and what the card you draw going second must be), inline name completion in both editors (`[card]`, `{group}`, `"archetype"`), M2g files (`.ydk` deck import, template open/save with `cardSnapshot`, CSV/JSON export of a run), three run modes (going first, going second, or their exact average, with each criterion tagged for the hand it is judged in), weighted criteria (rank by expected weight rather than success rate; a hand is worth the highest weight it meets), and an in-app syntax reference whose every example is parsed by a test |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), range requirements (`1-2x monster`: a ceiling that binds the cards it does not take, so the range means "in addition to the rest"), `exactly nx` for a range whose ends agree, the sixth-card split (`1x {starter} then 1x [Ash]`: what the opening five must hold, and what the card you draw going second must be), inline name completion in both editors (`[card]`, `{group}`, `"archetype"`), M2g files (`.ydk` deck import, template open/save with `cardSnapshot`, CSV/JSON export of a run), three run modes (going first, going second, or their exact average, with each criterion tagged for the hand it is judged in), weighted criteria (rank by expected weight rather than success rate; a hand is worth the highest weight it meets), draw cards (a line whose copies are played and replaced by `n` fresh cards, so the hand is a prefix of the deck rather than a fixed size; exact per prefix length, with a per-criterion "stop here" that keeps an opening hand that already works), and an in-app syntax reference whose every example is parsed by a test |
 | M3 — polish | Not started |
 | M4 — release | **In progress**: installers for macOS (arm64 DMG) and Windows (x64 NSIS) built and attached by `.github/workflows/release.yml` on a `v*` tag; the suite also runs on Windows in CI. Unsigned, so each platform warns once. `v0.2.0` shipped both and the Windows build has been run on Windows |
 
@@ -217,7 +217,7 @@ to the flat alternatives `(A, B, C)` and `(A, B, 2× D)`, all the engine sees (a
 
 Adjacent ratios differ by well under a percentage point — less than the noise of any affordable
 sample — so decks are ranked by **exact** odds (`src/core/prob`: `binomial`, `matcher`,
-`success-set`, `scorer`). Whether a hand succeeds depends only on how many cards of each class
+`success-set`, `scorer`, and `draw` / `draw-set` for templates that draw cards). Whether a hand succeeds depends only on how many cards of each class
 it holds (decided by Hall's condition, no search), so the successful hand compositions are found
 once per problem and every candidate deck is then a short sum of products of binomials.
 `createScorer(problem, H).score(classTotals)` returns `{ num, den, successNum }`: exact integers
@@ -260,6 +260,123 @@ weights up to 29,985,699 — and `checkWeightBound` throws rather than round. Th
 learns the split by judging two *windows* of the hand it already draws: `drawHand` fills position
 `i` at step `i`, so the last position **is** the card drawn last.
 
+**Draw cards make the hand a prefix of the deck.** Mark a line as one — `draw: { n, oncePerTurn }`
+— and every copy you draw is played and replaced by `n` fresh cards, which can themselves draw. The
+hand is then the **prefix** of the shuffled deck whose length is the *least* fixed point of
+
+```math
+\ell \;=\; H + \text{draws}(\text{the first } \ell \text{ cards})
+```
+
+and criteria judge whatever hand is left, whatever size it is. The obvious model — the prefix
+*multiset* fixes $`\ell`$, so enumerate the multisets consistent with it — gives probabilities
+**above 1** (1.500, 1.762 and 2.095 on three small decks), because **order matters**: with one Pot of
+Greed and three blanks and $`H = 1`$, `[Pot, blank, blank]` sees three cards and `[blank, Pot, blank]`
+sees one, and $`\ell = 1 + \text{draws}`$ holds at both 1 and 3 — so only upward iteration from
+$`H`$ picks the right one. Each consistent multiset therefore carries an **ordering factor**: the
+share of its arrangements the process actually reaches.
+
+```math
+P \;=\; \sum_{\ell}\ \sum_{\substack{v \text{ consistent} \\ v \text{ succeeds}}} \varphi(v) \cdot \frac{\prod_c \binom{n_c}{v_c}}{\binom{N}{\ell}}
+```
+
+Read the prefix as a Łukasiewicz path — a budget of $`H`$ cards, each card spending one and a draw
+card adding $`n`$ — and the cycle lemma gives $`\varphi = H / \ell`$ **exactly**, whatever the
+multiset, wherever every copy draws. `oncePerTurn` breaks that (the first copy draws and the rest sit
+in hand, so two copies are not interchangeable steps: two once-per-turn draw-2s with five fillers
+reach 20 of their 21 arrangements where $`H/\ell`$ claims 5/7), and the arrangements are counted
+instead by a DP over the **draw-class counts alone** — every other class is one interchangeable
+filler symbol. So $`\varphi`$ never depends on the deck, and is computed once per problem.
+
+The factor stays **outside** the float64 accumulation: rows are grouped by its *value*, each group is
+summed as a plain integer bounded by $`\binom{N}{\ell}`$, and the handful of factors is applied to
+the group sums. Folding it into each stored row instead is the natural thing and it breaks — the
+per-length lcm explodes under `oncePerTurn`, and five once-per-turn draw-2 lines put it 127× past
+$`2^{53}`$, silently rounding a template anyone could write. Both the largest group sum and the
+largest numerator the combination can reach are properties of the *problem*, so `drawSet` checks them
+when it builds and **refuses** rather than round. Deck-out is refused too, statically: draw cards that
+could ask for more cards than the deck holds are an error, which buys the standing invariant that the
+reachable prefix lengths carry probability exactly 1 — the best self-test there is here.
+
+**Two size bounds, not one.** The longest *prefix* $`H + \sum_i n_i (\texttt{oncePerTurn} ? 1 : \max_i)`$
+drives $`\binom{N}{\ell}`$, the enumeration and the cost; the largest *hand*
+$`H + \sum_i (n_i - 1)(\texttt{oncePerTurn} ? 1 : \max_i)`$ drives the requirement slots, `MAX_HAND`
+and what `expand` drops. Three Pots of Greed give 11 and 8; three Upstart Goblins give 8 and **5**.
+`MAX_PREFIX = 16` is an error in the `MAX_CLASSES` style, and its justification is **build time**
+alone — `analyze` rebuilds the success set on every keystroke — not exactness: $`\binom{60}{16}`$ is
+a long way below $`2^{53}`$.
+
+**And the prefix does not bound the build**, which is the trap that cap invites. The prefix bounds
+how DEEP the enumeration reads; the cost is that depth spread over the CLASSES, and with a "stop
+here" over the openings too. Three copies of Pot of Greed at fifteen classes reach a prefix of 11 —
+comfortably inside `MAX_PREFIX` — and cost 22 million compositions to build, where eighteen classes
+cost 88 million. So `drawWork` counts those compositions **without visiting them**, by the same
+recursion with the inner composition replaced by a count of it (a few thousand operations, whatever
+the answer, and a test holds it exactly equal to the visits the build makes). Two bounds sit on it:
+`MAX_DRAW_WORK = 25,000,000`, past which the engine refuses to build at all — about five seconds at
+the measured 200–400 ms a million — and `ANALYZE_DRAW_WORK = 1,500,000`, past which **`analyze`
+declines to build**, with a notice. The second is far below the first on purpose: a run pays the
+build once and then scores millions of decks against it, where `analyze` runs on every edit,
+synchronously in the main process, and a four-second build there is not a slow readout but a frozen
+application. The template still runs; only the term count and the time estimate go missing.
+
+**There is ONE decision, taken before any card is drawn.** Either nothing is activated, or every
+draw card resolves — including the ones drawn into, bounded only by `oncePerTurn`. There is
+deliberately no choice card by card: that would be a decision tree, where this is a single
+fraction, and the ordering factor exists precisely because the continuation is fixed once the
+player commits. The consequence is worth stating plainly, because it is the assumption most likely
+to be mistaken for a bug: **for a template that draws, the number is a LOWER bound on careful
+play.** Someone holding two Pots can activate the first, see the hand is now fine and keep the
+second; the model resolves both, and if the second breaks a ceiling the hand fails where a person
+would not have let it. `analyze` says so on every drawing template.
+
+**The one part of that judgement the model does score is when to stop.** Mark a criterion `stop`
+and an opening hand that already meets it activates nothing:
+
+```
+look at the opening H cards
+  any `stop` criterion met?
+    yes -> STOP. worth the best weight among ALL criteria the OPENING meets
+    no  -> DRAW. worth the best weight among ALL criteria the POST-DRAW hand meets
+                 (0 if drawing broke them — there is no falling back)
+```
+
+Two things about it are easy to get backwards. The flag decides the **window**, not the
+**eligibility**: whichever branch is taken, every criterion is judged in it — a criterion you would
+stop for is still checked after the draws when your opening did not stop them, and one you left
+alone still counts towards the weight in a hand that stopped. And there is **no maximum over the
+two windows**: the draw decision is *determined* by the opening, so exactly one window is ever in
+play. A criterion worth 5 that draws into a 2 scores 2, and a hand that draws out of everything
+scores 0 though its opening would have scored. That is what makes the value achievable by a real
+player in that order, rather than an upper bound taken with hindsight.
+
+Marking every criterion `stop` is therefore **not** the no-draw problem — you still draw whenever
+the opening meets nothing — and the answer dominates both the no-draw number and the number where
+nothing stops. That union is optimal stopping, exactly. Without draw cards the two windows are the
+same hand, so the flag changes nothing at all, whichever way it is set.
+
+A stop decision needs the JOINT distribution of the opening and the whole prefix, and it
+factorises, so the hot loop is untouched:
+
+```math
+P(u, w) \;=\; \psi(a, b) \cdot \frac{\prod_c \binom{v_c}{u_c}}{\binom{\ell}{H}} \cdot \frac{\prod_c \binom{n_c}{v_c}}{\binom{N}{\ell}}
+```
+
+because $`\prod_c \binom{n_c}{u_c}\binom{n_c - u_c}{w_c} = \prod_c \binom{n_c}{v_c} \prod_c \binom{v_c}{u_c}`$
+and $`\binom{N}{H}\binom{N-H}{\ell-H} = \binom{N}{\ell}\binom{\ell}{H}`$ — the deck enters only
+through $`\prod_c \binom{n_c}{v_c}`$, exactly as when nothing stops, so the split factor is a
+build-time constant. $`\psi`$ is $`\varphi`$'s generalisation, counting the *extension*'s
+arrangements alone: the first $`H`$ positions are unconstrained, since the budget starts at $`H`$
+and never falls. Only the build pays — and it pays 3–63× the rows.
+
+**Drawing can make a hand fail**, and `analyze` says so. A limit is a census over the whole hand and a
+ceiling makes a surplus card fatal, so more cards is not more chances: `exactly 1x starter` with a live
+Pot of Greed falls from 0.3734 to 0.3181, monotonically in the copies held — which is what `stop` is
+there to stop. `then` (the going-second
+split) and draw cards are **refused together**: the split reads a set of $`H`$ cards as $`H`$ equally
+likely (opening, drawn) pairs, and a draw card has to land among the first $`H`$ to resolve at all, so
+position $`H-1`$ is biased towards them — measured 0.3333 against the 0.2000 a uniform reading assumes.
+
 ## Template files and decks
 
 A **template file** is versioned JSON holding the lines, the groups, the criteria, the deck size
@@ -279,6 +396,13 @@ written before modes existed has neither, and is read as the run it always was: 
 is going first, a hand of six going second, and an untagged criterion is judged either way.
 `hand.size` is the size the criteria are expanded at, which is the mode's larger hand; a file
 whose `mode` and `hand.size` disagree is refused rather than read one way and run the other.
+
+**A line may DRAW.** `draw: { n, oncePerTurn }` on a line says its copies are played and replaced
+by `n` fresh cards; a criterion may carry `stop: true` to say the player would stop for it, so that
+an opening already meeting it activates nothing. Both are optional and absent means what the tool
+always did, so a file written before draw cards is read unchanged and at the same `version` — and
+`oncePerTurn` and `stop: false` are left out rather than written, since each is the identity of
+what it does.
 
 **`cardSnapshot` records every named card as it was.** Results depend on the card database only
 through the cards a template names, so the file keeps their fields. Opening it on another
@@ -442,6 +566,34 @@ One copy is best, and each further copy costs a quarter to half a percentage poi
 second copy sits inside the 0.5-point plateau and the third does not. The run scores 7,200 class
 vectors in about 10 ms (roughly 700,000 vectors a second at 161 terms a score).
 
+The fourth example, [`examples/drawing.json`](examples/drawing.json), is the draw-card one: three
+Pot of Extravagance (a once-per-turn draw-2), three Upstart Goblin (a draw-1), three Ash Blossom you
+play for other reasons — and two criteria, one of which you would **stop** for.
+
+```sh
+EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- optimize examples/drawing.json --top 1
+```
+
+```
+Best ratio — P(success) = 4,094,621,599,770 / 12,816,627,183,360 = 31.9477%
+  5 cards drawn: 12.4412% (81,864 / 658,008)
+  6 cards drawn: 5.6377% (1,298,385 / 23,030,280)
+  7 cards drawn: 8.0402% (62,957,292 / 783,029,520)
+  8 cards drawn: 4.5870% (592,645,131 / 12,919,987,080)
+  9 cards drawn: 1.1320% (4,680,322,578 / 413,439,586,560)
+  10 cards drawn: 0.1095% (7,017,699,222 / 6,408,313,591,680)
+
+  pot       0: 28.2864%   1: 29.6649%   2: 30.8803%   3: 31.9477% *
+  upstart   0: 29.5591%   1: 30.3230%   2: 31.1184%   3: 31.9477% *
+```
+
+Six hand sizes, six exact fractions, and they **sum** to the headline — one part per length the draw
+cards can reach, each over its own $`\binom{N}{\ell}`$, which is why there is no single fraction
+that says all of it. The first criterion is "a starter and no dead hand trap", and it is marked
+`stop`: an opening that already meets it keeps the hand instead of digging into an Ash Blossom that
+breaks the limit. **That flag alone is worth 1.44 percentage points** — 31.9477% against 30.5060%
+with it off — and it is the whole case for having it. 144 class vectors, scored in about 6 ms.
+
 The third example, [`examples/first-and-second.json`](examples/first-and-second.json), is the
 one where the three modes **disagree**: a starter you combo off going first, a second breaker a
 sixth card makes reachable going second, and a body-and-trap criterion that counts either way.
@@ -564,7 +716,7 @@ BABELCDB_PATH=~/repos/deps/babelcdb/cards.cdb EDOPRO_WORKDIR=~/Applications/Proj
 | `src/renderer/` | React UI; sandboxed, talks only through `window.api`. Logic worth testing lives in pure functions under `src/renderer/src/model/` |
 | `src/shared/` | The IPC contract: channel names and `RendererApi` (`ipc.ts`), payload types (`types.ts`); and the in-app syntax reference (`syntax.ts`), which imports nothing at runtime because the renderer bundles it |
 | `src/cli/` | Development harness (`npm run cli`), not shipped |
-| `examples/` | Example templates; `motivating.json` is the PRD's motivating example, `first-and-second.json` the one where the three run modes disagree |
+| `examples/` | Example templates; `motivating.json` is the PRD's motivating example, `first-and-second.json` the one where the three run modes disagree, `drawing.json` the one with draw cards |
 | `tests/` | Mirrors `src/` |
 | `scripts/` | `check-licenses.mjs` |
 

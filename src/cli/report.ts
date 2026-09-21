@@ -181,12 +181,22 @@ export function matchingSection(a: Analysis): string {
     ...a.requirements.flatMap((r) => r.filledBy),
     ...a.limits.flatMap((l) => l.counts),
   ]);
+  // A line that DRAWS matches nothing and affects the odds all the same — it
+  // changes the hand every criterion is judged on — so it is said apart rather
+  // than filed under "cannot affect the odds", which would be false of it.
+  const drawing = new Set(
+    (a.classes?.classes ?? []).flatMap((cls) => (cls.draw === undefined ? [] : cls.lines)),
+  );
   const idle = [
     ...a.lines.filter((line) => line.parsed.ok).map((line) => line.id),
     a.remainder.id,
-  ].filter((id) => !matched.has(id));
+  ].filter((id) => !matched.has(id) && !drawing.has(id));
   if (idle.length > 0)
     out.push(`  match nothing, so they cannot affect the odds: ${namesOf(idle)}`);
+  if (drawing.size > 0)
+    out.push(
+      `  match nothing, but DRAW, so every criterion is judged on the hand they build: ${namesOf([...drawing])}`,
+    );
   return out.join('\n');
 }
 
@@ -246,10 +256,15 @@ export function workSection(a: Analysis): string {
       hands === null
         ? '-'
         : hands
-            .map(
-              ({ H, terms, complemented }) =>
-                `${int(terms)} at a hand of ${H}${complemented ? ' (failing hands, subtracted)' : ''}`,
-            )
+            .map(({ H, terms, complemented, prefix, groups }) => {
+              // With draw cards a hand size has one row per PREFIX LENGTH, and
+              // the ordering factors are a per-deck cost of their own: one
+              // multiply-add per group, which no term count shows.
+              const where = prefix === undefined ? `a hand of ${H}` : `${prefix} cards drawn`;
+              const rationals = groups > 1 ? `, ${int(groups)} ordering factors` : '';
+              const side = complemented ? ' (failing hands, subtracted)' : '';
+              return `${int(terms)} at ${where}${side}${rationals}`;
+            })
             .join('; '),
     ],
     ['estimated time', estimatedMs === null ? '-' : formatDuration(estimatedMs)],

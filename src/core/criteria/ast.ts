@@ -119,6 +119,19 @@ export interface FlatCriterion {
    * At most `MAX_SIXTH_SLOTS` requirement slots, because it is one card.
    */
   sixth?: FlatSixth;
+  /**
+   * An alternative the player would STOP for: if the OPENING hand meets it, no
+   * draw card is activated (PRD §5.7). It comes from the CRITERION and not from
+   * the expression, so `expandAll` never sets it — the caller ORs it over the
+   * criteria an alternative came from, exactly as it takes the MAXIMUM of their
+   * weights. Absent is the default, and every alternative written before draw
+   * cards.
+   *
+   * It does NOT change how the alternative is judged, so two criteria with the
+   * same text and different answers to it are still ONE alternative: they ask
+   * the same thing, and one of them would also stop for it.
+   */
+  stop?: true;
 }
 
 /** One alternative's sixth-card part: the same two lists, over a hand of one. */
