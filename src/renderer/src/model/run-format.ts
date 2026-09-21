@@ -140,50 +140,135 @@ export function bestRatioRows(result: RunResult): BestRatioRow[] {
   });
 }
 
-/** One hand of a blended score, as it reads: `going first  41.5744%  273,563 / 658,008`. */
+/** One part of a blended score, as it reads: `going first  41.5744%  273,563 / 658,008`. */
 export interface ScoreLine {
-  /** `going first`, or `going first × 3` when the weights are uneven. */
+  /** Unique within one list: what a React row is keyed by, since two parts may read alike. */
+  key: string;
+  /** `going first`, `going first × 3`, `2 drawn`, `going second · nothing drawn`. */
   label: string;
   /** The hand size, for a test or a tooltip that wants the number itself. */
   hand: number;
-  /** The score this hand contributes, as shown: a percentage, or an expected weight. */
+  /** The PREFIX this part read, when the run draws (PRD §5.7); `null` without draw cards. */
+  prefix: number | null;
+  /** The score this part contributes, as shown: a percentage, or an expected weight. */
   value: string;
   exact: string;
-  /** This hand's P(at least one criterion); the same number as `value` unless the run is weighted. */
+  /** This part's P(at least one criterion); the same number as `value` unless the run is weighted. */
   successPercent: string;
   successExact: string;
 }
 
 /**
- * The hands behind a blended score, in the order the engine reports them —
- * EMPTY for a run of one hand, whose single number IS the headline.
+ * How the parts under a headline make it up — and therefore what the headline
+ * may be CALLED. Two different arithmetics hide behind one `parts` array:
  *
- * Both are shown in full because their DENOMINATORS DIFFER: going first is
- * over C(N,5) and going second over C(N,6), so there is no one fraction that
- * says both, and picking one would be quietly showing the wrong one. The mean
- * beside them is the run's own exact `blend` — never an average worked out
- * here (TDD §3): nothing in the renderer computes a probability.
+ *   `hands`    a first/second blend: a weighted MEAN, over different denominators.
+ *   `lengths`  draw cards: one part per prefix length, disjoint outcomes that SUM.
+ *   `both`     an average of two drawing hands: a sum per hand, then the mean.
+ *
+ * Read off the parts themselves, so it travels with the result (TDD §3): a
+ * finished run's readout must not depend on a template that has moved on.
+ */
+export type PartShape = 'none' | 'hands' | 'lengths' | 'both';
+
+export function partShape(score: BlendScore): PartShape {
+  if (score.parts.length < 2) return 'none';
+  const hands = new Set(score.parts.map((part) => part.H)).size > 1;
+  const lengths = score.parts.some((part) => part.prefix !== undefined);
+  if (hands && lengths) return 'both';
+  if (hands) return 'hands';
+  return lengths ? 'lengths' : 'none';
+}
+
+/**
+ * The clause after the headline's label saying what the parts do to it. It is
+ * not decoration: "averaged over the two hands" printed over a SUM is a
+ * sentence that is false of the number it sits under, which is exactly the
+ * mistake one `parts` array serving two arithmetics invites.
+ */
+export function partsCombineNote(shape: PartShape): string | null {
+  if (shape === 'hands') return ', averaged over the two hands';
+  if (shape === 'lengths') return ', and the parts below ADD UP to it';
+  if (shape === 'both') return ', summed over the prefix lengths and averaged over the two hands';
+  return null;
+}
+
+/** What the ranked table's score column is headed: `P`, `weight`, `average`, `total`. */
+export function partsColumnLabel(shape: PartShape, weighted: boolean): string {
+  if (shape === 'hands' || shape === 'both') return 'average';
+  if (shape === 'lengths') return 'total';
+  return weighted ? 'weight' : 'P';
+}
+
+/**
+ * What a figure measured AGAINST the headline is measured against — the plateau's
+ * width, above all. `null` for a run of one part, where the headline is just the
+ * score and naming it would say nothing.
+ */
+export function headlineKind(shape: PartShape): string | null {
+  if (shape === 'hands' || shape === 'both') return 'the average';
+  return shape === 'lengths' ? 'the total' : null;
+}
+
+/** `going first`, or `going first × 3` when the hand weights are uneven. */
+function handLabel(H: number, weight: number, even: boolean): string {
+  return `going ${H === 5 ? 'first' : 'second'}${even ? '' : ` × ${weight}`}`;
+}
+
+/**
+ * The parts behind a blended score, in the order the engine reports them —
+ * EMPTY for a run of one part, whose single number IS the headline.
+ *
+ * Every part is shown in full because their DENOMINATORS DIFFER: going first is
+ * over C(N,5) and going second over C(N,6), and a prefix of 7 over something
+ * else again, so there is no one fraction that says two of them and picking one
+ * would be quietly showing the wrong one. The figure beside them is the run's
+ * own exact `blend` — never a mean or a sum worked out here (TDD §3): nothing in
+ * the renderer computes a probability.
+ *
+ * A DRAWING part is named by the cards it DREW, which is `prefix − H` and not
+ * `prefix`: the prefix is how deep into the deck the hand read, so the part at
+ * `prefix === H` is the one where nothing was drawn — because no draw card
+ * landed in the opening, or because a `stop` criterion was already met.
  */
 export function partLines(score: BlendScore, weighted = false): ScoreLine[] {
   if (score.parts.length < 2) return [];
   const even = score.parts.every((part) => part.weight === score.parts[0]!.weight);
+  const shape = partShape(score);
   return score.parts.map((part) => {
     const success = { num: part.successNum, den: part.den };
+    const drawn = part.prefix === undefined ? null : part.prefix - part.H;
+    const draws = drawn === null ? '' : drawn === 0 ? 'nothing drawn' : `${drawn} drawn`;
     return {
-      // Draw cards give one hand size several parts, one per prefix length
-      // (PRD §5.7): the length is then what tells them apart, and the share is
-      // the hand size's, so it is not repeated on each of them.
+      key: `${part.H}${part.prefix === undefined ? '' : `-${part.prefix}`}`,
       label:
-        part.prefix === undefined
-          ? `going ${part.H === 5 ? 'first' : 'second'}${even ? '' : ` × ${part.weight}`}`
-          : `${part.prefix} cards drawn`,
+        shape === 'lengths'
+          ? draws
+          : shape === 'both'
+            ? `${handLabel(part.H, part.weight, even)} · ${draws}`
+            : handLabel(part.H, part.weight, even),
       hand: part.H,
+      prefix: part.prefix ?? null,
       value: scoreText(part, weighted),
       exact: exactText(part),
       successPercent: percentText(success),
       successExact: exactText(success),
     };
   });
+}
+
+/**
+ * THE NUMBER IS A FLOOR, NOT A FORECAST — the caveat PRD §5.7 asks for, under
+ * the number it is about, and `null` for a run that drew nothing.
+ *
+ * `analyze` says the same thing about the template being edited. This one is
+ * read off the RESULT's own parts, because a result stays on screen while the
+ * template changes under it and a caveat has to be true of the number it sits
+ * under (the rule `limitsNote` follows for limits).
+ */
+export function drawFloorNote(result: RunResult): string | null {
+  if (!result.best.score.parts.some((part) => part.prefix !== undefined)) return null;
+  return 'This ratio draws cards, and a draw card here is either not activated at all or activated to the last copy: there is one decision, taken before anything is drawn, and no choice card by card. So the figure above is a LOWER bound on careful play — someone who plays one copy, sees the hand is already fine and keeps the second does better than it. Marking a criterion "stop here" is the only part of that judgement the tool scores.';
 }
 
 export interface TopRow {
@@ -278,7 +363,14 @@ export function readyText(template: Template, analysis: Analysis | null): string
   if (work === undefined || work.classVectors === null) return head;
   const ratios = work.rawRatios === null ? '' : ` over ${formatCount(work.rawRatios)} raw ratios`;
   const estimate = work.estimatedMs === null ? '' : `, ${about(work.estimatedMs)}`;
-  return `${head} ${formatCount(work.classVectors)} class vectors${ratios}${estimate}.`;
+  const sized = `${head} ${formatCount(work.classVectors)} class vectors${ratios}${estimate}.`;
+  // Where a number was, a blank is not an answer: past `ANALYZE_DRAW_WORK` the
+  // analysis stops counting the terms per score and the estimate built on them,
+  // and the template STILL RUNS. `analyze`'s own notice is what says so — not
+  // `estimatedMs` being null, which says only that there is no number.
+  return (analysis?.issues ?? []).some((issue) => issue.code === 'work-not-counted')
+    ? `${sized} The time is not estimated: these draw cards are too many to enumerate on every edit, and the run itself is unaffected.`
+    : sized;
 }
 
 /** Why `run:start` started nothing, line by line; empty when it did start. */

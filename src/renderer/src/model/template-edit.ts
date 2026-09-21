@@ -1,6 +1,7 @@
 import type {
   CardHit,
   Description,
+  DrawSpec,
   Template,
   TemplateCard,
   TemplateCriterion,
@@ -9,6 +10,7 @@ import type {
 } from '../../../shared/types';
 import type { CopyRange } from './copy-range';
 import { type CriterionWhen, handSizeForMode, type RunMode } from './deck-form';
+import type { DrawDraft } from './draw-view';
 
 // Every edit the template editor makes, as a pure function from one template
 // to the next (TDD §3: all the renderer logic worth testing is here, and the
@@ -161,6 +163,43 @@ export function withLineRange(template: Template, id: string, { min, max }: Copy
   return mapLine(template, id, (line) =>
     line.min === min && line.max === max ? line : { ...line, min, max },
   );
+}
+
+/**
+ * What the line DRAWS (PRD §5.7), or `null` for a line that is not a draw card.
+ *
+ * A line IS a draw card exactly when it carries the field, so `null` DELETES it
+ * rather than storing `undefined`: unticking the box has to give back the line
+ * the template would have had if the box had never been ticked, which is also
+ * the line a template file records. `oncePerTurn` follows the same rule one
+ * level down — it is `true` or absent, never `false` — because "once" is a
+ * property of the card and `false` is what every card that is not once-per-turn
+ * already means.
+ *
+ * The text, the copy range and any parsed form stay: what a line draws is not
+ * what it matches, so the AST beside it is still a faithful record of the text
+ * (TDD §14) — the rule `withCriterionWhen` follows on the other side.
+ */
+export function withLineDraw(template: Template, id: string, draw: DrawDraft | null): Template {
+  return mapLine(template, id, (line) => {
+    if (draw === null) return withoutDraw(line);
+    const next: DrawSpec =
+      draw.oncePerTurn === true ? { n: draw.n, oncePerTurn: true } : { n: draw.n };
+    const had = line.draw;
+    if (had !== undefined && had.n === next.n && had.oncePerTurn === next.oncePerTurn) return line;
+    return { ...withoutDraw(line), draw: next };
+  });
+}
+
+/** A line with `draw` gone and everything else kept; the SAME line when it had none. */
+function withoutDraw(line: TemplateLine): TemplateLine {
+  if (line.draw === undefined) return line;
+  if (isCardLine(line)) {
+    const { draw: _dropped, ...rest } = line;
+    return rest;
+  }
+  const { draw: _dropped, ...rest } = line;
+  return rest;
 }
 
 /**
@@ -331,6 +370,29 @@ export function withCriterionWeight(template: Template, id: string, weight: numb
     if ((criterion.weight ?? 1) === weight) return criterion;
     const { weight: _old, ...rest } = criterion;
     return weight === 1 ? rest : { ...rest, weight };
+  });
+}
+
+/**
+ * Whether the player would STOP for this criterion (PRD §5.7): `true` and an
+ * opening hand that already meets it activates no draw card. Andy's own
+ * sentence is the definition — unchecked means "I would stop for this", checked
+ * means "I am willing to lose this by drawing" — and it is the box's LABEL that
+ * is inverted, not the field: `stop: true` is the one that stops.
+ *
+ * The stored AST is KEPT, for the reason `withCriterionWhen` keeps it: the flag
+ * says WHEN the criterion is asked, not what it asks for.
+ *
+ * `false` is stored as no field at all, the rule `withCriterionWeight` follows
+ * for a weight of 1. Not stopping is the identity — it is what every criterion
+ * of every template written before draw cards existed already means — so
+ * turning the box off gives back, byte for byte, the criterion that was there.
+ */
+export function withCriterionStop(template: Template, id: string, stop: boolean): Template {
+  return mapCriterion(template, id, (criterion) => {
+    if ((criterion.stop ?? false) === stop) return criterion;
+    const { stop: _old, ...rest } = criterion;
+    return stop ? { ...rest, stop } : rest;
   });
 }
 

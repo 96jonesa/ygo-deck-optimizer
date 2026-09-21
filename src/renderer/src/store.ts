@@ -16,6 +16,7 @@ import { type AnalysisView, NO_ANALYSIS, reduceAnalysis } from './model/analysis
 import { statusHeadline } from './model/card-status';
 import type { CopyRange } from './model/copy-range';
 import type { CriterionWhen, RunMode } from './model/deck-form';
+import type { DrawDraft } from './model/draw-view';
 import type { FileStatus } from './model/files';
 import { readyText } from './model/run-format';
 import { IDLE_RUN, markCancelling, type RunView, reduceRun } from './model/run-state';
@@ -26,6 +27,7 @@ import {
   withCardLine,
   withCriterion,
   withCriterionName,
+  withCriterionStop,
   withCriterionText,
   withCriterionWeight,
   withCriterionWhen,
@@ -35,6 +37,7 @@ import {
   withGroupCard,
   withHandSize,
   withImportedDeck,
+  withLineDraw,
   withLineRange,
   withLineText,
   withMode,
@@ -127,6 +130,8 @@ export interface AppState {
   dropLine(id: string): void;
   setLineText(id: string, text: string): void;
   setLineRange(id: string, range: CopyRange): void;
+  /** What the line DRAWS (PRD §5.7), or `null` for a line that is not a draw card. */
+  setLineDraw(id: string, draw: DrawDraft | null): void;
   /** One place up (`by` -1) or down (`by` +1); a line at that end does not move. */
   moveLine(id: string, by: number): void;
   setDeckSize(size: number): void;
@@ -148,6 +153,8 @@ export interface AppState {
   setCriterionWhen(id: string, when: CriterionWhen): void;
   /** What meeting the criterion is worth, when the template weights them (PRD §5.6). */
   setCriterionWeight(id: string, weight: number): void;
+  /** Whether the player would STOP for the criterion: `true` keeps an opening hand that already meets it. */
+  setCriterionStop(id: string, stop: boolean): void;
   /** Whether the criteria are weighted at all; the weights themselves are left alone either way. */
   setWeighted(weighted: boolean): void;
   /** One place up (`by` -1) or down (`by` +1); a criterion at that end does not move. */
@@ -232,6 +239,7 @@ export function createAppStore(): AppStore {
       dropLine: edit(withoutLine),
       setLineText: edit(withLineText),
       setLineRange: edit(withLineRange),
+      setLineDraw: edit(withLineDraw),
       moveLine: edit(withMovedLine),
       setDeckSize: edit(withDeckSize),
       setHandSize: edit(withHandSize),
@@ -245,6 +253,7 @@ export function createAppStore(): AppStore {
       setCriterionName: edit(withCriterionName),
       setCriterionWhen: edit(withCriterionWhen),
       setCriterionWeight: edit(withCriterionWeight),
+      setCriterionStop: edit(withCriterionStop),
       setWeighted: edit(withWeighted),
       moveCriterion: edit(withMovedCriterion),
       addGroup: edit(withGroup),

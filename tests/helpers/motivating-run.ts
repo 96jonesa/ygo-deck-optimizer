@@ -1,6 +1,7 @@
 import type { SqlJsStatic } from 'sql.js';
 import { analyze } from '../../src/core/model/analyze';
 import { compileProblem, handSizesForMode, resolveTemplate } from '../../src/core/model/compile';
+import type { DrawSpec } from '../../src/core/model/problem';
 import {
   type CriterionWhen,
   countsFor,
@@ -53,6 +54,26 @@ export function motivatingWeighted(
       const weight = weights[criterion.id];
       return weight === undefined ? criterion : { ...criterion, weight };
     }),
+  };
+}
+
+/**
+ * The motivating example with `normal-spell` made a DRAW CARD (PRD §5.7),
+ * holding at most one copy. It is the smallest real drawing template there is:
+ * a hand of `H` then reaches two prefix lengths — `H` and `H + n` — whose exact
+ * fractions SUM, which is the one thing a first/second blend never does.
+ */
+export function motivatingDrawing(
+  mode: RunMode = 'first',
+  draw: DrawSpec = { n: 2, oncePerTurn: true },
+  copies: { min: number; max: number } = { min: 0, max: 1 },
+): Template {
+  const base = motivatingIn(mode);
+  return {
+    ...base,
+    lines: base.lines.map((line) =>
+      line.id === 'normal-spell' ? { ...line, ...copies, draw } : line,
+    ),
   };
 }
 

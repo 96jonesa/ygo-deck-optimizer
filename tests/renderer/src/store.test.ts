@@ -346,6 +346,46 @@ describe('createAppStore', () => {
     });
   });
 
+  describe('setLineDraw', () => {
+    it('marks the line as a draw card, and unmarks it again', () => {
+      const store = createAppStore();
+      store.getState().pickCard(ASH);
+      store.getState().setLineDraw('card1', { n: 2, oncePerTurn: true });
+      expect(store.getState().template.lines[0]).toMatchObject({
+        draw: { n: 2, oncePerTurn: true },
+      });
+      store.getState().setLineDraw('card1', null);
+      expect(store.getState().template.lines[0]).not.toHaveProperty('draw');
+    });
+
+    it('holds the template still when the marker does not move', () => {
+      const store = createAppStore();
+      store.getState().pickCard(ASH);
+      const before = store.getState().template;
+      store.getState().setLineDraw('card1', null);
+      expect(store.getState().template).toBe(before);
+    });
+  });
+
+  describe('setCriterionStop', () => {
+    it('stops the criterion, and lets it draw again', () => {
+      const store = createAppStore();
+      store.getState().addCriterion();
+      store.getState().setCriterionStop('c1', true);
+      expect(store.getState().template.criteria[0]).toMatchObject({ stop: true });
+      store.getState().setCriterionStop('c1', false);
+      expect(store.getState().template.criteria[0]).not.toHaveProperty('stop');
+    });
+
+    it('holds the template still when the flag does not move', () => {
+      const store = createAppStore();
+      store.getState().addCriterion();
+      const before = store.getState().template;
+      store.getState().setCriterionStop('c1', false);
+      expect(store.getState().template).toBe(before);
+    });
+  });
+
   describe('moveLine', () => {
     it('reorders the lines', () => {
       const store = createAppStore();

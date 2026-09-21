@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classesSection,
   criteriaSection,
+  drawnLabel,
   formatAnalysis,
   formatDuration,
   formatEstimateReport,
@@ -272,6 +273,52 @@ describe('workSection', () => {
       /^ {2}raw ratios +about \d\.\d\d × 10\^17$/m,
     );
     expect(workSection(BROKEN)).toMatch(/^ {2}class vectors +-\n {2}terms per score +-$/m);
+  });
+});
+
+/**
+ * A PREFIX IS NOT A NUMBER OF CARDS DRAWN. `prefix` is how deep into the deck a
+ * part read, so the cards it drew are `prefix − H` — the part at `prefix === H`
+ * drew nothing, and every report first printed it as "5 cards drawn" for a hand
+ * of five. Wrong by exactly `H`, and internally consistent enough that nothing
+ * would have caught it: a label is not checked against the thing it labels.
+ */
+describe('drawnLabel', () => {
+  it('names the part that drew nothing as having drawn nothing', () => {
+    expect(drawnLabel(5, 5)).toBe('a hand of 5, nothing drawn');
+    expect(drawnLabel(6, 6)).toBe('a hand of 6, nothing drawn');
+  });
+
+  it('counts the cards drawn as the depth less the opening hand', () => {
+    expect(drawnLabel(5, 6)).toBe('a hand of 5, 1 card drawn');
+    expect(drawnLabel(5, 7)).toBe('a hand of 5, 2 cards drawn');
+    expect(drawnLabel(6, 11)).toBe('a hand of 6, 5 cards drawn');
+  });
+
+  it('names the hand too, since two hand sizes each reach their own lengths', () => {
+    expect(drawnLabel(5, 7)).not.toBe(drawnLabel(6, 8));
+  });
+});
+
+describe('a drawing template’s work', () => {
+  /** `normal-spell` made a draw-2, at most one copy: prefixes 5 and 7 from a hand of 5. */
+  const DRAWING = analyze(
+    {
+      ...motivatingTemplate(),
+      lines: motivatingTemplate().lines.map((row) =>
+        row.id === 'normal-spell'
+          ? { ...row, min: 0, max: 1, draw: { n: 2, oncePerTurn: true as const } }
+          : row,
+      ),
+    },
+    ctx,
+  );
+
+  it('reports one row per prefix length, each named by what it drew', () => {
+    const text = workSection(DRAWING);
+    expect(text).toMatch(/^ {2}terms per score +\d+ at a hand of 5, nothing drawn; /m);
+    expect(text).toContain('at a hand of 5, 2 cards drawn');
+    expect(text).not.toContain('5 cards drawn');
   });
 });
 

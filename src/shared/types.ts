@@ -34,6 +34,7 @@ export type {
   WorkAnalysis,
 } from '../core/model/analyze';
 export type { ExpandedClass } from '../core/model/compile';
+export type { DrawSpec } from '../core/model/problem';
 export type { IntRange } from '../core/model/ranges';
 export type {
   CardSnapshot,

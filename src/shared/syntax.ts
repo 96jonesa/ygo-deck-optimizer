@@ -491,7 +491,7 @@ export const DRAW_REFERENCE: FactSection = {
     {
       label: 'The hand is no longer five cards',
       means:
-        'Three copies of a card that draws two reach eleven cards deep and leave a hand of eight. The criteria judge whatever hand you end up with, and the run reports one exact fraction per size.',
+        'Three copies of a card that draws two reach eleven cards deep and leave a hand of eight. The criteria judge whatever hand you end up with, and the run reports one exact fraction for each number of cards you drew — which ADD UP to the score, since you can only have drawn one of those numbers.',
     },
     {
       label: '“Stop here”, on each criterion',

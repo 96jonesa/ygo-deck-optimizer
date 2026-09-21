@@ -15,6 +15,7 @@ import { type Count, countToNumber, formatCount } from '../core/util/count';
 import {
   classesSection,
   criteriaSection,
+  drawnLabel,
   formatDuration,
   int,
   issueSections,
@@ -122,11 +123,13 @@ export function value(fraction: Fraction, weighted: boolean): string {
 /** `going first: 41.5744% (273,563 / 658,008)` — a part's own exact answer. */
 function partText(part: BlendPart, weighted: boolean): string {
   // With draw cards several parts share one hand size and differ only in how
-  // deep into the deck they read (PRD §5.7), so the length is what names them.
+  // deep into the deck they read (PRD §5.7), so what they DREW is what names
+  // them: `prefix` is the depth, so the cards drawn are `prefix − H` and the
+  // part at `prefix === H` drew nothing at all.
   const whose =
     part.prefix === undefined
       ? `going ${part.H === 5 ? 'first' : 'second'}`
-      : `${part.prefix} cards drawn`;
+      : drawnLabel(part.H, part.prefix);
   const head = `${whose}: ${value(part, weighted)} (${fraction(part)})`;
   return weighted
     ? `${head}, P(success) ${percent(part.successNum / part.den)} (${int(part.successNum)} / ${int(part.den)})`

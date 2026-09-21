@@ -5,11 +5,15 @@ import {
   bestReachText,
   confirmationLine,
   countsLabel,
+  drawFloorNote,
   exactText,
   formatCount,
   formatDuration,
   fractionText,
   partLines,
+  partShape,
+  partsColumnLabel,
+  partsCombineNote,
   percentText,
   progressLine,
   readyText,
@@ -22,6 +26,7 @@ import {
 } from '../../../../src/renderer/src/model/run-format';
 import type { Analysis, Fraction, RunStartResult, Template } from '../../../../src/shared/types';
 import {
+  motivatingDrawing,
   motivatingIn,
   motivatingResult,
   motivatingWeighted,
@@ -321,6 +326,28 @@ describe('readyText', () => {
       'Ready to score: 1 lines, 1 criteria, deck of 60. 9 class vectors over 9 raw ratios.',
     );
   });
+
+  /**
+   * WHERE A NUMBER WAS, A BLANK IS NOT AN ANSWER. Past `ANALYZE_DRAW_WORK` the
+   * analysis stops counting the terms per score and the estimate built on them
+   * (`work-not-counted`) — and the template STILL RUNS. Left as it was, the
+   * sentence beside Run would quietly drop the estimate and say nothing about
+   * why, which reads as a tool that has lost track of what it is about to do.
+   *
+   * The notice is what triggers it, not `estimatedMs` being null: that is
+   * `analyze`'s own classification of why the number is missing, and the test
+   * above is the case where nothing has said why.
+   */
+  it('says why there is no estimate when the analysis declined to count the work', () => {
+    const analysis = workOf({ classVectors: 128, rawRatios: 4096 });
+    const notCounted: Analysis = {
+      ...analysis,
+      issues: [{ severity: 'notice', code: 'work-not-counted', message: 'too many to count' }],
+    };
+    expect(readyText(templateOf(7, 2), notCounted)).toBe(
+      'Ready to score: 7 lines, 2 criteria, deck of 40. 128 class vectors over 4,096 raw ratios. The time is not estimated: these draw cards are too many to enumerate on every edit, and the run itself is unaffected.',
+    );
+  });
 });
 
 describe('startFailureLines', () => {
@@ -408,8 +435,10 @@ describe('a run over both hands', () => {
       expect(lines.map((line) => line.label)).toEqual(['going first', 'going second']);
       const [first, second] = AVERAGE.best.score.parts;
       expect(lines[0]).toEqual({
+        key: '5',
         label: 'going first',
         hand: 5,
+        prefix: null,
         value: percentText(first!),
         exact: exactText(first!),
         successPercent: percentText(first!),
@@ -523,5 +552,166 @@ describe('a weighted run', () => {
     const off = motivatingResult(SQL, { ...motivatingWeighted({ c1: 4 }), weighted: false });
     expect(off.weighted).toBe(false);
     expect(topRows(off, 5)).toEqual(topRows(RESULT, 5));
+  });
+});
+
+/**
+ * A DRAWING run on screen (PRD §5.7). A run now carries one part per PREFIX
+ * LENGTH, and they are disjoint outcomes that SUM — not the weighted mean the
+ * first/second blend takes. Everything below is read off the result, which is a
+ * real search: a headline that said "averaged over the two hands" over a sum
+ * would be a sentence that is false of the number it sits under.
+ */
+describe('a drawing run', () => {
+  const DRAWN = motivatingResult(SQL, motivatingDrawing());
+  /** Both at once: two hand sizes, each with its own prefix lengths. */
+  const DRAWN_AVERAGE = motivatingResult(SQL, motivatingDrawing('average'));
+  /** The blend that averages rather than sums, to tell the two shapes apart by. */
+  const AVERAGE = motivatingResult(SQL, motivatingIn('average'));
+  const AVERAGE_SCORE = AVERAGE.best.score;
+
+  it('carries one part per prefix length, and their fractions sum to the headline', () => {
+    const { parts } = DRAWN.best.score;
+    expect(parts.map((part) => part.prefix)).toEqual([5, 7]);
+    expect(parts.map((part) => part.H)).toEqual([5, 5]);
+    // The headline really is the SUM, in whole numbers on both sides: the
+    // renderer never adds fractions, so this is what it is trusting.
+    const [a, b] = parts as [(typeof parts)[0], (typeof parts)[0]];
+    expect(
+      (BigInt(a.num) * BigInt(b.den) + BigInt(b.num) * BigInt(a.den)) *
+        BigInt(DRAWN.best.blend.den),
+    ).toBe(BigInt(a.den) * BigInt(b.den) * BigInt(DRAWN.best.blend.num));
+  });
+
+  describe('partShape', () => {
+    it('says a single-hand run has nothing beneath its headline', () => {
+      expect(partShape(RESULT.best.score)).toBe('none');
+    });
+
+    it('tells a first/second blend from a sum over prefix lengths', () => {
+      expect(partShape(AVERAGE_SCORE)).toBe('hands');
+      expect(partShape(DRAWN.best.score)).toBe('lengths');
+    });
+
+    it('says when a run is both: a sum per hand, averaged over the hands', () => {
+      expect(partShape(DRAWN_AVERAGE.best.score)).toBe('both');
+    });
+  });
+
+  describe('partsCombineNote', () => {
+    it('says how the parts make the headline, in each of the three shapes', () => {
+      expect(partsCombineNote('none')).toBeNull();
+      expect(partsCombineNote('hands')).toBe(', averaged over the two hands');
+      expect(partsCombineNote('lengths')).toBe(', and the parts below ADD UP to it');
+      expect(partsCombineNote('both')).toBe(
+        ', summed over the prefix lengths and averaged over the two hands',
+      );
+    });
+  });
+
+  describe('partsColumnLabel', () => {
+    it('heads the ranked column with what the number IS', () => {
+      expect(partsColumnLabel('none', false)).toBe('P');
+      expect(partsColumnLabel('none', true)).toBe('weight');
+      expect(partsColumnLabel('hands', false)).toBe('average');
+      expect(partsColumnLabel('lengths', false)).toBe('total');
+      expect(partsColumnLabel('both', false)).toBe('average');
+    });
+  });
+
+  describe('partLines', () => {
+    /**
+     * `prefix` is the length of the PREFIX — how deep into the deck the hand
+     * read — so the cards DRAWN are `prefix − H`. Labelling the prefix itself
+     * "5 cards drawn" for a hand of five that drew nothing was wrong by exactly
+     * `H`, and it read as a part that could not possibly exist.
+     */
+    it('names each part by the cards DRAWN, not by the prefix length', () => {
+      const lines = partLines(DRAWN.best.score);
+      expect(lines.map((line) => line.label)).toEqual(['nothing drawn', '2 drawn']);
+      expect(lines.map((line) => line.prefix)).toEqual([5, 7]);
+    });
+
+    it('says the one in the singular', () => {
+      const parts = DRAWN.best.score.parts.map((part, at) =>
+        at === 1 ? { ...part, prefix: 6 } : part,
+      );
+      expect(partLines({ ...DRAWN.best.score, parts })[1]!.label).toBe('1 drawn');
+    });
+
+    /**
+     * Two hand sizes and two lengths each give four parts, and two of them draw
+     * the same number of cards. Labelled by the draws alone they would read the
+     * same, and keyed by the hand size alone two React rows would share a key —
+     * so both carry the hand as well.
+     */
+    it('tells the hand sizes apart when a run has both', () => {
+      const lines = partLines(DRAWN_AVERAGE.best.score);
+      expect(lines.map((line) => line.label)).toEqual([
+        'going first · nothing drawn',
+        'going first · 2 drawn',
+        'going second · nothing drawn',
+        'going second · 2 drawn',
+      ]);
+      expect(new Set(lines.map((line) => line.key)).size).toBe(lines.length);
+    });
+
+    it('gives every part of every shape a key of its own', () => {
+      for (const score of [AVERAGE_SCORE, DRAWN.best.score, DRAWN_AVERAGE.best.score]) {
+        const lines = partLines(score);
+        expect(new Set(lines.map((line) => line.key)).size).toBe(lines.length);
+      }
+    });
+
+    it('still says the hand weights when they are uneven', () => {
+      const parts = DRAWN_AVERAGE.best.score.parts.map((part) => ({
+        ...part,
+        weight: part.H === 5 ? 3 : 2,
+      }));
+      const lines = partLines({ ...DRAWN_AVERAGE.best.score, parts });
+      expect(lines[0]!.label).toBe('going first × 3 · nothing drawn');
+      expect(lines[3]!.label).toBe('going second × 2 · 2 drawn');
+    });
+  });
+
+  describe('drawFloorNote', () => {
+    /**
+     * THE NUMBER IS A FLOOR, NOT A FORECAST, and that has to sit under the
+     * number rather than only in the editor: there is one decision, taken before
+     * anything is drawn, so a player who stops halfway does better. Read off the
+     * RESULT — a caveat has to be true of the number it sits under, whatever the
+     * template says by the time it is read.
+     */
+    it('is said for a run that drew, and names the escape hatch', () => {
+      const note = drawFloorNote(DRAWN)!;
+      expect(note).toContain('LOWER bound');
+      expect(note).toContain('one decision');
+      expect(note).toContain('"stop here"');
+    });
+
+    it('is nothing at all for a run that drew no cards', () => {
+      expect(drawFloorNote(RESULT)).toBeNull();
+      expect(drawFloorNote(AVERAGE)).toBeNull();
+    });
+
+    it('is said for the average of two drawing hands too', () => {
+      expect(drawFloorNote(DRAWN_AVERAGE)).not.toBeNull();
+    });
+  });
+
+  describe('topRows', () => {
+    it('carries the per-length parts down every row, from the row itself', () => {
+      const rows = topRows(DRAWN, 3);
+      for (const row of rows) expect(row.parts.map((part) => part.prefix)).toEqual([5, 7]);
+      expect(rows[0]!.parts).toEqual(partLines(DRAWN.ranked[0]!.score));
+    });
+  });
+
+  describe('runStatsText', () => {
+    /** One hand size, however many lengths it reaches: the prefix is not a hand. */
+    it('still reports one hand', () => {
+      expect(runStatsText(DRAWN)).toContain('hand of 5');
+      expect(runStatsText(DRAWN)).not.toContain('hand of 7');
+    });
   });
 });

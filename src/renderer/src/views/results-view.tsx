@@ -18,9 +18,14 @@ import {
   bestRatioRows,
   bestReachText,
   confirmationLine,
+  drawFloorNote,
   exactText,
   formatCount,
+  headlineKind,
   partLines,
+  partShape,
+  partsColumnLabel,
+  partsCombineNote,
   percentText,
   progressLine,
   runStatsText,
@@ -66,6 +71,11 @@ function BestRatio({ result }: { result: RunResult }) {
   const labels = lineLabels(result);
   const { weighted } = result;
   const parts = partLines(result.best.score, weighted);
+  // WHAT THE PARTS DO TO THE HEADLINE, which is not one answer any more: a
+  // first/second blend is a weighted MEAN of its parts and a drawing run is
+  // their SUM. "Averaged over the two hands" printed over a sum would be a
+  // sentence that is false of the number it sits under.
+  const shape = partShape(result.best.score);
   return (
     <div className="headline" data-testid="run-headline">
       <p className="headline-label">
@@ -73,7 +83,7 @@ function BestRatio({ result }: { result: RunResult }) {
         <span className="dim">
           {' '}
           — {scoreLabel(weighted)}
-          {parts.length > 0 ? ', averaged over the two hands' : ''}
+          {partsCombineNote(shape) ?? ''}
         </span>
       </p>
       <p className="headline-value">
@@ -101,7 +111,7 @@ function BestRatio({ result }: { result: RunResult }) {
         <table className="rows tight headline-parts" data-testid="run-best-parts">
           <tbody>
             {parts.map((part) => (
-              <tr key={part.label} data-testid={`run-best-part-${part.hand}`}>
+              <tr key={part.key} data-testid={`run-best-part-${part.key}`}>
                 <th>{part.label}</th>
                 <td className="num">{part.value}</td>
                 <td className="num dim">{part.exact}</td>
@@ -130,6 +140,23 @@ function BestRatio({ result }: { result: RunResult }) {
       <p className="hint flush tabular" data-testid="run-stats">
         {runStatsText(result)} · {bestReachText(result)}
       </p>
+    </div>
+  );
+}
+
+/**
+ * PRD §5.7: a drawing template's number is a FLOOR, not a forecast. There is one
+ * decision, taken before anything is drawn, so a player who stops halfway does
+ * better — and nobody expects a tool's number to be beatable, which is why this
+ * sits under the headline rather than only in the editor. Read off the RUN's own
+ * parts, for the reason `LimitsFootnote` is.
+ */
+function DrawFootnote({ result }: { result: RunResult }) {
+  const note = drawFloorNote(result);
+  if (note === null) return null;
+  return (
+    <div className="foot" data-testid="draw-note">
+      <p>{note}</p>
     </div>
   );
 }
@@ -166,6 +193,7 @@ function Ranked({ result }: { result: RunResult }) {
   // fraction. Read off the first row, since every row of a run has the same
   // parts in the same order.
   const parts = rows[0] === undefined ? [] : rows[0].parts;
+  const shape = partShape(result.best.score);
 
   return (
     <>
@@ -177,8 +205,8 @@ function Ranked({ result }: { result: RunResult }) {
           <thead>
             <tr>
               <th>#</th>
-              <th title={parts.length > 0 ? 'the average of the two hands' : undefined}>
-                {parts.length > 0 ? 'average' : result.weighted ? 'weight' : 'P'}
+              <th title={partsCombineNote(shape)?.replace(/^, /, '') ?? undefined}>
+                {partsColumnLabel(shape, result.weighted)}
               </th>
               <th>exact</th>
               {result.weighted && <th title="P(at least one criterion)">P</th>}
@@ -186,7 +214,7 @@ function Ranked({ result }: { result: RunResult }) {
                   fraction: four columns here pushed the deck ratio — the
                   thing being chosen — off the panel entirely. */}
               {parts.map((part) => (
-                <th key={part.hand}>{part.label}</th>
+                <th key={part.key}>{part.label}</th>
               ))}
               {result.lines.map((line) => (
                 // A column cannot widen — the table sizes to its contents —
@@ -220,7 +248,7 @@ function Ranked({ result }: { result: RunResult }) {
                 <td className="num">{row.exact}</td>
                 {result.weighted && <td className="num dim">{row.successPercent}</td>}
                 {row.parts.map((part) => (
-                  <td key={part.hand} className="num stacked">
+                  <td key={part.key} className="num stacked">
                     {part.value}
                     <span className="dim">{part.exact}</span>
                   </td>
@@ -270,6 +298,9 @@ function Ranked({ result }: { result: RunResult }) {
  */
 function Plateau({ result, onRun }: { result: RunResult; onRun: () => void }) {
   const labels = lineLabels(result);
+  // A drawing run's headline is a SUM over prefix lengths, not the average of
+  // two hands, so the plateau's width is measured against the total.
+  const kind = headlineKind(partShape(result.best.score));
   const settings = useApp((state) => state.settings);
   const store = useApp((state) => state.setSettings);
   const [typed, setTyped] = useState<string | null>(null);
@@ -327,7 +358,7 @@ function Plateau({ result, onRun }: { result: RunResult; onRun: () => void }) {
       <div className="readout" data-testid="plateau">
         <p className="tabular" data-testid="plateau-size">
           {view.size} within <strong>{view.points}</strong> percentage points
-          {result.handSizes.length > 1 && <span className="dim"> of the average</span>}
+          {kind !== null && <span className="dim"> of {kind}</span>}
         </p>
         {view.truncated !== null && (
           <p className="dim" data-testid="plateau-truncated">
@@ -355,6 +386,28 @@ function Plateau({ result, onRun }: { result: RunResult; onRun: () => void }) {
 }
 
 /**
+ * What the per-criterion table is, in words. Three facts can each apply: two
+ * hands halve a tagged criterion's share rather than hiding it; prefix lengths
+ * are columns whose figures ADD to the row; and a weighted run's rows are still
+ * probabilities, because a weighted score is a maximum and does not decompose.
+ */
+function breakdownNote(result: RunResult): string {
+  const shape = partShape(result.best.score);
+  const hands =
+    shape === 'hands' || shape === 'both'
+      ? 'Each criterion on its own, at the best ratio, in each hand. They overlap, so they do not add up — and a criterion for one hand scores 0 in the other, which halves its share of the average rather than hiding it.'
+      : 'Each criterion on its own, at the best ratio. They overlap, so they do not add up.';
+  const lengths =
+    shape === 'lengths' || shape === 'both'
+      ? ' The columns are the prefix lengths a drawing hand reaches; those DO add up, to the row beside them.'
+      : '';
+  const weighted = result.weighted
+    ? ' These are probabilities: a weighted score is the highest weight a hand reaches, not a sum, so no criterion has a share of it to report.'
+    : '';
+  return `${hands}${lengths}${weighted}`;
+}
+
+/**
  * Each criterion's own PROBABILITY at the best ratio — which is what it is in a
  * weighted run too (`breakdown`): the row answers how often the criterion is
  * met, and a weighted score is a MAXIMUM over the criteria a hand meets, so
@@ -373,10 +426,13 @@ function Breakdown({ rows, result }: { rows: BreakdownRow[]; result: RunResult }
           <tr>
             <th />
             {weighted && <th className="num">weight</th>}
-            <th className="num">{parts.length > 0 ? 'average' : 'P'}</th>
+            {/* The row's own figure is always a probability here, whatever the
+                run ranks by — so `weighted` is false, and only the shape of the
+                parts decides whether it is a mean or a sum. */}
+            <th className="num">{partsColumnLabel(partShape(result.best.score), false)}</th>
             <th className="num">exact</th>
             {parts.map((part) => (
-              <th key={part.hand} className="num">
+              <th key={part.key} className="num">
                 {part.label}
               </th>
             ))}
@@ -395,7 +451,7 @@ function Breakdown({ rows, result }: { rows: BreakdownRow[]; result: RunResult }
             <td className="num">{row.percent}</td>
             <td className="num dim">{row.exact}</td>
             {row.parts.map((part) => (
-              <td key={part.hand} className="num stacked">
+              <td key={part.key} className="num stacked">
                 {part.successPercent}
                 <span className="dim">{part.successExact}</span>
               </td>
@@ -408,7 +464,7 @@ function Breakdown({ rows, result }: { rows: BreakdownRow[]; result: RunResult }
           <td className="num">{percentText(result.best.success)}</td>
           <td className="num dim">{exactText(result.best.success)}</td>
           {parts.map((part) => (
-            <td key={part.hand} className="num stacked">
+            <td key={part.key} className="num stacked">
               {part.successPercent}
               <span className="dim">{part.successExact}</span>
             </td>
@@ -549,6 +605,7 @@ function RunResultReadout({
       )}
 
       <BestRatio result={result} />
+      <DrawFootnote result={result} />
       <LimitsFootnote result={result} />
       <Export runId={runId} />
 
@@ -563,19 +620,7 @@ function RunResultReadout({
       </Heading>
       <SweepCharts sweeps={result.sweeps} labels={lineLabels(result)} weighted={result.weighted} />
 
-      <Heading
-        note={`${
-          result.handSizes.length > 1
-            ? 'Each criterion on its own, at the best ratio, in each hand. They overlap, so they do not add up — and a criterion for one hand scores 0 in the other, which halves its share of the average rather than hiding it.'
-            : 'Each criterion on its own, at the best ratio. They overlap, so they do not add up.'
-        }${
-          result.weighted
-            ? ' These are probabilities: a weighted score is the highest weight a hand reaches, not a sum, so no criterion has a share of it to report.'
-            : ''
-        }`}
-      >
-        Per criterion
-      </Heading>
+      <Heading note={breakdownNote(result)}>Per criterion</Heading>
       <Breakdown rows={breakdownRows(result)} result={result} />
 
       {result.irrelevant.length > 0 && (

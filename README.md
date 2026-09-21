@@ -19,7 +19,7 @@ combinatorial probability plus a card-database lookup layer.
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | **Done**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), range requirements (`1-2x monster`: a ceiling that binds the cards it does not take, so the range means "in addition to the rest"), `exactly nx` for a range whose ends agree, the sixth-card split (`1x {starter} then 1x [Ash]`: what the opening five must hold, and what the card you draw going second must be), inline name completion in both editors (`[card]`, `{group}`, `"archetype"`), M2g files (`.ydk` deck import, template open/save with `cardSnapshot`, CSV/JSON export of a run), three run modes (going first, going second, or their exact average, with each criterion tagged for the hand it is judged in), weighted criteria (rank by expected weight rather than success rate; a hand is worth the highest weight it meets), draw cards (a line whose copies are played and replaced by `n` fresh cards, so the hand is a prefix of the deck rather than a fixed size; exact per prefix length, with a per-criterion "stop here" that keeps an opening hand that already works), and an in-app syntax reference whose every example is parsed by a test |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), range requirements (`1-2x monster`: a ceiling that binds the cards it does not take, so the range means "in addition to the rest"), `exactly nx` for a range whose ends agree, the sixth-card split (`1x {starter} then 1x [Ash]`: what the opening five must hold, and what the card you draw going second must be), inline name completion in both editors (`[card]`, `{group}`, `"archetype"`), M2g files (`.ydk` deck import, template open/save with `cardSnapshot`, CSV/JSON export of a run), three run modes (going first, going second, or their exact average, with each criterion tagged for the hand it is judged in), weighted criteria (rank by expected weight rather than success rate; a hand is worth the highest weight it meets), draw cards (a line whose copies are played and replaced by `n` fresh cards, so the hand is a prefix of the deck rather than a fixed size; exact per prefix length, with a per-criterion "stop here" that keeps an opening hand that already works — engine, CLI and editor, with the per-length breakdown, the lower-bound caveat and every refusal read where the user is), and an in-app syntax reference whose every example is parsed by a test |
 | M3 — polish | Not started |
 | M4 — release | **In progress**: installers for macOS (arm64 DMG) and Windows (x64 NSIS) built and attached by `.github/workflows/release.yml` on a `v*` tag; the suite also runs on Windows in CI. Unsigned, so each platform warns once. `v0.2.0` shipped both and the Windows build has been run on Windows |
 
@@ -101,6 +101,27 @@ template had before, weights and all left where they were; `optimize --weighted`
 `--unweighted` override it from the harness, which is how the same template gives two answers one
 command apart.
 
+**A line can draw cards, and then the hand is not a fixed size.** Tick **draws** on any line and
+say how many cards a copy draws (1–6), plus **once per turn** where only the first copy is played.
+The row then says what the marker means in words, and a **Draw cards** readout under the lines says
+what `analyze` made of it: the opening hand, the largest hand the draws can build, and the prefix
+lengths a run will score — *"Scored at 2 prefix lengths — 5 and 7 cards deep — and the fractions ADD
+UP to one score."* Past the size an edit will pay to enumerate, it says the lengths are **not counted
+on every edit and the run still scores them all**, and the sentence beside Run says the same about
+the missing time estimate, rather than leaving a blank where a number was.
+
+Each criterion then carries **Stop here**: ticked, an opening hand that already meets it activates
+nothing and you keep the hand you had. Unticked — the default — you draw regardless, and are willing
+to lose that criterion by drawing. The panel says the thing the name invites a reader to miss: it
+picks the **moment, not the criteria**. Whichever way a hand stopped or drew, *every* criterion is
+judged on the hand it has, so a hand that stopped on a criterion worth 1 is still worth the 9 it
+also holds, and a criterion you ticked is still judged after drawing when your opening did not stop
+you. Where a criterion counts the whole hand — a limit, or a range requirement's ceiling — the
+criteria panel says so beside the boxes: **drawing more cards can make a hand fail**, so copies of a
+draw card can *lower* the score, and this is the flag that stops it. Every refusal (the deck running
+out, the prefix cap, the build cap, `then` beside draw cards) is shown whole under the lines, with
+the exact figure and the remedies the engine wrote.
+
 **Going second, you can ask what the card you draw has to be.** A going-second criterion may be
 **split** with `then`: `1x {starter} then 1x [Ash Blossom & Joyous Spring]` says the five cards you
 open on hold a starter **and** the card you draw is Ash Blossom. That is a different question from
@@ -137,6 +158,13 @@ at the best ratio; and the lines **no criterion can see**, said as free only whe
 every count really does tie — where it does not, what each count costs is shown instead. Where a
 criterion carries a limit, a quiet footnote says the number is exact under the tool's one
 matching rule and names the cards that rule cannot see.
+
+A **drawing** run reads differently in one respect that the screen says out loud: its parts are
+prefix lengths and they **add up** to the headline, where the two hands of an average are a weighted
+*mean* of theirs. So the headline's label, the ranked table's score column (`total` rather than
+`average`), the plateau's width and the per-criterion table all say which of the two they are — and
+a second footnote says the figure is a **lower bound on careful play**, since there is one decision,
+taken before anything is drawn, and a player who plays one copy and keeps the second does better.
 
 **Work outlives the app process.** At the top of the template panel, **Open…** and **Save…**
 read and write a [template file](#template-files-and-decks); **Import a deck…** lists the decks in your EDOPro
@@ -576,20 +604,23 @@ EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- optimize examples/d
 
 ```
 Best ratio — P(success) = 4,094,621,599,770 / 12,816,627,183,360 = 31.9477%
-  5 cards drawn: 12.4412% (81,864 / 658,008)
-  6 cards drawn: 5.6377% (1,298,385 / 23,030,280)
-  7 cards drawn: 8.0402% (62,957,292 / 783,029,520)
-  8 cards drawn: 4.5870% (592,645,131 / 12,919,987,080)
-  9 cards drawn: 1.1320% (4,680,322,578 / 413,439,586,560)
-  10 cards drawn: 0.1095% (7,017,699,222 / 6,408,313,591,680)
+  a hand of 5, nothing drawn: 12.4412% (81,864 / 658,008)
+  a hand of 5, 1 card drawn: 5.6377% (1,298,385 / 23,030,280)
+  a hand of 5, 2 cards drawn: 8.0402% (62,957,292 / 783,029,520)
+  a hand of 5, 3 cards drawn: 4.5870% (592,645,131 / 12,919,987,080)
+  a hand of 5, 4 cards drawn: 1.1320% (4,680,322,578 / 413,439,586,560)
+  a hand of 5, 5 cards drawn: 0.1095% (7,017,699,222 / 6,408,313,591,680)
 
   pot       0: 28.2864%   1: 29.6649%   2: 30.8803%   3: 31.9477% *
   upstart   0: 29.5591%   1: 30.3230%   2: 31.1184%   3: 31.9477% *
 ```
 
-Six hand sizes, six exact fractions, and they **sum** to the headline — one part per length the draw
-cards can reach, each over its own $`\binom{N}{\ell}`$, which is why there is no single fraction
-that says all of it. The first criterion is "a starter and no dead hand trap", and it is marked
+Six **prefix lengths**, six exact fractions, and they **sum** to the headline — one part per length
+the draw cards can reach, each over its own $`\binom{N}{\ell}`$, which is why there is no single
+fraction that says all of it. A part is named by what it DREW and not by its prefix: `prefix` is how
+deep into the deck the hand read, so `prefix − H` is the draw and the part at `prefix = H` drew
+nothing. (A prefix length is not a hand size either — two compositions of the same depth can leave
+different hands, since a draw-2 and two draw-1s both reach 7 from 5.) The first criterion is "a starter and no dead hand trap", and it is marked
 `stop`: an opening that already meets it keeps the hand instead of digging into an Ash Blossom that
 breaks the limit. **That flag alone is worth 1.44 percentage points** — 31.9477% against 30.5060%
 with it off — and it is the whole case for having it. 144 class vectors, scored in about 6 ms.

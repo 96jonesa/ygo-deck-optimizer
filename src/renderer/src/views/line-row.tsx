@@ -15,6 +15,14 @@ import {
   worstSeverity,
 } from '../model/analysis-view';
 import { type CopyRange, NAMED_CARD_MAX } from '../model/copy-range';
+import {
+  commitDrawN,
+  DRAW_MAX,
+  DRAW_MIN,
+  DRAW_NEW_N,
+  type DrawDraft,
+  drawLineText,
+} from '../model/draw-view';
 import { splitAtSpan } from '../model/span';
 import { isCardLine } from '../model/template-edit';
 import { CardPicker } from './card-picker';
@@ -73,6 +81,76 @@ export function ParseFailure({
   );
 }
 
+/**
+ * The draw marker (PRD §5.7): a tick that makes the line a draw card, and — only
+ * once it is one — how many cards a copy draws and whether only the first copy
+ * is played. It sits on a second row of the grid, in the text's column, for the
+ * reason the criterion's name does: the row above is already id, text, range and
+ * three buttons, and a description is long.
+ *
+ * The number field is live rather than committed on blur: `commitDrawN` clamps
+ * every keystroke into the bounds `core` enforces, so there is no intermediate
+ * value the template could be left holding.
+ */
+function DrawMarker({
+  line,
+  onDraw,
+}: {
+  line: TemplateLine;
+  onDraw: (draw: DrawDraft | null) => void;
+}) {
+  const { draw } = line;
+  const [n, setN] = useField(String(draw?.n ?? DRAW_NEW_N));
+
+  return (
+    <span className="line-draw" data-testid={`draw-${line.id}`}>
+      <label htmlFor={`draws-${line.id}`}>
+        <input
+          type="checkbox"
+          id={`draws-${line.id}`}
+          data-testid={`draws-${line.id}`}
+          checked={draw !== undefined}
+          onChange={(event) =>
+            onDraw(event.target.checked ? { n: commitDrawN(n, DRAW_NEW_N) } : null)
+          }
+        />{' '}
+        draws
+      </label>
+      {draw !== undefined && (
+        <>
+          <input
+            type="number"
+            className="count"
+            id={`draw-n-${line.id}`}
+            data-testid={`draw-n-${line.id}`}
+            inputMode="numeric"
+            min={DRAW_MIN}
+            max={DRAW_MAX}
+            step={1}
+            value={n}
+            aria-label={`Cards each copy of line ${line.id} draws, ${DRAW_MIN} to ${DRAW_MAX}`}
+            onChange={(event) => {
+              setN(event.target.value);
+              onDraw({ n: commitDrawN(event.target.value, draw.n), oncePerTurn: draw.oncePerTurn });
+            }}
+            onBlur={() => setN(String(draw.n))}
+          />
+          <label htmlFor={`draw-once-${line.id}`}>
+            <input
+              type="checkbox"
+              id={`draw-once-${line.id}`}
+              data-testid={`draw-once-${line.id}`}
+              checked={draw.oncePerTurn === true}
+              onChange={(event) => onDraw({ n: draw.n, oncePerTurn: event.target.checked })}
+            />{' '}
+            once per turn
+          </label>
+        </>
+      )}
+    </span>
+  );
+}
+
 export interface LineRowProps {
   line: TemplateLine;
   /** What `analyze` made of it; `null` while the analysis is one edit behind. */
@@ -86,6 +164,8 @@ export interface LineRowProps {
   last: boolean;
   onText: (text: string) => void;
   onRange: (range: CopyRange) => void;
+  /** What the line DRAWS, or `null` to stop being a draw card. */
+  onDraw: (draw: DrawDraft | null) => void;
   onMove: (by: number) => void;
   onRemove: () => void;
 }
@@ -100,6 +180,7 @@ export function LineRow({
   last,
   onText,
   onRange,
+  onDraw,
   onMove,
   onRemove,
 }: LineRowProps) {
@@ -193,9 +274,18 @@ export function LineRow({
             {'×'}
           </button>
         </span>
+        <DrawMarker line={line} onDraw={onDraw} />
       </div>
 
       <div className="line-readout" data-testid={`readout-${line.id}`}>
+        {/* What the marker means, in words, because the arithmetic is not
+            obvious from a number and a tick: three copies of a draw-2 read
+            eleven cards deep and leave a hand of eight. */}
+        {line.draw !== undefined && (
+          <p className="line-echo draws" data-testid={`draw-echo-${line.id}`}>
+            {drawLineText(line.draw)}
+          </p>
+        )}
         {failure !== null ? (
           <ParseFailure
             text={named ? '' : line.text}
