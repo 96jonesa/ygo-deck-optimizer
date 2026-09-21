@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Expr } from '../../../src/core/criteria/ast';
-import { parseCriterion } from '../../../src/core/criteria/parser';
+import { type CriterionParseOptions, parseCriterion } from '../../../src/core/criteria/parser';
 import { printCriterion } from '../../../src/core/criteria/print';
 import type { Description } from '../../../src/core/desc/ast';
 import { parse } from '../../../src/core/desc/parser';
@@ -58,8 +58,11 @@ function expectExpr(text: string, expr: Expr) {
 }
 
 /** The message of the error `text` must produce, and the piece of `text` its span covers. */
-function errorOf(text: string): { message: string; at: string; start: number } {
-  const result = parseCriterion(text, ctx);
+function errorOf(
+  text: string,
+  opts: CriterionParseOptions = {},
+): { message: string; at: string; start: number } {
+  const result = parseCriterion(text, ctx, opts);
   if (result.ok) throw new Error(`${text}: expected an error, got ${JSON.stringify(result.expr)}`);
   const { start, end } = result.span;
   return { message: result.message, at: text.slice(start, end), start };
@@ -441,10 +444,10 @@ describe('parseCriterion', () => {
       expectExpr('1x [C] then 0-1x [D]', split(req(1, C), range(0, 1, D)));
     });
 
-    it('refuses more than one card of it, naming what asked', () => {
+    it('refuses more than one card of it by default, naming what asked', () => {
       expect(errorOf('1x [C] then 2x [D]')).toEqual({
         message:
-          'the sixth card is one card, and this asks 2 of it: after `then`, write one requirement — `1x …` — or limits alone, as in `no trap`',
+          'the card you draw is one card, and this asks 2 of it: after `then`, write one requirement — `1x …` — or limits alone, as in `no trap`. Mark a line as drawing cards and `then` becomes about everything you drew, which can be more than one',
         at: '2x [D]',
         start: 12,
       });
@@ -456,10 +459,37 @@ describe('parseCriterion', () => {
       expect(parseCriterion('then 1x [C] and no [D]', ctx).ok).toBe(true);
     });
 
-    it('refuses a second then: one card is drawn, not two', () => {
+    /**
+     * The BOUND IS THE TEMPLATE'S, not the text's (PRD §5.7). With draw cards
+     * the drawn set is the card drawn for turn plus everything they fetched, so
+     * the same text is a mistake in one template and a question in another —
+     * and the parser is told which, rather than guessing.
+     */
+    describe('with draw cards, where the drawn set is larger', () => {
+      it('accepts as many slots as the drawn set can hold', () => {
+        expect(parseCriterion('1x [C] then 2x [D]', ctx, { maxDrawnSlots: 3 }).ok).toBe(true);
+        expect(parseCriterion('then 3x [D]', ctx, { maxDrawnSlots: 3 }).ok).toBe(true);
+      });
+
+      it('still refuses what the drawn set cannot hold, and says how many it holds', () => {
+        expect(errorOf('then 4x [D]', { maxDrawnSlots: 3 })).toEqual({
+          message:
+            'you draw at most 3 cards here, and this asks 4 of them: after `then`, write at most 3 requirement slot(s), or limits alone, as in `no trap`',
+          at: '4x [D]',
+          start: 5,
+        });
+      });
+
+      it('names one card again where nothing draws, which is the default', () => {
+        expect(parseCriterion('then 2x [D]', ctx, { maxDrawnSlots: 1 }).ok).toBe(false);
+        expect(parseCriterion('then 2x [D]', ctx).ok).toBe(false);
+      });
+    });
+
+    it('refuses a second then: the hand comes in two pieces, not three', () => {
       expect(errorOf('1x [C] then 1x [D] then 1x [E]')).toEqual({
         message:
-          'a criterion has one `then`: it separates the five cards you open on from the one you draw, and there is only one card drawn',
+          'a criterion has one `then`: it separates the cards you open on from the cards you draw, and the hand comes in two pieces, not three',
         at: 'then',
         start: 19,
       });
@@ -471,7 +501,7 @@ describe('parseCriterion', () => {
     it('refuses nothing after it', () => {
       for (const text of ['1x [C] then', 'then']) {
         const { message } = errorOf(text);
-        expect(message, text).toContain('what the card you draw must be after `then`');
+        expect(message, text).toContain('what the cards you draw must be after `then`');
       }
       expect(errorOf('1x [C] then').start).toBe(11);
     });

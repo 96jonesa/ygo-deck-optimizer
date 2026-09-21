@@ -1,6 +1,6 @@
 import { canonicalize } from '../desc/ast';
 import type { Counted, CountedRange, Expr, FlatCriterion } from './ast';
-import { MAX_RANGES, MAX_SIXTH_SLOTS } from './ast';
+import { MAX_RANGES, MAX_SIXTH_SLOTS, tooManyDrawnSlots } from './ast';
 
 /** Expansion is exponential in the number of `or`s in principle; more alternatives than this is an error. */
 export const MAX_FLAT_CRITERIA = 256;
@@ -11,6 +11,29 @@ export interface ExpandOptions {
    * hand DRAW CARDS can build where there are any (`largestHand`).
    */
   maxHandSize: number;
+  /**
+   * The most cards a SPLIT criterion's opening part can be about: `H − 1`, the
+   * cards dealt before the one drawn for turn. Default `maxHandSize - 1`, which
+   * is exactly that for every template without draw cards.
+   *
+   * It is its own option because draw cards pull the two apart: `maxHandSize`
+   * becomes the hand they can BUILD — nine cards, say — while the cards opened
+   * on are five however deep the prefix goes. Left to follow `maxHandSize`, an
+   * opening part asking for eight cards would survive expansion and then score
+   * zero on every hand, which is the one outcome this file exists to avoid.
+   */
+  maxOpenedSize?: number;
+  /**
+   * The most cards the part after `then` can ever be about (`largestDrawnSet`):
+   * one where nothing draws, and the card drawn for turn plus everything the
+   * draw cards fetched where something does. Default one, which is the bound
+   * every template had before draw cards.
+   *
+   * It bounds the SLOTS that part may ask for, and it is the `room` a ceiling
+   * or a limit there is weighed against — `at most 1x trap` can never bind on
+   * one card and always can on three.
+   */
+  maxDrawnSlots?: number;
 }
 
 export type ExpandResult =
@@ -240,11 +263,11 @@ function alternativesOf(expr: Expr): Draft[] {
  *    error, found while distributing and not after. Dropping (3) never rescues
  *    an expansion from the cap.
  * A SPLIT criterion (`five then sixth`) distributes on both sides and its
- * alternatives are the product: each pairs one way to open with one card to
- * draw. The five-card part is then judged over `maxHandSize - 1` cards, and
- * the sixth card's part over one — more than `MAX_SIXTH_SLOTS` slots there is
- * an ERROR and not a drop, because no card can ever be two cards and a hand
- * that silently scores 0 teaches nobody why.
+ * alternatives are the product: each pairs one way to open with one way of
+ * drawing. The opening part is then judged over `maxHandSize - 1` cards, and
+ * the drawn part over `maxDrawnSlots` — more slots than that is an ERROR and
+ * not a drop, because the cards drawn can never be more than the draw cards
+ * fetch and a hand that silently scores 0 teaches nobody why.
  *
  * 3. An alternative whose requirement LOWER bounds need more than
  *    `maxHandSize` cards can never be satisfied and is dropped, and counted.
@@ -282,24 +305,23 @@ export function expandAll(exprs: readonly Expr[], opts: ExpandOptions): ExpandRe
     limits: [...limits.values()],
   });
 
+  const drawnRoom = opts.maxDrawnSlots ?? MAX_SIXTH_SLOTS;
+  const openedRoom = opts.maxOpenedSize ?? opts.maxHandSize - 1;
   const flat: FlatCriterion[] = [];
   const sources: number[][] = [];
   for (const [index, draft] of drafts.entries()) {
     const { sixth } = draft;
-    // A split criterion's five-card part is judged over one card FEWER than
-    // the hand holds: going second you see five and then draw the sixth.
-    const room = sixth === undefined ? opts.maxHandSize : opts.maxHandSize - 1;
+    // A split criterion's opening part is judged over the cards OPENED ON —
+    // going second you see five and then draw the sixth — and an unsplit one
+    // over the whole hand, which draw cards make larger than either.
+    const room = sixth === undefined ? opts.maxHandSize : openedRoom;
     if (slotsIn(draft) > room) continue;
     if (sixth !== undefined) {
       const asked = slotsIn(sixth);
-      if (asked > MAX_SIXTH_SLOTS)
-        return {
-          ok: false,
-          reason: 'sixth-card',
-          message: `the sixth card is one card, and this alternative asks ${asked} of it: after \`then\`, write one requirement — \`1x …\` — or limits alone, as in \`no trap\``,
-        };
+      if (asked > drawnRoom)
+        return { ok: false, reason: 'sixth-card', message: tooManyDrawnSlots(asked, drawnRoom) };
     }
-    const ranges = rangesIn(draft, room) + (sixth === undefined ? 0 : rangesIn(sixth, 1));
+    const ranges = rangesIn(draft, room) + (sixth === undefined ? 0 : rangesIn(sixth, drawnRoom));
     if (ranges > MAX_RANGES)
       return {
         ok: false,

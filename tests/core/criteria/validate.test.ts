@@ -40,13 +40,19 @@ describe('validateExpr', () => {
       expect(errors({ op: 'split', sixth: split })[0]).toContain('cannot stand inside');
     });
 
-    it('refuses a sixth card asked for more than one card', () => {
-      expect(errors({ op: 'split', sixth: { op: 'and', args: [REQ, REQ] } })).toEqual([
-        'expr.sixth: the sixth card is one card, and this asks 2 of it',
-      ]);
-      expect(errors({ op: 'split', sixth: { op: 'req', n: 2, desc: REQ.desc } })[0]).toContain(
-        'asks 2 of it',
-      );
+    /**
+     * HOW MANY CARDS `then` may ask for is a question about the TEMPLATE and
+     * not about this expression: draw cards make the drawn set larger than one
+     * card. So a stored AST asking for two is READ here and refused where the
+     * bound is known — by the parser, which is given it, and by `expand`, which
+     * refuses it for the run. Exactly the rule `stop` is read by.
+     */
+    it('reads a drawn part asking for two cards, and leaves the bound to the template', () => {
+      const two: unknown = { op: 'split', sixth: { op: 'and', args: [REQ, REQ] } };
+      expect(errors(two)).toEqual([]);
+      const result = validateExpr(two, 'expr');
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      expect(result.expr).toMatchObject({ op: 'split' });
     });
 
     it('reports what is wrong inside either side, located', () => {

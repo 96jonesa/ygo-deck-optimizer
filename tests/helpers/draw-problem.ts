@@ -16,6 +16,13 @@ export interface DrawProblemSpec {
   max?: readonly number[];
   /** The deck size; the default is what `n` holds. */
   deckSize?: number;
+  /**
+   * Whether the hand is dealt in two pieces — the cards opened on, then the
+   * card drawn for turn and whatever follows it (`HandSize.drawn`). A criterion
+   * with a `sixth` part needs it; `compileProblem` sets it for itself, and here
+   * it is said outright.
+   */
+  drawn?: true;
 }
 
 /** The class bit of class `cls`, for writing masks. */
@@ -28,10 +35,11 @@ export function drawProblem({
   criteria,
   max,
   deckSize,
+  drawn,
 }: DrawProblemSpec): Problem {
   return {
     deckSize: deckSize ?? n.reduce((sum, count) => sum + count, 0),
-    handSizes: [{ H, weight: 1 }],
+    handSizes: [drawn === true ? { H, weight: 1, drawn: true } : { H, weight: 1 }],
     classes: n.map((count, cls) => ({
       lineIds: [`c${cls}`],
       min: 0,

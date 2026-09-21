@@ -6,12 +6,20 @@ import {
   drawClassesOf,
   longestPrefix,
   maxCriterionWeight,
+  opensApart,
+  outcomesOf,
   type Problem,
   validateProblem,
 } from '../model/problem';
 import { choose } from './binomial';
 import { lcmBig, prefixFactor, type Rational, rationalKey, reduced, splitFactor } from './draw';
-import { compileWeigher, type MatcherOptions, type Weigher } from './matcher';
+import {
+  compileSplitWeigher,
+  compileWeigher,
+  type MatcherOptions,
+  type SplitWeigher,
+  type Weigher,
+} from './matcher';
 
 /**
  * The success set for a problem with DRAW CARDS (PRD §5.7). A hand is then a
@@ -89,6 +97,47 @@ import { compileWeigher, type MatcherOptions, type Weigher } from './matcher';
  * `Π C(n_c, v_c)`, exactly as it does when nothing stops — so the split factor
  * is a build-time constant and the hot loop is untouched. Only the build pays,
  * and it pays a lot: measured 3–63× the rows of the route with no stop.
+ *
+ * ---------------------------------------------------------------------------
+ * `then` BESIDE DRAW CARDS (PRD §5.6, §5.7), which is the other thing that
+ * needs the opening told apart from the rest of the prefix.
+ *
+ * Going second the hand is dealt in two pieces: the cards OPENED ON are
+ * positions 0…H−2 and the DRAWN SET is positions H−1…ℓ−1 — the card drawn for
+ * turn, and everything the draw cards fetched. A resolved copy leaves the hand
+ * out of whichever of the two it was dealt into. With no draw card ℓ = H and
+ * the drawn set is the one card at position H−1, which is what `then` has
+ * always meant, so this GENERALISES the sixth-card split rather than replacing
+ * it — and a template without draw cards gives a bit-identical answer, which a
+ * test pins.
+ *
+ * ONE NEW FACT DOES ALL OF IT, and it is worth stating as a claim because it
+ * is the one the mathematics turns on:
+ *
+ *     conditional on the prefix composition `v`, on which of it fell in the
+ *     first `H` positions (`u`), and on the arrangement being VALID, the card
+ *     at position H−1 is of class `d` with probability `u_d / H`.
+ *
+ * Why: validity is `budget(t) > t` at every `t < ℓ`, and `budget(t) = H +
+ * draws(first t)`. For `t < H` it holds whatever stands there, since the budget
+ * starts at `H` and never falls. For `t >= H` the budget counts the draw cards
+ * of the first `H` positions through their MULTISET and not their order. So the
+ * valid arrangements factorise as (every arrangement of the first `H`) × (the
+ * valid arrangements of the extension) — which is exactly the ψ above, computed
+ * from position `H` — and the first `H` are therefore uniformly ordered. The
+ * split at H−1 sits INSIDE that unconstrained region, so it costs no new
+ * factor: only the `u_d / H` that the sixth-card split already had.
+ *
+ * A row is then one `(v, u)` pair as before, worth `Σ_d u_d · value(u, d, v)`
+ * over a factor of `ψ / (H · C(ℓ, H))`. The extra `H` is `outcomesOf` the hand
+ * and goes in the FACTOR rather than in the part's `den` directly, so that the
+ * lcm picks it up and the exactness check already there covers it.
+ *
+ * It belongs to the HAND and not to the criteria, exactly as `HandSize.drawn`
+ * says: with nothing split, `value` does not depend on `d`, the sum is
+ * `H · value`, and the score is the undrawn one with both sides of the fraction
+ * multiplied by `H`. That is what lets one criterion of a run be split and
+ * another not while every row of the readout sits over one denominator.
  */
 
 export interface DrawGroup {
@@ -126,6 +175,12 @@ export interface DrawSet {
   width: number;
   /** One per STRUCTURALLY reachable prefix length, ascending; a part may hold no row. */
   parts: DrawPart[];
+  /**
+   * `outcomesOf` the hand: `H` where it is dealt in two pieces, 1 otherwise.
+   * It is already inside every part's `den`, through the ordering factor — this
+   * is what it MEANS, for a readout that says so.
+   */
+  outcomes: number;
   /** The largest weight any criterion of the problem carries; 1 when none is weighted. */
   maxWeight: number;
   /** Rows stored over every part. */
@@ -172,19 +227,45 @@ export function hasDrawCards(problem: Problem): boolean {
 }
 
 /**
- * A weigher over `chosen` alone, as a problem in its own right — the same deck
- * and classes. Two are built: one over EVERY criterion, which values whichever
- * window the stop decision lands on, and one over the `stop` criteria, whose
- * only job is to decide it.
+ * `chosen` as a problem in its own right — the same deck and the same classes,
+ * and a hand of `H` dealt in one piece or two.
  */
-function weigherOver(problem: Problem, H: number, chosen: CompiledCriterion[]): Weigher {
-  if (chosen.length === 0) return () => 0;
-  return compileWeigher({
+function problemOver(
+  problem: Problem,
+  H: number,
+  chosen: readonly CompiledCriterion[],
+  drawn: boolean,
+): Problem {
+  return {
     deckSize: problem.deckSize,
-    handSizes: [{ H, weight: 1 }],
+    handSizes: [drawn ? { H, weight: 1, drawn: true } : { H, weight: 1 }],
     classes: problem.classes,
-    criteria: chosen,
-  });
+    criteria: [...chosen],
+  };
+}
+
+/**
+ * A weigher over `chosen` alone. Two are built: one over EVERY criterion, which
+ * values whichever window the stop decision lands on, and one over the `stop`
+ * criteria, whose only job is to decide it.
+ */
+function weigherOver(problem: Problem, H: number, chosen: readonly CompiledCriterion[]): Weigher {
+  if (chosen.length === 0) return () => 0;
+  return compileWeigher(problemOver(problem, H, chosen, false));
+}
+
+/**
+ * The same, for a hand dealt in TWO pieces: the cards opened on and the cards
+ * drawn. A criterion naming no drawn set is judged over the two together, so
+ * this answers what `weigherOver` answers wherever nothing is split.
+ */
+function splitWeigherOver(
+  problem: Problem,
+  H: number,
+  chosen: readonly CompiledCriterion[],
+): SplitWeigher {
+  if (chosen.length === 0) return () => 0;
+  return compileSplitWeigher(problemOver(problem, H, chosen, true));
 }
 
 /** A group being filled: rows keyed by composition, so that two splits of one `v` are one row. */
@@ -219,10 +300,20 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
             })(),
         ];
   const stopping = judged.filter(({ stop }) => stop === true);
+  /**
+   * Whether the hand is dealt in two pieces (`HandSize.drawn`) — read off the
+   * problem's own declaration of it, as `successSet` reads it, so that the
+   * enumeration, its cost (`drawWork`) and the denominator answer one question.
+   */
+  const drawn = opensApart(problem, H);
+  const outcomes = outcomesOf(drawn ? { H, drawn: true } : { H });
   /** Values whichever window the stop decision lands on: EVERY criterion counts in it. */
-  const weigh = weigherOver(problem, H, [...judged]);
+  const weigh = drawn ? () => 0 : weigherOver(problem, H, judged);
   /** Decides the window, and does nothing else: the `stop` criteria on the opening. */
-  const stops = weigherOver(problem, H, stopping);
+  const stops = drawn ? () => 0 : weigherOver(problem, H, stopping);
+  /** The same two, for a hand read as (opened on, drawn): what `then` needs. */
+  const weighSplit = drawn ? splitWeigherOver(problem, H, judged) : () => 0;
+  const stopsSplit = drawn ? splitWeigherOver(problem, H, stopping) : () => 0;
 
   /** The classes the outer loop does not choose: the blank class and every non-draw class. */
   const rest: number[] = [];
@@ -238,6 +329,8 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
     factor: Rational,
     v: readonly number[],
     worth: number,
+    /** Outcomes of this row that meet ANY criterion: 1 where a hand is one outcome. */
+    succeeded: number,
     ways: number,
   ) => {
     let atLength = drafts.get(prefix);
@@ -254,14 +347,16 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
     const rowKey = v.join(',');
     const row = group.rows.get(rowKey) ?? { v: [...v], value: 0, plain: 0 };
     row.value += worth * ways;
-    row.plain += ways;
+    row.plain += succeeded * ways;
     group.rows.set(rowKey, row);
   };
 
-  // Nothing to stop for means the draw branch is always taken, and then the
-  // score depends on the whole prefix alone — no opening to enumerate.
-  if (stopping.length === 0) enumerateDrawn();
-  else enumerateStopping();
+  // The OPENING has to be enumerated apart from the rest of the prefix when
+  // something would stop the draws — the decision is taken on it — and equally
+  // when the hand is dealt in two pieces, since `then` is about where the
+  // opening ends. Neither, and the score depends on the whole prefix alone.
+  if (stopping.length === 0 && !drawn) enumerateDrawn();
+  else enumerateOpening();
 
   /**
    * Nothing would stop the draws, so every hand takes the draw branch: the
@@ -294,7 +389,7 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
             size -= used;
           });
           const worth = weigh(hand, size);
-          if (worth > 0) add(prefix, factor, v, worth, 1);
+          if (worth > 0) add(prefix, factor, v, worth, 1, 1);
         });
         return;
       }
@@ -309,17 +404,86 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
   }
 
   /**
-   * Something would stop the draws, so the OPENING decides which window is
-   * scored: a row is one (opening, prefix) pair, and the outer loop chooses
-   * where each draw card fell — `a` copies among the first `H` cards, `b` after
-   * them.
+   * The OPENING is read apart from the rest of the prefix: a row is one
+   * (opening, prefix) pair, and the outer loop chooses where each draw card
+   * fell — `a` copies among the first `H` cards, `b` after them.
+   *
+   * Two things want this, and they compose. A STOP decision is taken on the
+   * opening; and a hand dealt in two pieces asks what stood at position H−1,
+   * which is the last card of the opening.
    */
-  function enumerateStopping(): void {
+  function enumerateOpening(): void {
     const a = draws.map(() => 0);
     const b = draws.map(() => 0);
     const v = new Array<number>(classCount).fill(0);
     const u = new Array<number>(classCount).fill(0);
     const hand = new Array<number>(classCount).fill(0);
+    /** The hand's two windows, and the one card drawn for turn. */
+    const openWindow = new Array<number>(classCount).fill(0);
+    const drawnWindow = new Array<number>(classCount).fill(0);
+    const forTurn = new Array<number>(classCount).fill(0);
+
+    /**
+     * What one opening `u` of the prefix `v` is worth, SUMMED over which class
+     * stood at position H−1 — the card drawn for turn. Conditional on `v`, `u`
+     * and validity, that card is of class `d` with probability `u_d / H`, so
+     * this is `Σ_d u_d · value(d)` and the `H` under it rides in the factor.
+     *
+     * The two windows follow from `d`:
+     *
+     * - STOPPED, nothing is activated, so nothing was fetched: the cards opened
+     *   on are `u − e_d` and the drawn set is the one card `d`. `then 2x
+     *   monster` can never hold in this branch, and says so by scoring 0 rather
+     *   than by being refused somewhere.
+     * - DREW, every draw card resolves and LEAVES the hand, out of the window
+     *   it was dealt into. Under once-per-turn only the EARLIEST copy resolves,
+     *   and the cards opened on come first — so it leaves the opening whenever
+     *   the opening holds one, and the drawn set otherwise.
+     */
+    function valueSplit(prefix: number): { value: number; succeeded: number } {
+      let value = 0;
+      let succeeded = 0;
+      for (let d = 0; d < classCount; d++) {
+        const held = u[d]!;
+        if (held === 0) continue;
+        for (let cls = 0; cls < classCount; cls++) openWindow[cls] = u[cls]!;
+        openWindow[d]!--;
+        forTurn.fill(0);
+        forTurn[d] = 1;
+        let worth: number;
+        if (stopsSplit(openWindow, H - 1, forTurn, 1) > 0) {
+          worth = weighSplit(openWindow, H - 1, forTurn, 1);
+        } else {
+          for (let cls = 0; cls < classCount; cls++) drawnWindow[cls] = v[cls]! - u[cls]!;
+          drawnWindow[d]!++;
+          let openSize = H - 1;
+          let drawnSize = prefix - (H - 1);
+          for (const spec of draws) {
+            const cls = spec.cls;
+            if (v[cls]! === 0) continue;
+            if (spec.oncePerTurn === true) {
+              if (openWindow[cls]! > 0) {
+                openWindow[cls]!--;
+                openSize--;
+              } else {
+                drawnWindow[cls]!--;
+                drawnSize--;
+              }
+            } else {
+              openSize -= openWindow[cls]!;
+              drawnSize -= drawnWindow[cls]!;
+              openWindow[cls] = 0;
+              drawnWindow[cls] = 0;
+            }
+          }
+          worth = weighSplit(openWindow, openSize, drawnWindow, drawnSize);
+        }
+        value += held * worth;
+        if (worth > 0) succeeded += held;
+      }
+      return { value, succeeded };
+    }
+
     const outer = (at: number, prefix: number, inOpening: number): void => {
       if (at === draws.length) {
         if (inOpening > H) return;
@@ -331,8 +495,15 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
         const psi = splitFactor(H, specs, a, b, fillersAfter);
         if (psi.num === 0n) return;
         // `C(ℓ, H)` belongs to the factor, not to the rows: it is the
-        // denominator of the split the rows' `Π C(v_c, u_c)` counts.
-        const factor = reduced(psi.num, psi.den * BigInt(choose(prefix, H)));
+        // denominator of the split the rows' `Π C(v_c, u_c)` counts. And `H`
+        // with it where the hand is dealt in two pieces — the card at position
+        // H−1 is then one of `H` equally likely ones, and putting the divisor
+        // in the FACTOR is what carries it into the part's `den` and so into
+        // the exactness check, rather than needing a second one.
+        const factor = reduced(
+          psi.num,
+          psi.den * BigInt(choose(prefix, H)) * BigInt(drawn ? H : 1),
+        );
         v.fill(0);
         u.fill(0);
         draws.forEach((spec, i) => {
@@ -342,28 +513,39 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
         // The whole prefix first, then which of it was the opening: a `v` the
         // classes cannot hold is never built, and its splits are never walked.
         compose(rest, 0, fillersOpen + fillersAfter, v, capOf, () => {
-          let size = prefix;
-          for (let cls = 0; cls < classCount; cls++) hand[cls] = v[cls]!;
-          draws.forEach((spec) => {
-            const used = copiesUsed(v[spec.cls]!, spec);
-            hand[spec.cls]! -= used;
-            size -= used;
-          });
           // The draw branch's value depends on the whole prefix alone, so it is
-          // decided once per `v` rather than once per opening.
-          const drawn = weigh(hand, size);
+          // decided once per `v` rather than once per opening. Not so where the
+          // hand is dealt in two pieces: which cards the drawn set holds depends
+          // on where the opening ended, so `valueSplit` decides it per opening.
+          let afterDraws = 0;
+          if (!drawn) {
+            let size = prefix;
+            for (let cls = 0; cls < classCount; cls++) hand[cls] = v[cls]!;
+            draws.forEach((spec) => {
+              const used = copiesUsed(v[spec.cls]!, spec);
+              hand[spec.cls]! -= used;
+              size -= used;
+            });
+            afterDraws = weigh(hand, size);
+          }
           compose(rest, 0, fillersOpen, u, v, () => {
             visits++;
+            let ways = 1;
+            for (let cls = 0; cls < classCount; cls++) ways *= choose(v[cls]!, u[cls]!);
             // ONE window, decided before anything is drawn — never the better of
             // the two. A `stop` criterion met by the opening stops the draws and
             // the opening is what is valued; otherwise every draw card resolves
             // and the hand that is left is what is valued, however much the
             // opening was worth.
-            const worth = stops(u, H) > 0 ? weigh(u, H) : drawn;
-            if (worth === 0) return;
-            let ways = 1;
-            for (let cls = 0; cls < classCount; cls++) ways *= choose(v[cls]!, u[cls]!);
-            add(prefix, factor, v, worth, ways);
+            if (!drawn) {
+              const worth = stops(u, H) > 0 ? weigh(u, H) : afterDraws;
+              if (worth === 0) return;
+              add(prefix, factor, v, worth, 1, ways);
+              return;
+            }
+            const worth = valueSplit(prefix);
+            if (worth.value === 0) return;
+            add(prefix, factor, v, worth.value, worth.succeeded, ways);
           });
         });
         return;
@@ -390,7 +572,7 @@ export function drawSet(problem: Problem, H: number, opts: MatcherOptions = {}):
   // position and answering nonsense.
   for (const prefix of reachablePrefixes(H, draws))
     if (!drafts.has(prefix)) drafts.set(prefix, new Map());
-  return { ...assemble({ drafts, deckSize, H, classCount, width, maxWeight }), visits };
+  return { ...assemble({ drafts, deckSize, H, classCount, width, maxWeight }), outcomes, visits };
 }
 
 /**
@@ -441,7 +623,7 @@ function assemble({
   classCount,
   width,
   maxWeight,
-}: Assembly): Omit<DrawSet, 'visits'> {
+}: Assembly): Omit<DrawSet, 'visits' | 'outcomes'> {
   const parts: DrawPart[] = [];
   let terms = 0;
   let groups = 0;

@@ -1,6 +1,6 @@
 import type { Description } from '../desc/ast';
 import { validateDescription } from '../desc/validate';
-import { canonicalizeExpr, type Expr, MAX_COUNT, MAX_SIXTH_SLOTS, slotsOf } from './ast';
+import { canonicalizeExpr, type Expr, MAX_COUNT } from './ast';
 
 // Checking a criterion AST that came from outside (TDD §14) — the `expr` beside
 // a criterion's text, as `validateDescription` checks the `desc` beside a
@@ -101,11 +101,13 @@ class ExprValidator {
           value.five === undefined ? undefined : this.expr(`${where}.five`, value.five, depth + 1);
         if (sixth === undefined || (value.five !== undefined && five === undefined))
           return undefined;
-        const slots = slotsOf(sixth);
-        if (slots > MAX_SIXTH_SLOTS)
-          return this.fail(
-            `${where}.sixth: the sixth card is one card, and this asks ${slots} of it`,
-          );
+        // HOW MANY CARDS `then` may ask for is not a question about this
+        // expression: it is one about the TEMPLATE, since draw cards make the
+        // drawn set larger than one card (`largestDrawnSet`). So it is left to
+        // the parser — which is given the template's bound and can point at the
+        // text — and to `expand`, which refuses it for the run. Exactly the
+        // reason `stop` is read here whether or not anything draws: what a file
+        // may SAY is a different question from what a template makes of it.
         return five === undefined ? { op: 'split', sixth } : { op: 'split', five, sixth };
       }
       default:

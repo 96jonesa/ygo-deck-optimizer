@@ -2,12 +2,30 @@ import type { Description } from '../desc/ast';
 import type { DescContext } from '../desc/context';
 import type { Span, Token } from '../desc/lexer';
 import { parseTokens } from '../desc/parser';
-import { canonicalizeExpr, type Expr, MAX_COUNT, MAX_SIXTH_SLOTS, slotsOf } from './ast';
+import {
+  canonicalizeExpr,
+  type Expr,
+  MAX_COUNT,
+  MAX_SIXTH_SLOTS,
+  slotsOf,
+  tooManyDrawnSlots,
+} from './ast';
 import { type CriterionToken, lexCriterion } from './lexer';
 
 export type CriterionParseResult =
   | { ok: true; expr: Expr }
   | { ok: false; message: string; span: Span };
+
+export interface CriterionParseOptions {
+  /**
+   * The most requirement slots the part after `then` may ask for: the cards the
+   * template's draw cards can put in the drawn set (`largestDrawnSet`).
+   * Default `MAX_SIXTH_SLOTS` — one card — which is the bound for every
+   * template that draws nothing, and the one the syntax reference is read
+   * against.
+   */
+  maxDrawnSlots?: number;
+}
 
 /** Parentheses only group, so real input nests once or twice; the cap keeps the stack bounded. */
 const MAX_DEPTH = 32;
@@ -54,6 +72,7 @@ class Parser {
     private readonly tokens: readonly CriterionToken[],
     private readonly text: string,
     private readonly ctx: DescContext,
+    private readonly maxDrawnSlots: number,
   ) {}
 
   parseAll(): Expr {
@@ -76,11 +95,11 @@ class Parser {
     return expr;
   }
 
-  /** What follows `then`: the sixth card's own criterion, over ONE card. */
+  /** What follows `then`: the DRAWN SET's own criterion, over the cards drawn. */
   private sixthPart(): Expr {
     if (this.peek() === undefined)
       throw new Failure(
-        'expected what the card you draw must be after `then`, as in `1x [Ash Blossom & Joyous Spring]` or `no trap`',
+        'expected what the cards you draw must be after `then`, as in `1x [Ash Blossom & Joyous Spring]` or `no trap`',
         this.spanAt(this.pos),
       );
     const start = this.pos;
@@ -88,16 +107,16 @@ class Parser {
     const extra = this.peek();
     if (extra?.t === 'then')
       throw new Failure(
-        'a criterion has one `then`: it separates the five cards you open on from the one you draw, and there is only one card drawn',
+        'a criterion has one `then`: it separates the cards you open on from the cards you draw, and the hand comes in two pieces, not three',
         extra.span,
       );
     if (extra !== undefined) throw new Failure('this `)` has no matching `(`', extra.span);
     const slots = slotsOf(sixth);
-    if (slots > MAX_SIXTH_SLOTS)
-      throw new Failure(
-        `the sixth card is one card, and this asks ${slots} of it: after \`then\`, write one requirement — \`1x …\` — or limits alone, as in \`no trap\``,
-        { start: this.spanAt(start).start, end: this.spanAt(this.pos - 1).end },
-      );
+    if (slots > this.maxDrawnSlots)
+      throw new Failure(tooManyDrawnSlots(slots, this.maxDrawnSlots), {
+        start: this.spanAt(start).start,
+        end: this.spanAt(this.pos - 1).end,
+      });
     return sixth;
   }
 
@@ -418,21 +437,31 @@ class Parser {
  * second (PRD §5.6). It binds looser than everything else, so no parentheses
  * are ever needed around either side, and a criterion holds at most one: the
  * hand comes in two pieces, not three. A LEADING `then` leaves the opening
- * five unasked about. What follows it is about ONE card, so its requirement
- * slots are counted here — `slotsOf` counts them exactly as expansion would —
- * and `… then 2x monster` is refused with the span of what asks too much,
- * rather than scoring zero for a reason nobody can see.
+ * five unasked about. What follows it is about the CARDS DRAWN, so its
+ * requirement slots are counted here — `slotsOf` counts them exactly as
+ * expansion would — and a part asking for more than `maxDrawnSlots` is refused
+ * with the span of what asks too much, rather than scoring zero for a reason
+ * nobody can see. That bound belongs to the TEMPLATE, not to the text: it is
+ * one card where nothing draws and `largestDrawnSet` where something does, so
+ * `then 2x monster` is a mistake in one template and a question in another.
  *
  * `exactly n` is sugar for the range `[n, n]` and nothing more: it parses to
  * the very node `n-nx` parses to, so no later pass can tell the two apart. It
  * belongs to requirements alone — a limit has one ceiling already, and there
  * is no census that means "exactly".
  */
-export function parseCriterion(text: string, ctx: DescContext): CriterionParseResult {
+export function parseCriterion(
+  text: string,
+  ctx: DescContext,
+  { maxDrawnSlots = MAX_SIXTH_SLOTS }: CriterionParseOptions = {},
+): CriterionParseResult {
   const lexed = lexCriterion(text);
   if (!lexed.ok) return lexed;
   try {
-    return { ok: true, expr: canonicalizeExpr(new Parser(lexed.tokens, text, ctx).parseAll()) };
+    return {
+      ok: true,
+      expr: canonicalizeExpr(new Parser(lexed.tokens, text, ctx, maxDrawnSlots).parseAll()),
+    };
   } catch (failure) {
     if (failure instanceof Failure)
       return { ok: false, message: failure.message, span: failure.span };

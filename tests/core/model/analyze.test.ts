@@ -1230,7 +1230,7 @@ describe('analyze of a split criterion', () => {
     expect(a.ok).toBe(false);
     expect(codes(criterionOf(a, 'c1').issues)).toEqual(['!parse']);
     const [issue] = criterionOf(a, 'c1').issues;
-    expect(issue!.message).toContain('the sixth card is one card, and this asks 2 of it');
+    expect(issue!.message).toContain('the card you draw is one card, and this asks 2 of it');
     expect('1x monster then 2x trap'.slice(issue!.span!.start, issue!.span!.end)).toBe('2x trap');
   });
 
@@ -1370,6 +1370,29 @@ describe('analyze with draw cards', () => {
       const message = a.issues.find((issue) => issue.code === 'drawing-can-fail')!.message;
       expect(message).toContain('"stop here"');
     });
+
+    /**
+     * THE DRAWN SET COUNTS TOO. `then no trap` is a census over the cards you
+     * drew, and drawing more cards is exactly what makes that window bigger —
+     * so a split criterion breaks the same way an unsplit one does. Reading
+     * only the outer window would leave unwarned the one template most likely
+     * to be surprised by it.
+     */
+    it('is given where only the `then` part counts what was drawn', () => {
+      const of = (text: string) =>
+        analyze(
+          templateOf([potLine(), line('starter', 'monster'), line('brick', 'trap')], [], {
+            hand: { size: 6 },
+            mode: 'second',
+            criteria: [{ id: 'c1', text, when: 'second' }],
+          }),
+          ctx,
+        );
+      expect(noticed(of('1x monster then no trap'))).toBe(true);
+      // And not where nothing counts anything: a plain requirement on either
+      // side only ever gets easier as the hand grows.
+      expect(noticed(of('1x monster then 1x monster'))).toBe(false);
+    });
   });
 
   /**
@@ -1422,7 +1445,12 @@ describe('analyze with draw cards', () => {
       expect(codes(deep.issues)).toContain('!compile');
     });
 
-    it('reports `then` with draw cards as an error, in the engine’s own words', () => {
+    /**
+     * `then` BESIDE DRAW CARDS was refused, and is not. The readout must widen
+     * with the engine, or the editor goes on reporting an error the run does
+     * not have — which is worse than either answer alone.
+     */
+    it('reads `then` beside draw cards as the whole drawn set, and no longer refuses it', () => {
       const a = analyze(
         templateOf([potLine(), line('starter', 'monster')], [], {
           hand: { size: 6 },
@@ -1431,8 +1459,31 @@ describe('analyze with draw cards', () => {
         }),
         ctx,
       );
-      expect(a.ok).toBe(false);
-      expect(a.issues.some((issue) => /`then` and draw cards/.test(issue.message))).toBe(true);
+      expect(a.ok).toBe(true);
+      expect(a.issues.some((issue) => /`then` and draw cards/.test(issue.message))).toBe(false);
+    });
+
+    /**
+     * And the BOUND the editor holds `then` to widens with it: three Pots fetch
+     * six cards, so the drawn set holds seven. The readout says the figure
+     * rather than "one card", which would be the old answer to a new question.
+     */
+    it('lets `then 2x` be written once a line draws, and still refuses what cannot be drawn', () => {
+      const of = (text: string) =>
+        analyze(
+          templateOf([potLine(), line('starter', 'monster')], [], {
+            hand: { size: 6 },
+            mode: 'second',
+            criteria: [{ id: 'c1', text, when: 'second' }],
+          }),
+          ctx,
+        );
+      expect(of('then 2x monster').ok).toBe(true);
+      const tooMany = of('then 8x monster');
+      expect(tooMany.ok).toBe(false);
+      expect(criterionOf(tooMany, 'c1').issues[0]!.message).toContain(
+        'you draw at most 7 cards here',
+      );
     });
   });
 });

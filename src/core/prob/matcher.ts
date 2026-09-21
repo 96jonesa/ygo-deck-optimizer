@@ -241,6 +241,72 @@ export function compileWeigher(problem: Problem, opts: MatcherOptions = {}): Wei
   };
 }
 
+/**
+ * What a hand DEALT IN TWO PIECES is worth: `opened` is the cards opened on and
+ * `drawn` is everything from the card drawn for turn onwards. Both are
+ * compositions over the problem's classes, and both are trusted to hold the
+ * number of cards they are given.
+ */
+export type SplitWeigher = (
+  opened: ArrayLike<number>,
+  openedSize: number,
+  drawn: ArrayLike<number>,
+  drawnSize: number,
+) => number;
+
+/**
+ * The weigher for a hand read as (opened on, drawn) — the one thing besides
+ * `compileValuer` that knows a hand has two windows, and the only one that
+ * reads the drawn side as a SET rather than as a single card.
+ *
+ * It exists for DRAW CARDS (PRD §5.7), where the drawn side is the card drawn
+ * for turn plus everything the draw cards fetched, so `acceptsOf`'s trick of
+ * precomputing which classes a lone card satisfies does not apply: the drawn
+ * part is an ordinary criterion judged over an ordinary composition.
+ *
+ * A criterion that names no drawn set is judged over the two windows TOGETHER,
+ * which is the whole hand — they are disjoint and between them hold all of it.
+ * Heaviest first, so the first criterion met is the best one and the loop stops
+ * there, exactly as `compileWeigher` does.
+ */
+export function compileSplitWeigher(problem: Problem, opts: MatcherOptions = {}): SplitWeigher {
+  validateProblem(problem);
+  const classCount = problem.classes.length;
+  const ordered = [...chosen(problem, opts)].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
+  const weights = ordered.map(({ weight }) => weight ?? 1);
+  /** A split criterion's own `slots`, `limits` and `reqs` ARE its opening part. */
+  const opening = ordered.map(compileCriterion);
+  const drawnPart = ordered.map(({ sixth }) =>
+    sixth === undefined ? null : compileCriterion(sixth),
+  );
+  /** The two windows together, filled at most once per call and only if something needs it. */
+  const whole = new Int32Array(classCount);
+  return (opened, openedSize, drawn, drawnSize) => {
+    let joined = false;
+    for (let at = 0; at < ordered.length; at++) {
+      const part = drawnPart[at]!;
+      const criterion = opening[at]!;
+      if (part === null) {
+        if (!joined) {
+          for (let cls = 0; cls < classCount; cls++) whole[cls] = opened[cls]! + drawn[cls]!;
+          joined = true;
+        }
+        if (meets(criterion, whole, openedSize + drawnSize) && withinCeilings(criterion, whole))
+          return weights[at]!;
+        continue;
+      }
+      if (
+        meets(criterion, opened, openedSize) &&
+        withinCeilings(criterion, opened) &&
+        meets(part, drawn, drawnSize) &&
+        withinCeilings(part, drawn)
+      )
+        return weights[at]!;
+    }
+    return 0;
+  };
+}
+
 /** What one composition is worth, and how many of its outcomes succeed at all. */
 export interface Worth {
   /**

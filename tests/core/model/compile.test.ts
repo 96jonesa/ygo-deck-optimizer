@@ -1782,9 +1782,9 @@ describe('the sixth card through resolve and compile', () => {
     });
   });
 
-  it('refuses a sixth card asked for more than one card, wherever it is written', () => {
+  it('refuses a drawn part asked for more than one card, where nothing draws', () => {
     expect(errorsOf(secondTemplate(['1x monster then 2x trap']))[0]).toContain(
-      'the sixth card is one card',
+      'the card you draw is one card',
     );
   });
 });
@@ -1973,20 +1973,86 @@ describe('draw cards through resolve and compile', () => {
     });
   });
 
-  it('refuses `then` and draw cards together, where the model would otherwise be silently wrong', () => {
-    const template = templateOf(
-      [drawLine('pot', 'spell', { n: 2 }), line('starter', 'monster')],
-      [],
-      {
+  /**
+   * `then` BESIDE DRAW CARDS, end to end (PRD §5.6, §5.7). It reads the whole
+   * DRAWN SET — the card drawn for turn and everything the draw cards fetched —
+   * so the hand is marked `drawn` and the criterion compiles with a part of its
+   * own, where the two were once refused together.
+   */
+  describe('`then` beside draw cards', () => {
+    const withThen = (text: string, draw: DrawSpec = { n: 2 }) =>
+      templateOf([drawLine('pot', 'spell', draw), line('starter', 'monster')], [], {
         hand: { size: 6 },
         mode: 'second',
-        criteria: [{ id: 'c1', text: 'then 1x monster', when: 'second' }],
-      },
-    );
-    const result = compileProblem(resolved(template), { handSizes: [{ H: 6, weight: 1 }] });
-    expect(result.ok).toBe(false);
-    if (!result.ok)
-      expect(result.errors[0]).toMatch(/`then` and draw cards cannot be judged together/);
+        criteria: [{ id: 'c1', text, when: 'second' }],
+      });
+
+    it('compiles, and marks the hand as one dealt in two pieces', () => {
+      const result = compileProblem(resolved(withThen('then 1x monster')));
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      expect(result.problem.handSizes[0]).toMatchObject({ H: 6, drawn: true });
+      expect(result.problem.criteria[0]!.sixth).toBeDefined();
+    });
+
+    /**
+     * `then 2x monster` is a question no ONE card can answer, and the reason
+     * `then` was capped at one slot. Two Pots fetch four cards, so the drawn set
+     * holds up to five and the question is now answerable — by the hands that
+     * drew, and by no hand that did not.
+     */
+    it('accepts `then 2x`, which only the cards a draw card fetched can hold', () => {
+      const result = compileProblem(resolved(withThen('then 2x monster')));
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      expect(result.problem.criteria[0]!.sixth!.slots).toHaveLength(2);
+    });
+
+    it('still refuses more than the draw cards can ever fetch', () => {
+      // Three copies of a draw-2 from a hand of six: a prefix of 12, so the
+      // drawn set holds seven cards and never an eighth.
+      expect(errorsOf(withThen('then 8x monster'))[0]).toContain('you draw at most 7 cards here');
+    });
+
+    /**
+     * A CEILING BINDS AGAINST THE WINDOW IT IS IN, and with draw cards the
+     * three windows are three different sizes: the whole hand is nine cards
+     * here, the cards opened on are five however deep the prefix goes, and the
+     * drawn set is seven. A ceiling of five on the opening part can never bind
+     * and is dropped; the same ceiling on an unsplit criterion is kept, because
+     * the hand it counts holds nine.
+     */
+    it('drops a ceiling the cards opened on could never break, and keeps it on the whole hand', () => {
+      const split = compileProblem(resolved(withThen('0-5x monster then 1x monster')));
+      if (!split.ok) throw new Error(split.errors.join('\n'));
+      expect(split.droppedCeilings.map(({ n, max, reason }) => ({ n, max, reason }))).toEqual([
+        { n: 0, max: 5, reason: 'never-binds' },
+      ]);
+      expect(split.problem.criteria[0]!.reqs).toBeUndefined();
+
+      const whole = compileProblem(
+        resolved(
+          templateOf([drawLine('pot', 'spell', { n: 2 }), line('starter', 'monster')], [], {
+            hand: { size: 6 },
+            mode: 'second',
+            criteria: [{ id: 'c1', text: '0-5x monster', when: 'second' }],
+          }),
+        ),
+      );
+      if (!whole.ok) throw new Error(whole.errors.join('\n'));
+      expect(whole.droppedCeilings).toEqual([]);
+      expect(whole.problem.criteria[0]!.reqs).toBeDefined();
+    });
+
+    it('scores it end to end, against one denominator', () => {
+      const c = compiled(resolved(withThen('1x monster then 1x monster')));
+      const totals = c.problem.classes.map(({ min }) => min);
+      totals[0] = c.problem.deckSize - totals.reduce((sum, count) => sum + count, 0);
+      const score = createBlendScorer(c.problem).score(totals);
+      expect(score.parts.map((part) => part.prefix)).toEqual([6, 8, 10, 12]);
+      expect(score.pDisplay).toBeGreaterThanOrEqual(0);
+      expect(score.pDisplay).toBeLessThanOrEqual(1);
+    });
   });
 
   it('scores a template with draw cards end to end', () => {

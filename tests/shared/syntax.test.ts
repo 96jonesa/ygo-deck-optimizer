@@ -475,10 +475,48 @@ describe('DRAW_REFERENCE', () => {
     expect(text).not.toContain('one exact fraction per size');
   });
 
-  it('says the two things the engine refuses, so a reader meets them here first', () => {
+  it('says what the engine refuses, so a reader meets it here first', () => {
     const notes = DRAW_REFERENCE.notes.join(' ');
     expect(notes).toContain('The deck cannot run out');
-    expect(notes).toContain('cannot be used together');
+  });
+
+  /**
+   * `then` BESIDE DRAW CARDS (PRD §5.6, §5.7). The reference said these two
+   * could not be used together, and that is exactly the kind of claim a
+   * reference goes on repeating after it stops being true — so what it says
+   * now is checked against what the engine does, not merely read.
+   */
+  describe('what it says about `then`', () => {
+    it('no longer says the two cannot be used together', () => {
+      const text = [...DRAW_REFERENCE.notes, ...DRAW_REFERENCE.rows.map((row) => row.means)].join(
+        ' ',
+      );
+      expect(text).not.toContain('cannot be used together');
+    });
+
+    it('says `then` becomes the whole drawn set, and that a stop leaves one card', () => {
+      const text = [...DRAW_REFERENCE.notes, ...DRAW_REFERENCE.rows.map((row) => row.means)].join(
+        ' ',
+      );
+      expect(text).toContain('everything they fetched');
+      expect(text).toContain('drew exactly one card');
+    });
+
+    /**
+     * The criterion reference calls `then 2x trap` an error and the draw
+     * reference calls it a question. Both are executed here: the first against
+     * the parser's default, the second against the bound a template with draw
+     * cards gives it — so the two cannot drift apart or from the engine.
+     */
+    it('is right BOTH ways: an error by default, a question once a line draws', () => {
+      const row = CRITERION_SYNTAX.groups
+        .flatMap((group) => group.rows)
+        .find((candidate) => candidate.syntax === '1x monster then 2x trap');
+      if (row === undefined) throw new Error('the criterion reference no longer writes that row');
+      expect(row.fails).toBeDefined();
+      expect(parseCriterion(row.syntax, CTX).ok).toBe(false);
+      expect(parseCriterion(row.syntax, CTX, { maxDrawnSlots: 3 }).ok).toBe(true);
+    });
   });
 
   /**

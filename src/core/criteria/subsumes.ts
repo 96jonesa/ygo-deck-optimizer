@@ -87,13 +87,25 @@ export function subsumes(
   A: FlatCriterion,
   ctx: Implication,
   maxHandSize = Number.POSITIVE_INFINITY,
+  /**
+   * How many cards the DRAWN SET holds (`largestDrawnSet`): one where nothing
+   * draws, which is every template this had before draw cards. It is what
+   * decides whether a limit on that window holds of every hand and so needs no
+   * cover — `no trap` after `then` covers nothing on its own, but `at most 1x
+   * trap` is vacuous on one card and binding on three.
+   */
+  maxDrawnSet = 1,
 ): boolean {
-  // A SPLIT reads the same argument twice, once per window — the five cards
-  // you open on and the one you draw are disjoint, so nothing crosses between
-  // them. One side split and the other not is simply given up on: the two are
-  // about different sample spaces and the injection says nothing.
+  // A SPLIT reads the same argument twice, once per window — the cards you open
+  // on and the cards you draw are disjoint, so nothing crosses between them.
+  // One side split and the other not is simply given up on: the two are about
+  // different sample spaces and the injection says nothing.
   if ((B.sixth === undefined) !== (A.sixth === undefined)) return false;
-  if (B.sixth !== undefined && A.sixth !== undefined && !holdsOver(B.sixth, A.sixth, ctx, 1))
+  if (
+    B.sixth !== undefined &&
+    A.sixth !== undefined &&
+    !holdsOver(B.sixth, A.sixth, ctx, maxDrawnSet)
+  )
     return false;
   // An alternative the player would STOP for (PRD §5.7) does something no other
   // can: it decides, on the opening hand, that no draw card is activated. So one
@@ -103,7 +115,7 @@ export function subsumes(
   return holdsOver(B, A, ctx, maxHandSize);
 }
 
-/** `subsumes` over one window: the whole hand, the opening five, or the card drawn. */
+/** `subsumes` over one window: the whole hand, the cards opened on, or the cards drawn. */
 function holdsOver(
   B: Pick<FlatCriterion, 'reqs' | 'limits'>,
   A: Pick<FlatCriterion, 'reqs' | 'limits'>,
@@ -128,10 +140,11 @@ export function findSubsumed(
   flat: readonly FlatCriterion[],
   ctx: Implication,
   maxHandSize?: number,
+  maxDrawnSet?: number,
 ): Subsumption[] {
   /** `holds[by][subsumed]` */
   const holds = flat.map((B, by) =>
-    flat.map((A, subsumed) => subsumed !== by && subsumes(B, A, ctx, maxHandSize)),
+    flat.map((A, subsumed) => subsumed !== by && subsumes(B, A, ctx, maxHandSize, maxDrawnSet)),
   );
   const out: Subsumption[] = [];
   for (let subsumed = 0; subsumed < flat.length; subsumed++)

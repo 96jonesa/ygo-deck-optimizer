@@ -22,7 +22,22 @@ import { createPrng } from '../../src/core/util/prng';
  */
 
 /** A criterion as the oracle reads it: the compiled one, judged by hand. */
-type OracleCriterion = Pick<CompiledCriterion, 'limits' | 'reqs' | 'slots' | 'weight' | 'stop'>;
+type OracleCriterion = Pick<
+  CompiledCriterion,
+  'limits' | 'reqs' | 'slots' | 'weight' | 'stop' | 'sixth'
+>;
+
+/** One window of a criterion: the whole hand, the cards opened on, or the drawn set. */
+type Window = Pick<CompiledCriterion, 'limits' | 'reqs' | 'slots'>;
+
+/**
+ * What a criterion is read against. A plain list is ONE window — the hand — and
+ * a criterion naming the drawn set cannot be read against it. The pair is the
+ * hand split where the player stopped looking and started drawing: `opened` is
+ * the cards dealt before that point and `drawn` is everything after it, the
+ * card drawn for turn and whatever the draw cards fetched (PRD §5.6, §5.7).
+ */
+export type Windows = readonly number[] | { opened: readonly number[]; drawn: readonly number[] };
 
 /** The requirements of a criterion with both bounds, as the assignment search wants them. */
 interface Bounded {
@@ -36,7 +51,7 @@ interface Bounded {
  * `reqs` of its own — `slots` is the lower bounds repeated, and `reqs` is the
  * whole list, which is the one place the two readings meet.
  */
-function requirementsOf({ slots, reqs }: OracleCriterion): Bounded[] {
+function requirementsOf({ slots, reqs }: Window): Bounded[] {
   if (reqs !== undefined)
     return reqs.map(({ mask, min, max }) => ({
       mask,
@@ -51,46 +66,65 @@ function requirementsOf({ slots, reqs }: OracleCriterion): Bounded[] {
 const accepts = (mask: number, cls: number) => ((mask >>> cls) & 1) === 1;
 
 /**
- * What a hand of concrete cards — a list of CLASSES — is worth: the highest
- * weight among the criteria it meets, and 0 when it meets none.
+ * Whether ONE window of concrete cards — a list of CLASSES — meets one window
+ * of a criterion.
  *
  * Every card is offered to each requirement that accepts it and still has room,
  * and then to none at all — which only a card no CEILING would have counted may
  * be, since a ceiling is a census and cannot look away from a card it matches.
- * Limits are a census over the whole hand.
+ * Limits are a census over the window.
  */
-export function judge(criteria: readonly OracleCriterion[], hand: readonly number[]): number {
+function meetsWindow(window: Window, hand: readonly number[]): boolean {
+  for (const { mask, n } of window.limits) {
+    let count = 0;
+    for (const cls of hand) if (accepts(mask, cls)) count++;
+    if (count > n) return false;
+  }
+  const reqs = requirementsOf(window);
+  const capped = reqs.filter(({ max }) => max !== Number.POSITIVE_INFINITY);
+  const taken = reqs.map(() => 0);
+  const place = (at: number): boolean => {
+    if (at === hand.length) return reqs.every((req, i) => taken[i]! >= req.min);
+    const cls = hand[at]!;
+    for (let i = 0; i < reqs.length; i++) {
+      const req = reqs[i]!;
+      if (taken[i]! >= req.max || !accepts(req.mask, cls)) continue;
+      taken[i]!++;
+      const done = place(at + 1);
+      taken[i]!--;
+      if (done) return true;
+    }
+    return capped.every((req) => !accepts(req.mask, cls)) && place(at + 1);
+  };
+  return place(0);
+}
+
+/**
+ * What a hand is worth: the highest weight among the criteria it meets, and 0
+ * when it meets none.
+ *
+ * A criterion naming the DRAWN SET (`sixth`) is read over the two windows
+ * separately — its own slots and limits over what was opened on, its `sixth`
+ * over what was drawn — and every other criterion over the two together. The
+ * windows are disjoint, so "the two together" is simply their concatenation.
+ */
+export function judge(criteria: readonly OracleCriterion[], hand: Windows): number {
+  const split = Array.isArray(hand) ? null : (hand as { opened: number[]; drawn: number[] });
+  const whole = split === null ? (hand as readonly number[]) : [...split.opened, ...split.drawn];
   let best = 0;
   for (const criterion of criteria) {
     const weight = criterion.weight ?? 1;
     if (weight <= best) continue;
-    let within = true;
-    for (const { mask, n } of criterion.limits) {
-      let count = 0;
-      for (const cls of hand) if (accepts(mask, cls)) count++;
-      if (count > n) {
-        within = false;
-        break;
-      }
+    if (criterion.sixth === undefined) {
+      if (meetsWindow(criterion, whole)) best = weight;
+      continue;
     }
-    if (!within) continue;
-    const reqs = requirementsOf(criterion);
-    const capped = reqs.filter(({ max }) => max !== Number.POSITIVE_INFINITY);
-    const taken = reqs.map(() => 0);
-    const place = (at: number): boolean => {
-      if (at === hand.length) return reqs.every((req, i) => taken[i]! >= req.min);
-      const cls = hand[at]!;
-      for (let i = 0; i < reqs.length; i++) {
-        const req = reqs[i]!;
-        if (taken[i]! >= req.max || !accepts(req.mask, cls)) continue;
-        taken[i]!++;
-        const done = place(at + 1);
-        taken[i]!--;
-        if (done) return true;
-      }
-      return capped.every((req) => !accepts(req.mask, cls)) && place(at + 1);
-    };
-    if (place(0)) best = weight;
+    if (split === null)
+      throw new RangeError(
+        'this criterion names the cards you drew, and the hand was given as one window: pass `{ opened, drawn }`',
+      );
+    if (meetsWindow(criterion, split.opened) && meetsWindow(criterion.sixth, split.drawn))
+      best = weight;
   }
   return best;
 }
@@ -104,9 +138,16 @@ export function buildDeck(n: readonly number[]): number[] {
   return deck;
 }
 
+/** One card still in hand: its class, and the position off the top it came from. */
+export interface HeldCard {
+  cls: number;
+  /** Its index in the shuffled deck, which is what says which window it is in. */
+  at: number;
+}
+
 export interface PlayedOut {
-  /** The hand the player is left holding, as classes; `null` when the deck ran out. */
-  hand: number[] | null;
+  /** The hand the player is left holding; `null` when the deck ran out. */
+  hand: HeldCard[] | null;
   /** How many cards were seen: the prefix length. */
   prefix: number;
 }
@@ -123,22 +164,23 @@ export function playOut(
   H: number,
   draw: readonly (DrawSpec | undefined)[],
 ): PlayedOut {
-  const hand: number[] = [];
+  const hand: HeldCard[] = [];
   let top = 0;
   const takeOne = (): boolean => {
     if (top >= order.length) return false;
-    hand.push(order[top++]!);
+    hand.push({ cls: order[top]!, at: top });
+    top++;
     return true;
   };
   for (let i = 0; i < H; i++) if (!takeOne()) return { hand: null, prefix: top };
   const usedOnce = new Set<number>();
   for (;;) {
-    const at = hand.findIndex((cls) => {
+    const at = hand.findIndex(({ cls }) => {
       const spec = draw[cls];
       return spec !== undefined && !(spec.oncePerTurn === true && usedOnce.has(cls));
     });
     if (at < 0) break;
-    const cls = hand[at]!;
+    const { cls } = hand[at]!;
     const spec = draw[cls]!;
     if (spec.oncePerTurn === true) usedOnce.add(cls);
     hand.splice(at, 1);
@@ -160,17 +202,30 @@ export function playOut(
  * Exactly one window is ever in play: no maximum over the two, and no falling
  * back on what the opening would have been worth. And the `stop` flag decides
  * the WINDOW only — every criterion is valued in whichever window is chosen.
+ *
+ * THE SPLIT (`then`) is read off POSITIONS, which is the whole of what makes
+ * this an oracle for it: `opened` is what is left of positions 0…H−2 and
+ * `drawn` is what is left of positions H−1…ℓ−1 — the card drawn for turn and
+ * everything the draw cards fetched. "What is left" because a resolved copy
+ * LEAVES the hand, out of whichever window it was dealt into. With no draw card
+ * ℓ = H and the drawn set is the one card at position H−1, which is what `then`
+ * meant before any of this.
  */
 function worthOf(problem: Problem, H: number, order: readonly number[]): number {
   const draw = problem.classes.map(({ draw: spec }) => spec);
   const stopping = problem.criteria.filter(({ stop }) => stop === true);
-  const opening = order.slice(0, H);
+  /** The opening, split where it always is: the cards opened on, then the card drawn for turn. */
+  const opening = { opened: order.slice(0, H - 1), drawn: [order[H - 1]!] };
   if (stopping.length > 0 && judge(stopping, opening) > 0) return judge(problem.criteria, opening);
   const { hand } = playOut(order, H, draw);
   // A deck-out is a hand the model refuses to have: the engine rules the
   // template out before scoring it, and the oracle counts it as no success so
   // that a template which CAN deck out shows up as a disagreement.
-  return hand === null ? 0 : judge(problem.criteria, hand);
+  if (hand === null) return 0;
+  return judge(problem.criteria, {
+    opened: hand.filter(({ at }) => at < H - 1).map(({ cls }) => cls),
+    drawn: hand.filter(({ at }) => at >= H - 1).map(({ cls }) => cls),
+  });
 }
 
 export interface OracleResult {
