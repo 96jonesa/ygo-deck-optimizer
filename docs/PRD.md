@@ -219,7 +219,7 @@ The flag picks **the moment, not the criteria**: whichever way you stopped or dr
 - **Drawing can lower your odds.** A limit counts the whole hand and a range's ceiling makes a surplus card fatal, so more cards is more ways to break both — `1-1x starter` measures 0.3734 with the Pot inert and 0.3181 with it live, falling further with each copy. Marking the criterion "stop here" is the answer, and is why the flag exists.
 - **A drawing template's number is a floor, not a forecast.** A real player holding two Pots could activate one, see the hand is fine, and keep the other; this model resolves both. So careful play does at least as well as the number, and sometimes better.
 
-`then` (§5.5) cannot be combined with draw cards yet, and the app refuses it rather than answering approximately.
+**`then` beside draw cards means everything you drew** — the card you draw for turn and whatever the draw cards fetched — rather than the sixth card alone (Andy, 2026-09-21). It reads the same way when nothing draws, since the drawn set is then exactly that one card, so a template written before this keeps its answer. `then 2x monster` becomes writable and correctly fails on any hand that drew nothing.
 
 ## 6. Template semantics (decision D1 — resolved)
 
