@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CompiledCriterion, Problem } from '../../../src/core/model/problem';
 import {
   compileMatcher,
+  compileSplitWeigher,
   compileValuer,
   compileWeigher,
   handSucceeds,
@@ -651,5 +652,121 @@ describe('compileValuer', () => {
         same(into.plain, weight > 0 ? 1 : 0, () => ({ seed, problem, h, H }));
       }
     }
+  });
+});
+
+/**
+ * The weigher for a hand dealt in TWO PIECES, the cards opened on and the
+ * cards drawn (PRD §5.6, §5.7). It is `compileValuer`'s counterpart for DRAW
+ * CARDS, where the drawn side is a SET rather than one card — so there is no
+ * precomputed "which classes a lone card satisfies" to lean on, and the drawn
+ * part is judged as the ordinary criterion it is.
+ */
+describe('compileSplitWeigher', () => {
+  /**
+   * A hand of `opened` and `drawn`, each `[blank, X, Y, Z]`. Class X is marked
+   * as DRAWING — not because the weigher reads that, which it does not, but
+   * because `validateProblem` bounds a drawn part's slots by what the template
+   * can fetch, and a drawn set of more than one card is only sayable where
+   * something draws.
+   */
+  const weigh = (criteria: CompiledCriterion[], opened: number[], drawn: number[]) => {
+    const size = (h: number[]) => h.reduce((sum, count) => sum + count, 0);
+    const base = problemOf(criteria);
+    const problem: Problem = {
+      ...base,
+      handSizes: [{ H: size(opened) + size(drawn), weight: 1, drawn: true }],
+      classes: base.classes.map((info, cls) =>
+        cls === 1 ? { ...info, max: 1, draw: { n: 3 } } : info,
+      ),
+    };
+    return compileSplitWeigher(problem)(opened, size(opened), drawn, size(drawn));
+  };
+
+  const needsInDrawn = (mask: number, slots = 1): CompiledCriterion => ({
+    slots: [],
+    limits: [],
+    sixth: { slots: new Array<number>(slots).fill(mask), limits: [] },
+  });
+
+  it('judges a criterion naming no drawn set over the two windows TOGETHER', () => {
+    const whole: CompiledCriterion = { slots: [FILLS_X, FILLS_Y], limits: [] };
+    // One from each side: neither window holds both, and the hand does.
+    expect(weigh([whole], [0, 1, 0, 0], [0, 0, 1, 0])).toBe(1);
+    expect(weigh([whole], [0, 1, 0, 0], [1, 0, 0, 0])).toBe(0);
+  });
+
+  it('judges a split criterion over the two windows apart, and never across them', () => {
+    const split: CompiledCriterion = {
+      slots: [FILLS_X],
+      limits: [],
+      sixth: { slots: [FILLS_Y], limits: [] },
+    };
+    expect(weigh([split], [0, 1, 0, 0], [0, 0, 1, 0])).toBe(1);
+    // Both cards on the drawn side: the opening fills nothing, so it fails —
+    // which is the whole difference from asking the same of the hand.
+    expect(weigh([split], [1, 0, 0, 0], [0, 1, 1, 0])).toBe(0);
+  });
+
+  it('reads a drawn set of more than one card, which is what draw cards make of it', () => {
+    const two = needsInDrawn(FILLS_Y, 2);
+    expect(weigh([two], [1, 0, 0, 0], [0, 0, 2, 0])).toBe(1);
+    // One card drawn can never answer it, however good the opening is.
+    expect(weigh([two], [0, 0, 2, 0], [0, 0, 1, 0])).toBe(0);
+  });
+
+  it('counts a limit on the drawn set over the drawn set alone', () => {
+    const noY: CompiledCriterion = {
+      slots: [FILLS_X],
+      limits: [],
+      sixth: { slots: [], limits: [{ mask: FILLS_Y, n: 0 }] },
+    };
+    expect(weigh([noY], [0, 1, 1, 0], [1, 0, 0, 0])).toBe(1);
+    expect(weigh([noY], [0, 1, 0, 0], [0, 0, 1, 0])).toBe(0);
+  });
+
+  it('takes the HIGHEST weight among the criteria met, split and unsplit alike', () => {
+    const cheap: CompiledCriterion = { slots: [FILLS_X], limits: [], weight: 2 };
+    const dear = { ...needsInDrawn(FILLS_Y), weight: 7 };
+    expect(weigh([cheap, dear], [0, 1, 0, 0], [0, 0, 1, 0])).toBe(7);
+    expect(weigh([cheap, dear], [0, 1, 0, 0], [1, 0, 0, 0])).toBe(2);
+    expect(weigh([cheap, dear], [1, 0, 0, 0], [1, 0, 0, 0])).toBe(0);
+  });
+
+  /**
+   * Against the brute-force oracle, over every way to split a small hand into
+   * the two windows: the engine assigns by Hall's condition and precomputed
+   * subset unions, and the oracle tries every assignment of cards to slots.
+   */
+  it('agrees with brute force over every hand and every place to split it', () => {
+    const criteria: CompiledCriterion[] = [
+      { slots: [FILLS_X], limits: [], sixth: { slots: [FILLS_Y], limits: [] } },
+      { slots: [FILLS_X, FILLS_Y], limits: [], weight: 3 },
+      {
+        slots: [],
+        limits: [],
+        sixth: { slots: [FILLS_Y], limits: [{ mask: X, n: 0 }] },
+        weight: 5,
+      },
+    ];
+    let checked = 0;
+    for (const opened of compositions(4, 2))
+      for (const drawn of compositions(4, 2)) {
+        const mine = weigh(criteria, [...opened], [...drawn]);
+        const whole = opened.map((count, cls) => count + drawn[cls]!);
+        let best = 0;
+        for (const criterion of criteria) {
+          const weight = criterion.weight ?? 1;
+          if (weight <= best) continue;
+          const met =
+            criterion.sixth === undefined
+              ? bruteForceMeets(criterion, whole)
+              : bruteForceMeets(criterion, opened) && bruteForceMeets(criterion.sixth, drawn);
+          if (met) best = weight;
+        }
+        same(mine, best, () => ({ opened: [...opened], drawn: [...drawn] }));
+        checked++;
+      }
+    expect(checked).toBe(100);
   });
 });

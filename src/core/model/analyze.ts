@@ -33,10 +33,12 @@ import {
   type DrawSpec,
   drawWork,
   type HandSize,
+  largestDrawnSet,
   largestHand,
   MAX_DECK_SIZE,
   overBy,
   partProblem,
+  type SixthCard,
 } from './problem';
 import { achievableRange, countSums, type IntRange } from './ranges';
 import {
@@ -471,6 +473,12 @@ export const MAX_SUBSUMPTION_ALTERNATIVES = 128;
  * then scores millions of decks against it, so five seconds is affordable
  * there. Only the per-keystroke call is not, so only the per-keystroke call
  * declines. The template still runs.
+ *
+ * A `then` beside draw cards crosses it readily, and that is expected rather
+ * than a regression: the split reads the opening apart from the rest of the
+ * prefix exactly as a "stop here" does, so three copies of Pot of Greed at ten
+ * classes going second is 2.3 million compositions against 47 thousand without
+ * it. The notice is what such a template gets, and the run is unaffected.
  */
 export const ANALYZE_DRAW_WORK = 1_500_000;
 
@@ -570,12 +578,15 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
   // The largest hand the criteria are held against (PRD §5.7). Without draw
   // cards it IS the hand size, so nothing about a template that has none is
   // read differently — and `compileProblem` is held to the same number.
-  const judgedHand = largestHand(
-    handSize,
-    template.lines.flatMap(({ draw, max }, at) =>
-      draw === undefined ? [] : [{ cls: at, max, ...draw }],
-    ),
+  const templateDraws = template.lines.flatMap(({ draw, max }, at) =>
+    draw === undefined ? [] : [{ cls: at, max, ...draw }],
   );
+  const judgedHand = largestHand(handSize, templateDraws);
+  // What `then` may ask for (PRD §5.7): the card drawn for turn, and everything
+  // the draw cards fetch. `resolveTemplate` works it out the same way from the
+  // same lines, so the readout and the run agree about whether `then 2x
+  // monster` is a question or a mistake.
+  const maxDrawnSlots = largestDrawnSet(handSize, templateDraws);
   const mode = modeOf(template);
   const weighted = template.weighted === true;
   const parts = partsOfMode(mode);
@@ -872,7 +883,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       issues: [],
     };
     if (criterion.name !== undefined) out.name = criterion.name;
-    const result = criterionMeaning(criterion, descCtx);
+    const result = criterionMeaning(criterion, descCtx, { maxDrawnSlots });
     if (!result.ok) {
       // Both, for the reason given on the line-parse failure above.
       out.parsed = { ok: false, message: result.message, span: result.span };
@@ -888,7 +899,11 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     // disagreeing about whether the template is runnable.
     if (result.expr.op === 'split' && when !== 'second')
       out.issues.push(error('sixth-card', splitNeedsSecond(when)));
-    const expanded = expand(result.expr, { maxHandSize: judgedHand });
+    const expanded = expand(result.expr, {
+      maxHandSize: judgedHand,
+      maxOpenedSize: handSize - 1,
+      maxDrawnSlots,
+    });
     if (!expanded.ok) {
       out.issues.push(
         error(expanded.reason === 'sixth-card' ? 'sixth-card' : 'expansion-cap', expanded.message),
@@ -1151,6 +1166,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
         owners.map((owner) => owner.flat),
         columnImplies,
         judgedHand,
+        maxDrawnSlots,
       )
     : [];
   for (const [index, owner] of owners.entries()) {
@@ -1203,7 +1219,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
   if (resolves) {
     const all = expandAll(
       parsedCriteria.map((criterion) => criterion!.expr),
-      { maxHandSize: judgedHand },
+      { maxHandSize: judgedHand, maxOpenedSize: handSize - 1, maxDrawnSlots },
     );
     if (!all.ok)
       issues.push(error(all.reason === 'sixth-card' ? 'sixth-card' : 'expansion-cap', all.message));
@@ -1286,14 +1302,23 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
         // decides the window, not eligibility, so an alternative the player
         // would stop for is still judged after the draws whenever nothing
         // stopped them — and can still be broken by them there.
+        //
+        // The DRAWN SET counts too, and for the same reason. `then no trap`
+        // is a census over the cards you drew, and drawing more cards is
+        // exactly what makes that window larger — so a split criterion breaks
+        // the same way an unsplit one does, and reading only the outer window
+        // would leave the one template most likely to be surprised unwarned.
+        const counts = ({ limits, reqs }: SixthCard) =>
+          limits.length > 0 || reqs?.some(({ max }) => max !== null) === true;
         const censuses = compiled.problem.criteria.filter(
-          ({ limits, reqs }) => limits.length > 0 || reqs?.some(({ max }) => max !== null) === true,
+          (criterion) =>
+            counts(criterion) || (criterion.sixth !== undefined && counts(criterion.sixth)),
         ).length;
         if (censuses > 0 && draws)
           issues.push(
             notice(
               'drawing-can-fail',
-              `this template draws cards, and ${censuses === 1 ? 'one of its alternatives counts' : `${censuses} of its alternatives count`} the whole hand — a limit, or a requirement with a ceiling. Drawing more cards can then make a hand FAIL that would otherwise have succeeded, so holding more copies of a draw card can lower the score. Mark such a criterion "stop here" to keep the hands that already meet it: the opening is then checked first, and nothing is drawn when it does`,
+              `this template draws cards, and ${censuses === 1 ? 'one of its alternatives counts' : `${censuses} of its alternatives count`} the cards it is judged over — a limit, or a requirement with a ceiling, over the hand or over the cards you drew. Drawing more cards can then make a hand FAIL that would otherwise have succeeded, so holding more copies of a draw card can lower the score. Mark such a criterion "stop here" to keep the hands that already meet it: the opening is then checked first, and nothing is drawn when it does`,
             ),
           );
         // THE NUMBER IS A LOWER BOUND on careful play, and that is the other

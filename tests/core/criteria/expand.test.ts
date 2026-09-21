@@ -308,19 +308,81 @@ describe('expand', () => {
       expect(expand(and(req(6, A)), HAND)).toMatchObject({ ok: true, dropped: 0 });
     });
 
-    it('refuses more than one card of the sixth, as an error and not a drop', () => {
+    it('refuses more than one card of the drawn set, as an error and not a drop', () => {
       // A hand-written AST bypasses the parser's own check, so expansion keeps
       // one: a silent zero is exactly what this must not become.
       expect(expandAll([{ op: 'split', sixth: and(req(1, A), req(1, B)) }], HAND)).toEqual({
         ok: false,
         reason: 'sixth-card',
         message:
-          'the sixth card is one card, and this alternative asks 2 of it: after `then`, write one requirement — `1x …` — or limits alone, as in `no trap`',
+          'the card you draw is one card, and this asks 2 of it: after `then`, write one requirement — `1x …` — or limits alone, as in `no trap`. Mark a line as drawing cards and `then` becomes about everything you drew, which can be more than one',
       });
       // And merging is what can make it two: `1x A and 1x A` asks for two cards.
       expect(expandAll([{ op: 'split', sixth: and(req(1, A), req(1, A)) }], HAND)).toMatchObject({
         ok: false,
         reason: 'sixth-card',
+      });
+    });
+
+    /**
+     * With DRAW CARDS the drawn set is the card drawn for turn plus everything
+     * they fetched (`largestDrawnSet`), so the bound the same alternative is
+     * held to moves — and with it what a ceiling there can bind against.
+     */
+    describe('when draw cards widen the drawn set', () => {
+      const DRAWING = { ...HAND, maxDrawnSlots: 3 };
+
+      it('accepts what the drawn set can hold, and still refuses what it cannot', () => {
+        expect(
+          expandAll([{ op: 'split', sixth: and(req(1, A), req(1, B)) }], DRAWING),
+        ).toMatchObject({ ok: true });
+        expect(expandAll([{ op: 'split', sixth: req(4, A) }], DRAWING)).toMatchObject({
+          ok: false,
+          reason: 'sixth-card',
+        });
+      });
+
+      it('says how many cards there are to ask of, not that there is one', () => {
+        const refused = expandAll([{ op: 'split', sixth: req(4, A) }], DRAWING);
+        if (refused.ok) throw new Error('expected a refusal');
+        expect(refused.message).toContain('you draw at most 3 cards here');
+        expect(refused.message).not.toContain('one card');
+      });
+
+      /**
+       * DRAW CARDS PULL THE TWO SIZES APART: `maxHandSize` becomes the hand
+       * they can BUILD, while the cards opened on are five however deep the
+       * prefix goes. An opening part asking for six is then unmeetable, and has
+       * to be DROPPED and counted — left to follow `maxHandSize` it would
+       * survive and score zero on every hand, which is the one outcome this
+       * file exists to avoid.
+       */
+      it('drops an alternative the opening five cannot hold, though the hand could', () => {
+        const wide = { maxHandSize: 9, maxOpenedSize: 5, maxDrawnSlots: 3 };
+        const six: Expr = { op: 'split', five: req(6, A), sixth: req(1, B) };
+        expect(expandAll([six], wide)).toMatchObject({ ok: true, flat: [], dropped: 1 });
+        // Five fits, so the bound is the opening's and not an off-by-one.
+        expect(
+          expandAll([{ op: 'split', five: req(5, A), sixth: req(1, B) } as Expr], wide),
+        ).toMatchObject({ ok: true, dropped: 0 });
+        // And an UNSPLIT criterion still gets the whole hand the draws build.
+        expect(expandAll([req(9, A)], wide)).toMatchObject({ ok: true, dropped: 0 });
+      });
+
+      /**
+       * A ceiling counts against `MAX_RANGES` only where it can BIND, and on
+       * ONE card a ceiling of 1 never can — the drawn set holds one card, so
+       * `0-1x` is free. Widen it and the same ceilings start costing, which is
+       * the bound reaching a different answer about the same text rather than a
+       * second rule about draw cards.
+       */
+      it('starts counting ceilings on the drawn set that one card could never break', () => {
+        const ceilings = Array.from({ length: MAX_RANGES + 1 }, (_, at) =>
+          range(0, 1, card(100 + at)),
+        );
+        const split: Expr = { op: 'split', sixth: and(...ceilings) };
+        expect(expandAll([split], HAND)).toMatchObject({ ok: true });
+        expect(expandAll([split], DRAWING)).toMatchObject({ ok: false, reason: 'ranges' });
       });
     });
 

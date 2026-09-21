@@ -1,5 +1,5 @@
 import { canonicalizeExpr, type Expr } from '../criteria/ast';
-import { parseCriterion } from '../criteria/parser';
+import { type CriterionParseOptions, parseCriterion } from '../criteria/parser';
 import { printCriterion } from '../criteria/print';
 import { canonicalize, type Description } from '../desc/ast';
 import type { DescContext } from '../desc/context';
@@ -78,9 +78,20 @@ export function lineMeaning(line: TemplateLine, ctx: DescContext): LineMeaning {
   };
 }
 
-/** The expression a criterion states, by the same rule as `lineMeaning`. */
-export function criterionMeaning(criterion: TemplateCriterion, ctx: DescContext): CriterionMeaning {
-  const parsed = parseCriterion(criterion.text, ctx);
+/**
+ * The expression a criterion states, by the same rule as `lineMeaning`.
+ *
+ * `opts` carries what the TEMPLATE makes of `then`: how many cards the drawn
+ * set can hold (`largestDrawnSet`), which is one where nothing draws. Both
+ * callers work it out from the same lines, so the readout and the run cannot
+ * come to disagree about whether `then 2x monster` is a question.
+ */
+export function criterionMeaning(
+  criterion: TemplateCriterion,
+  ctx: DescContext,
+  opts: CriterionParseOptions = {},
+): CriterionMeaning {
+  const parsed = parseCriterion(criterion.text, ctx, opts);
   if (criterion.expr === undefined) {
     return parsed.ok
       ? { ok: true, expr: canonicalizeExpr(parsed.expr), stale: null }

@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_RANGES } from '../../../src/core/criteria/ast';
+import { MAX_RANGES, MAX_SIXTH_SLOTS } from '../../../src/core/criteria/ast';
 import {
   checkWeightBound,
   copiesUsed,
   type DrawSpec,
   drawClassesOf,
   drawsOf,
+  largestDrawnSet,
   largestHand,
   longestPrefix,
   MAX_CLASSES,
@@ -90,13 +91,13 @@ describe('validateProblem', () => {
       ).toThrow(/holds at least 2 cards/);
     });
 
-    it('refuses a sixth card asked for more than one card', () => {
+    it('refuses a drawn part asked for more than one card, where nothing draws', () => {
       const greedy = {
         ...split(),
         criteria: [{ slots: [0b010], limits: [], sixth: { slots: [0b100, 0b100], limits: [] } }],
       };
       expect(() => validateProblem(greedy)).toThrow(
-        /criterion 0: the sixth card is one card, and its part asks for 2/,
+        /criterion 0: the card you draw is one card, and its part asks for 2/,
       );
     });
 
@@ -106,7 +107,7 @@ describe('validateProblem', () => {
         criteria: [{ slots: [], limits: [], sixth: { slots: [0b001], limits: [] } }],
       };
       expect(() => validateProblem(blank)).toThrow(
-        /criterion 0, the sixth card, slot 0: the blank class \(bit 0\) cannot fill a requirement/,
+        /criterion 0, the cards you draw, slot 0: the blank class \(bit 0\) cannot fill a requirement/,
       );
       const bad = {
         ...split(),
@@ -119,7 +120,7 @@ describe('validateProblem', () => {
         ],
       };
       expect(() => validateProblem(bad)).toThrow(
-        /criterion 0, the sixth card: with no ceiling to keep/,
+        /criterion 0, the cards you draw: with no ceiling to keep/,
       );
     });
   });
@@ -586,6 +587,57 @@ describe('longestPrefix and largestHand', () => {
   });
 });
 
+/**
+ * THE THIRD SIZE, and the one `then` is about: how many cards the drawn set can
+ * hold. It is the smaller of the POSITIONS there are, `ℓ − (H − 1)`, and the
+ * whole HAND — and neither bound dominates, which is the reason it is a
+ * function and not one expression written twice.
+ */
+describe('largestDrawnSet', () => {
+  const of = (...lines: { max: number; n: number; oncePerTurn?: true }[]) =>
+    drawClassesOf([
+      { lineIds: ['blank'], min: 0, max: 40 },
+      ...lines.map(({ max, n, oncePerTurn }, at) => ({
+        lineIds: [`draws${at}`],
+        min: 0,
+        max,
+        draw: oncePerTurn === undefined ? { n } : { n, oncePerTurn },
+      })),
+    ]);
+
+  it('is one card where nothing draws: the card you draw for turn', () => {
+    expect(largestDrawnSet(6, [])).toBe(1);
+    expect(largestDrawnSet(5, [])).toBe(1);
+  });
+
+  it('agrees with `MAX_SIXTH_SLOTS`, which is the parser’s default for exactly that case', () => {
+    expect(largestDrawnSet(6, [])).toBe(MAX_SIXTH_SLOTS);
+  });
+
+  it('is the POSITIONS where the opening can hold every copy that resolves', () => {
+    // Three Pots: prefix 12 from a hand of 6, so positions 5…11 are seven
+    // cards and all three copies fit in the five opened on.
+    const pots = of({ max: 3, n: 2 });
+    expect(longestPrefix(6, pots)).toBe(12);
+    expect(largestHand(6, pots)).toBe(9);
+    expect(largestDrawnSet(6, pots)).toBe(7);
+  });
+
+  it('is the HAND where the opening cannot: a copy then resolves out of the drawn set itself', () => {
+    // Six Upstarts: prefix 12, so seven positions — but only five of the six
+    // copies can be dealt into the cards opened on, and the sixth resolves out
+    // of the drawn set and leaves it.
+    const upstarts = of({ max: 6, n: 1 });
+    expect(longestPrefix(6, upstarts)).toBe(12);
+    expect(largestHand(6, upstarts)).toBe(6);
+    expect(largestDrawnSet(6, upstarts)).toBe(6);
+  });
+
+  it('counts a once-per-turn line’s further copies as cards and not as draws', () => {
+    expect(largestDrawnSet(6, of({ max: 3, n: 2, oncePerTurn: true }))).toBe(3);
+  });
+});
+
 describe('validateProblem', () => {
   describe('draw cards', () => {
     it('accepts a class that draws', () => {
@@ -640,12 +692,14 @@ describe('validateProblem', () => {
     });
 
     /**
-     * `then` and draw cards cannot be judged together. The going-second
-     * machinery reads a set of `H` cards as `H` equally likely (opening, drawn)
-     * pairs, and a draw card has to land among the first `H` to resolve at all —
-     * so the last position is biased towards them and the reading is false.
+     * `then` BESIDE DRAW CARDS (PRD §5.6, §5.7). It was once refused — the
+     * reading it needed was "the card at position H − 1", and conditional on
+     * the prefix that position is biased towards draw cards, since one has to
+     * land among the first `H` to resolve at all. The reading now is the whole
+     * DRAWN SET, which never asks which card was the sixth, so the bias is not
+     * needed and the two go together.
      */
-    it('refuses the going-second split together with draw cards', () => {
+    it('judges the going-second split together with draw cards', () => {
       const split = drawing(
         { n: 2 },
         {
@@ -653,14 +707,34 @@ describe('validateProblem', () => {
           criteria: [{ slots: [0b010], limits: [], sixth: { slots: [0b100], limits: [] } }],
         },
       );
-      expect(() => validateProblem(split)).toThrow(
-        /`then` and draw cards cannot be judged together/,
-      );
+      expect(() => validateProblem(split)).not.toThrow();
     });
 
-    it('refuses a hand that draws its last card separately, split criterion or not', () => {
+    it('lets a hand draw its last card separately beside draw cards, split criterion or not', () => {
       const drawn = drawing({ n: 2 }, { handSizes: [{ H: 5, weight: 1, drawn: true }] });
-      expect(() => validateProblem(drawn)).toThrow(/two different sample spaces/);
+      expect(() => validateProblem(drawn)).not.toThrow();
+    });
+
+    /**
+     * WHAT `then` MAY ASK FOR is the template's own number: the card drawn for
+     * turn plus everything the draw cards fetch. Three copies of a draw-2 from
+     * a hand of five reach a prefix of 11, so the drawn set holds up to 7.
+     */
+    it('bounds the drawn part by what the draw cards can fetch, and says the figure', () => {
+      const slots = (count: number) => new Array<number>(count).fill(0b100);
+      const asking = (count: number) =>
+        drawing(
+          { n: 2 },
+          {
+            handSizes: [{ H: 5, weight: 1, drawn: true }],
+            criteria: [{ slots: [], limits: [], sixth: { slots: slots(count), limits: [] } }],
+          },
+        );
+      expect(largestDrawnSet(5, drawClassesOf(drawing({ n: 2 }).classes))).toBe(7);
+      expect(() => validateProblem(asking(7))).not.toThrow();
+      expect(() => validateProblem(asking(8))).toThrow(
+        /criterion 0: the cards you draw are at most 7, and this part asks for 8/,
+      );
     });
 
     /**

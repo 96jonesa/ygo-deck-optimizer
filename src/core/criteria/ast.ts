@@ -14,13 +14,33 @@ export const MAX_COUNT = 60;
 export const MAX_RANGES = 12;
 
 /**
- * The most requirement slots the SIXTH CARD's part of a split criterion may
- * ask for. It is one card: `1x [Ash Blossom & Joyous Spring]` is a question
- * about it, `2x monster` is a question no card can answer. A limit there is
- * meaningful all the same — `no trap` says the card drawn is not a trap — and
- * costs no slot.
+ * The most requirement slots the DRAWN SET's part of a split criterion may ask
+ * for WHEN NOTHING DRAWS: one card. `1x [Ash Blossom & Joyous Spring]` is a
+ * question about the card drawn for turn; `2x monster` is a question no one
+ * card can answer. A limit there is meaningful all the same — `no trap` says
+ * the card drawn is not a trap — and costs no slot.
+ *
+ * It is a DEFAULT and not the bound. With draw cards the drawn set is the card
+ * drawn for turn and everything they fetched, and `largestDrawnSet` says how
+ * many that is; the parser and `expand` take it as an option, so a template
+ * that draws can write `then 2x monster` and one that does not still cannot. A
+ * test holds this equal to `largestDrawnSet(H, [])`, which is the same claim
+ * said twice on purpose.
  */
 export const MAX_SIXTH_SLOTS = 1;
+
+/**
+ * Why a `then` part asks for more than the drawn set can hold — in the ONE
+ * wording the parser, `expand` and `validateExpr` all use, so that the same
+ * mistake does not read as three different mistakes depending on where it is
+ * caught. The advice differs with the bound: at one card the way out is to ask
+ * for less, and the reason the bound might be wrong is that no line draws.
+ */
+export function tooManyDrawnSlots(asked: number, allowed: number): string {
+  return allowed === 1
+    ? `the card you draw is one card, and this asks ${asked} of it: after \`then\`, write one requirement — \`1x …\` — or limits alone, as in \`no trap\`. Mark a line as drawing cards and \`then\` becomes about everything you drew, which can be more than one`
+    : `you draw at most ${allowed} cards here, and this asks ${asked} of them: after \`then\`, write at most ${allowed} requirement slot(s), or limits alone, as in \`no trap\``;
+}
 
 /** `n×` a description: `n` distinct cards of a requirement, or the ceiling of a limit. */
 export interface Counted {
@@ -110,13 +130,14 @@ export interface FlatCriterion {
   reqs: CountedRange[];
   limits: Counted[];
   /**
-   * The SIXTH CARD's own requirements and limits, when the criterion is split.
-   * Present: `reqs` and `limits` above are then about the OPENING FIVE alone,
-   * judged over one card fewer than the hand holds, and rules 1–4 are read
-   * twice — once over the five, once over the one card drawn. Absent: the
+   * The DRAWN SET's own requirements and limits, when the criterion is split.
+   * Present: `reqs` and `limits` above are then about the cards OPENED ON
+   * alone, judged over one card fewer than the hand holds, and rules 1–4 are
+   * read twice — once over those, once over what was drawn. Absent: the
    * criterion is judged over the whole hand, exactly as it always was.
    *
-   * At most `MAX_SIXTH_SLOTS` requirement slots, because it is one card.
+   * At most `MAX_SIXTH_SLOTS` requirement slots where nothing draws, because it
+   * is then one card; with draw cards, at most `largestDrawnSet` of them.
    */
   sixth?: FlatSixth;
   /**
@@ -134,7 +155,7 @@ export interface FlatCriterion {
   stop?: true;
 }
 
-/** One alternative's sixth-card part: the same two lists, over a hand of one. */
+/** One alternative's drawn-set part: the same two lists, over the cards drawn. */
 export interface FlatSixth {
   reqs: CountedRange[];
   limits: Counted[];

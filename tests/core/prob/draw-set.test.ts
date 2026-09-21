@@ -163,6 +163,18 @@ describe('drawSet', () => {
       ]);
     });
 
+    /**
+     * `outcomes` says what the denominator already carries: a hand dealt in two
+     * pieces is `H` ordered (opening, drawn) outcomes per set of cards, and the
+     * `H` rides in the ordering factor. A readout that wants to say which of the
+     * two a fraction is over reads this rather than guessing from the size.
+     */
+    it('reports the outcomes of the hand, which is 1 unless it is dealt in two pieces', () => {
+      expect(drawSet(problem, 2).outcomes).toBe(1);
+      const dealt = { ...problem, handSizes: [{ H: 2, weight: 1, drawn: true as const }] };
+      expect(drawSet(dealt, 2).outcomes).toBe(2);
+    });
+
     it('groups rows by the ORDERING FACTOR, not by the draw vector that produced it', () => {
       // Nothing is once-per-turn, so the factor is `H / ℓ` — one value per
       // length, however many draw vectors reach it.
@@ -305,6 +317,42 @@ describe('drawWork', () => {
   });
 
   /**
+   * A HAND DEALT IN TWO PIECES costs what a stop criterion costs, and for the
+   * same reason: the opening is read apart from the rest of the prefix, so a
+   * row is an (opening, prefix) pair. A prediction that only looked for a
+   * `stop` flag would under-count such a build by the openings — and it is the
+   * prediction, not the build, that decides whether a template is refused.
+   */
+  describe('a hand dealt in two pieces', () => {
+    const drawnShape = (classes: number, copies: number, n: number, drawn: boolean) => {
+      const problem = shapeOf(classes, copies, n, false);
+      return drawn
+        ? { ...problem, handSizes: [{ H: 5, weight: 1, drawn: true as const }] }
+        : problem;
+    };
+
+    it('costs the openings as well, exactly as a stop criterion does', () => {
+      expect(drawWork(drawnShape(8, 2, 2, true), 5)).toBeGreaterThan(
+        drawWork(drawnShape(8, 2, 2, false), 5),
+      );
+      expect(drawWork(drawnShape(8, 2, 2, true), 5)).toBe(drawWork(shapeOf(8, 2, 2, true), 5));
+    });
+
+    it('is EXACTLY the compositions the build visits, over a sweep of shapes', () => {
+      let checked = 0;
+      for (const classes of [4, 6])
+        for (const copies of [1, 2])
+          for (const n of [1, 2])
+            for (const drawn of [false, true]) {
+              const problem = drawnShape(classes, copies, n, drawn);
+              expect(drawWork(problem, 5)).toBe(drawSet(problem, 5).visits);
+              checked++;
+            }
+      expect(checked).toBe(16);
+    });
+  });
+
+  /**
    * A refusal has to say how FAR over it is, and rounding to millions did not:
    * a build of 25,400,000 against a cap of 25,000,000 read "25 million … at
    * most 25 million", the same number twice, which reads as a contradiction and
@@ -332,6 +380,42 @@ describe('drawWork', () => {
     expect(message).toContain('fewer copies');
     expect(message).toContain('merge lines');
     expect(message).toContain('"stop here"');
+  });
+
+  /**
+   * A REFUSAL IS CODE THAT RUNS ONLY WHEN SOMEONE IS ALREADY STUCK, so it may
+   * not send them after something they do not have. The cost is the prefix
+   * spread over the classes, doubled over the openings by whatever reads the
+   * opening apart from the rest of the prefix — a "stop here", or a `then`. It
+   * names the one the template holds, and not the other.
+   */
+  it('names the remedies this template actually has, and no others', () => {
+    const messageOf = (problem: ReturnType<typeof drawProblem>) => {
+      try {
+        drawSet(problem, 5);
+      } catch (failure) {
+        return (failure as Error).message;
+      }
+      throw new Error('expected a refusal');
+    };
+    const stopping = messageOf(shapeOf(18, 3, 2, true));
+    expect(stopping).toContain('"stop here"');
+    expect(stopping).not.toContain('`then`');
+
+    // The same shape, its cost coming from a split rather than from a stop.
+    const split = {
+      ...shapeOf(18, 3, 2, false),
+      handSizes: [{ H: 5, weight: 1, drawn: true as const }],
+      criteria: [{ slots: [], limits: [], sixth: { slots: [bit(17)], limits: [] } }],
+    };
+    const splitting = messageOf(split);
+    expect(splitting).toContain('`then`');
+    expect(splitting).not.toContain('"stop here"');
+    // And both keep what is always true.
+    for (const message of [stopping, splitting]) {
+      expect(message).toContain('fewer copies');
+      expect(message).toContain('merge lines');
+    }
   });
 
   it('refuses a build past MAX_DRAW_WORK rather than take minutes over it', () => {

@@ -15,8 +15,10 @@ import {
   type ClassInfo,
   type CompiledCriterion,
   type CompiledRequirement,
+  type DrawClass,
   type DrawSpec,
   type HandSize,
+  largestDrawnSet,
   largestHand,
   MAX_CLASSES,
   type Problem,
@@ -353,12 +355,14 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
   // Read off the LINES rather than off the classes, which do not exist yet: the
   // two agree, since once-per-turn lines never merge and the rest contribute
   // `(n − 1) · max` whether their maxima are summed before or after.
-  const judgedHand = largestHand(
-    handSize,
-    template.lines.flatMap(({ draw, max }, at) =>
-      draw === undefined ? [] : [{ cls: at, max, ...draw }],
-    ),
+  const templateDraws = template.lines.flatMap(({ draw, max }, at) =>
+    draw === undefined ? [] : [{ cls: at, max, ...draw }],
   );
+  const judgedHand = largestHand(handSize, templateDraws);
+  // What `then` may ask for: the card drawn for turn, and everything the draw
+  // cards fetch (PRD §5.7). One card where nothing draws, which is the bound
+  // every template had before them.
+  const maxDrawnSlots = largestDrawnSet(handSize, templateDraws);
   const weights = criterionWeights(template);
   const weighted = template.weighted === true;
   const parsedCriteria: {
@@ -374,7 +378,7 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
   // that survive rather than looked up by position afterwards.
   template.criteria.forEach((criterion, at) => {
     const { id, name, text } = criterion;
-    const meant = criterionMeaning(criterion, descCtx);
+    const meant = criterionMeaning(criterion, descCtx, { maxDrawnSlots });
     if (!meant.ok) {
       errors.push(`criterion ${JSON.stringify(id)}: ${located(meant.message, text, meant.span)}`);
       return;
@@ -424,7 +428,11 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
 
   const criteria: ResolvedCriterion[] = [];
   for (const criterion of parsedCriteria) {
-    const expanded = expand(criterion.expr, { maxHandSize: judgedHand });
+    const expanded = expand(criterion.expr, {
+      maxHandSize: judgedHand,
+      maxOpenedSize: handSize - 1,
+      maxDrawnSlots,
+    });
     if (!expanded.ok) {
       errors.push(`criterion ${JSON.stringify(criterion.id)}: ${expanded.message}`);
       continue;
@@ -440,7 +448,7 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
 
   const all = expandAll(
     parsedCriteria.map((criterion) => criterion.expr),
-    { maxHandSize: judgedHand },
+    { maxHandSize: judgedHand, maxOpenedSize: handSize - 1, maxDrawnSlots },
   );
   if (!all.ok) return { ok: false, errors: [all.message] };
   // An alternative several criteria produced is worth the HIGHEST of their
@@ -636,6 +644,31 @@ export interface DroppedCeiling {
   sixth?: true;
 }
 
+/**
+ * How many cards each WINDOW of a criterion can hold. It is what decides
+ * whether a ceiling or a limit can ever bind, and the three genuinely differ
+ * once draw cards are in play:
+ *
+ * - `hand`: the whole hand, `largestHand` — six going second, and more where
+ *   draw cards build one;
+ * - `opened`: the cards a SPLIT criterion opens on, which is `H − 1` however
+ *   deep the prefix goes. Without draw cards that is `hand − 1`, which is why
+ *   one number sufficed before;
+ * - `drawn`: what a split criterion's `then` part is about, `largestDrawnSet` —
+ *   one card without draw cards, and the card drawn for turn plus everything
+ *   fetched with them.
+ */
+export interface WindowRooms {
+  hand: number;
+  opened: number;
+  drawn: number;
+}
+
+/** The three rooms of a hand of `H` with `draws`; all three are `H`-shaped without them. */
+export function roomsOf(H: number, draws: readonly DrawClass[] = []): WindowRooms {
+  return { hand: largestHand(H, draws), opened: H - 1, drawn: largestDrawnSet(H, draws) };
+}
+
 /** What one flat alternative compiled to, and the ceilings and limits that fell away doing it. */
 interface CompiledAlternative {
   criterion: CompiledCriterion;
@@ -651,24 +684,27 @@ interface CompiledAlternative {
  * - a requirement becomes its LOWER bound in slots, each holding the mask of
  *   the classes that fill it;
  * - a requirement written `a-b×` also becomes a ceiling, unless the ceiling
- *   can never bind — no class reaches it, or `b` is at least `largestHand`,
- *   since a hand never holds more cards than that. A requirement with no
- *   ceiling, and one whose ceiling was dropped, puts its classes in `free`:
- *   surplus there can always be assigned, so no ceiling traps it;
+ *   can never bind — no class reaches it, or `b` is at least the ROOM of the
+ *   window it is in, since a window never holds more cards than that. A
+ *   requirement with no ceiling, and one whose ceiling was dropped, puts its
+ *   classes in `free`: surplus there can always be assigned, so no ceiling
+ *   traps it;
  * - a limit becomes a mask, dropped on the same two grounds.
  */
 export function compileCriterion(
   { reqs, limits, weight, sixth, stop }: FlatAlternative,
   maskOf: (desc: number) => number,
-  largestHand: number,
+  rooms: WindowRooms,
 ): CompiledAlternative {
   const droppedLimits: Omit<DroppedLimit, 'criterion'>[] = [];
   const droppedCeilings: Omit<DroppedCeiling, 'criterion'>[] = [];
   /**
-   * One window: the whole hand, the five cards opened on, or the card drawn.
+   * One window: the whole hand, the cards opened on, or the cards drawn.
    * `room` is how many cards it holds, which is what decides whether a ceiling
-   * or a limit can ever bind — ONE for the sixth card, so `at most 1x trap`
-   * there is dropped while `no trap` is kept and means what it says.
+   * or a limit can ever bind — ONE for the card drawn where nothing draws, so
+   * `at most 1x trap` there is dropped while `no trap` is kept and means what
+   * it says. With draw cards the drawn set is larger and `at most 1x trap`
+   * binds, which is the same rule reaching a different answer.
    */
   const window = (
     side: { reqs: readonly ResolvedRange[]; limits: readonly ResolvedCounted[] },
@@ -700,13 +736,14 @@ export function compileCriterion(
     return part;
   };
 
-  // A split criterion's own requirements are judged over the five cards opened
-  // on, one card fewer than the hand holds.
+  // A split criterion's own requirements are judged over the cards opened on,
+  // which is `H − 1` and not the whole hand — and with draw cards those are two
+  // different numbers rather than one apart.
   const criterion: CompiledCriterion =
     sixth === undefined
-      ? window({ reqs, limits }, largestHand, {})
-      : window({ reqs, limits }, largestHand - 1, {});
-  if (sixth !== undefined) criterion.sixth = window(sixth, 1, { sixth: true });
+      ? window({ reqs, limits }, rooms.hand, {})
+      : window({ reqs, limits }, rooms.opened, {});
+  if (sixth !== undefined) criterion.sixth = window(sixth, rooms.drawn, { sixth: true });
   // Left out at 1 for the same reason: the weigher then answers exactly what
   // the matcher answered, and the success set carries the 1s it always did.
   if (weight !== undefined && weight !== 1) criterion.weight = weight;
@@ -874,14 +911,20 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
       ],
     };
 
-  // The ROOM a criterion is judged in: the largest hand any part of this run
-  // can hold, which draw cards make larger than the hand size. It is what
-  // decides whether a ceiling or a limit can ever bind, and — through
+  // The ROOM each window of a criterion is judged in: the largest any part of
+  // this run can hold, which draw cards make larger than the hand size. It is
+  // what decides whether a ceiling or a limit can ever bind, and — through
   // `input.handSize` — whether the criteria were expanded wide enough to judge.
   const draws = classes.flatMap(({ draw, max }, cls) =>
     draw === undefined ? [] : [{ cls, max, ...draw }],
   );
-  const room = Math.max(...handSizes.map(({ H }) => largestHand(H, draws)));
+  const perHand = handSizes.map(({ H }) => roomsOf(H, draws));
+  const rooms: WindowRooms = {
+    hand: Math.max(...perHand.map(({ hand }) => hand)),
+    opened: Math.max(...perHand.map(({ opened }) => opened)),
+    drawn: Math.max(...perHand.map(({ drawn }) => drawn)),
+  };
+  const room = rooms.hand;
   const judgedHand = input.judgedHand ?? input.handSize;
   if (room > judgedHand)
     return {
@@ -911,7 +954,7 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
   const weighted = input.weighted === true;
   const criteria = judged.map((at, criterion) => {
     const alternative = weighted ? flat[at]! : { ...flat[at]!, weight: 1 };
-    const compiled = compileCriterion(alternative, maskOf, room);
+    const compiled = compileCriterion(alternative, maskOf, rooms);
     for (const dropped of compiled.droppedLimits) droppedLimits.push({ criterion, ...dropped });
     for (const dropped of compiled.droppedCeilings) droppedCeilings.push({ criterion, ...dropped });
     return compiled.criterion;

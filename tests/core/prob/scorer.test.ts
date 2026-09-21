@@ -2027,3 +2027,400 @@ describe('createScorers', () => {
     expect(() => createBlendScorer(problem).score([3, 3, 2])).toThrow(/outside its range/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// `then` beside draw cards (PRD §5.6, §5.7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Going second the hand is dealt in two pieces, and with draw cards the second
+ * piece is no longer one card: it is everything from position `H − 1` on — the
+ * card drawn for turn, and whatever the draw cards fetched, less any copy that
+ * resolved out of it.
+ *
+ * It GENERALISES the sixth-card split rather than replacing it. With no draw
+ * card the prefix is `H` and the drawn set is the one card at position `H − 1`,
+ * so every template written before this must answer bit for bit what it
+ * answered — which is the claim that protects all of them, and is pinned below
+ * against the OTHER route rather than against a number typed out here.
+ *
+ * Everything is held against `exhaustive`, which walks every distinct class
+ * ORDER of the deck, plays it out card by card and reads the two windows off
+ * POSITIONS. It shares no factor, no fixed point and no binomial with this.
+ */
+describe('createScorers with `then` and draw cards', () => {
+  /** A criterion about the drawn set alone; `five` asks the same of what was opened on. */
+  const thenNeeds = (
+    mask: number,
+    over: Partial<CompiledCriterion> = {},
+    slots = 1,
+  ): CompiledCriterion => ({
+    slots: [],
+    limits: [],
+    sixth: { slots: new Array<number>(slots).fill(mask), limits: [] },
+    ...over,
+  });
+
+  describe('against the certain oracle', () => {
+    const cases: [string, Problem, number[], number][] = [
+      [
+        'the drawn set is the card for turn plus what a Pot fetched',
+        drawProblem({
+          n: [4, 2, 2],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [thenNeeds(bit(2))],
+        }),
+        [4, 2, 2],
+        3,
+      ],
+      [
+        'an opening part as well: the two windows are disjoint',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [thenNeeds(bit(2), { slots: [bit(2)] })],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        '`then 2x`, which no hand that drew nothing can hold',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [thenNeeds(bit(2), {}, 2)],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        'once-per-turn, where the further copies sit in the drawn set unactivated',
+        drawProblem({
+          n: [3, 3, 2],
+          H: 2,
+          drawn: true,
+          draw: { 1: { n: 2, oncePerTurn: true } },
+          criteria: [thenNeeds(bit(1) | bit(2))],
+        }),
+        [3, 3, 2],
+        2,
+      ],
+      [
+        'a limit on the drawn set, which a fetched card can break',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [
+            {
+              slots: [bit(2)],
+              limits: [],
+              sixth: { slots: [], limits: [{ mask: bit(2), n: 0 }] },
+            },
+          ],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        'a ceiling on the drawn set, which one card could never break',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [
+            {
+              slots: [],
+              limits: [],
+              sixth: {
+                slots: [bit(2)],
+                limits: [],
+                reqs: [{ mask: bit(2), min: 1, max: 1 }],
+              },
+            },
+          ],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        'a `stop` criterion beside a split one: the stop decides which window',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [{ slots: [bit(2), bit(2)], limits: [], stop: true }, thenNeeds(bit(2))],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        'a SPLIT criterion that also stops: the drawn set is then the one card',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [thenNeeds(bit(2), { slots: [bit(2)], stop: true })],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        'weighted: a split criterion worth 3 beside an unsplit one worth 1',
+        drawProblem({
+          n: [3, 2, 3],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [
+            thenNeeds(bit(2), { slots: [bit(2)], weight: 3 }),
+            { slots: [bit(2), bit(2)], limits: [], weight: 1 },
+          ],
+        }),
+        [3, 2, 3],
+        3,
+      ],
+      [
+        'two draw classes, one of them once-per-turn',
+        drawProblem({
+          n: [3, 2, 2, 2],
+          H: 2,
+          drawn: true,
+          draw: { 1: { n: 2, oncePerTurn: true }, 2: { n: 1 } },
+          criteria: [thenNeeds(bit(3))],
+        }),
+        [3, 2, 2, 2],
+        2,
+      ],
+      [
+        'nothing split at all, on a hand that is still dealt in two pieces',
+        drawProblem({
+          n: [4, 2, 2],
+          H: 3,
+          drawn: true,
+          draw: { 1: { n: 2 } },
+          criteria: [drawNeeds(bit(2))],
+        }),
+        [4, 2, 2],
+        3,
+      ],
+    ];
+
+    it.each(cases)('agrees exactly: %s', (_label, problem, n, hand) => {
+      const exact = createBlendScorer(problem).score(n);
+      expect(exact.pDisplay).toBeCloseTo(exhaustive(problem, n, hand).weight, 12);
+    });
+
+    it.each(cases)('agrees on P(success) too: %s', (_label, problem, n, hand) => {
+      const exact = createBlendScorer(problem).score(n);
+      const p = exact.parts.reduce((sum, part) => sum + part.successNum / part.den, 0);
+      expect(p).toBeCloseTo(exhaustive(problem, n, hand).p, 12);
+    });
+  });
+
+  /**
+   * THE BIT-IDENTITY, and the claim that protects every template already
+   * written. A draw class the deck holds NO copy of reaches one prefix length,
+   * `H`, and its drawn set is the one card at position `H − 1` — so the new
+   * route must answer the fraction the old one answers, digit for digit and not
+   * merely to twelve places.
+   */
+  describe('the answer where nothing is actually drawn', () => {
+    const inertDraw = (criteria: CompiledCriterion[]) =>
+      drawProblem({
+        n: [4, 0, 3, 3],
+        max: [4, 0, 3, 3],
+        H: 3,
+        deckSize: 10,
+        drawn: true,
+        draw: { 1: { n: 2 } },
+        criteria,
+      });
+
+    const shapes: [string, CompiledCriterion[]][] = [
+      ['a split criterion', [thenNeeds(bit(3), { slots: [bit(2)] })]],
+      ['a leading `then`', [thenNeeds(bit(3))]],
+      [
+        'a limit on the drawn set',
+        [{ slots: [bit(2)], limits: [], sixth: { slots: [], limits: [{ mask: bit(3), n: 0 }] } }],
+      ],
+      [
+        'a split criterion beside an unsplit one',
+        [thenNeeds(bit(3), { slots: [bit(2)] }), { slots: [bit(2), bit(3)], limits: [] }],
+      ],
+      [
+        'weighted',
+        [
+          thenNeeds(bit(3), { slots: [bit(2)], weight: 5 }),
+          { slots: [bit(2), bit(3)], limits: [], weight: 2 },
+        ],
+      ],
+    ];
+
+    it.each(shapes)('is the same fraction the plain success set gives: %s', (_label, criteria) => {
+      const drawing = createBlendScorer(inertDraw(criteria)).score([4, 0, 3, 3]);
+      const plain = createBlendScorer(withoutDraws(inertDraw(criteria))).score([4, 0, 3, 3]);
+      // One part, one length: the prefix is the hand, since nothing can draw.
+      expect(drawing.parts).toHaveLength(1);
+      expect(drawing.parts[0]!.prefix).toBe(3);
+      // Bit for bit, not close to: same numerator, same denominator, same plain
+      // count. `toBe` on each rather than `toEqual` on the pair, so a failure
+      // says which of the three moved.
+      expect(drawing.parts[0]!.num).toBe(plain.parts[0]!.num);
+      expect(drawing.parts[0]!.den).toBe(plain.parts[0]!.den);
+      expect(drawing.parts[0]!.successNum).toBe(plain.parts[0]!.successNum);
+    });
+
+    /**
+     * And the denominator is the one the sixth-card split has always had:
+     * `H · C(N, H)`, because a set of `H` cards is `H` ordered (opening, drawn)
+     * pairs. The ordering factor is what carries the `H`, so this is the test
+     * that it carried exactly that and nothing else.
+     */
+    it('puts it over `H · C(N, H)`, which is what `outcomesOf` says', () => {
+      const score = createBlendScorer(inertDraw([thenNeeds(bit(3))])).score([4, 0, 3, 3]);
+      // C(10, 3) = 120, and three (opening, drawn) pairs per set.
+      expect(score.parts[0]!.den).toBe(3 * 120);
+      expect(createScorers(inertDraw([thenNeeds(bit(3))]), 3)[0]!.outcomes).toBe(3);
+    });
+  });
+
+  /**
+   * THE STANDING SELF-TEST. A criterion every hand meets must score exactly 1,
+   * whichever way the hand is dealt — so the `H` in the denominator and the `H`
+   * outcomes summed into every row have to be the same `H`.
+   */
+  it('carries mass exactly 1 over the reachable lengths, split and all', () => {
+    const everything = drawProblem({
+      n: [4, 2, 2],
+      H: 3,
+      drawn: true,
+      draw: { 1: { n: 2 } },
+      criteria: [{ slots: [], limits: [], sixth: { slots: [], limits: [] } }],
+    });
+    const { parts } = createBlendScorer(everything).score([4, 2, 2]);
+    expect(parts.length).toBeGreaterThan(1);
+    const gcd = (a: bigint, b: bigint): bigint => (b === 0n ? a : gcd(b, a % b));
+    const common = parts.reduce((lcm, { den }) => {
+      const at = BigInt(den);
+      return (lcm / gcd(lcm, at)) * at;
+    }, 1n);
+    const total = parts.reduce(
+      (sum, { num, den }) => sum + BigInt(num) * (common / BigInt(den)),
+      0n,
+    );
+    expect(total).toBe(common);
+  });
+
+  /**
+   * A hand dealt in two pieces whose criteria name no drawn set is the SAME
+   * score. That is what lets one criterion of a run be split and another not:
+   * both are read against one hand, rather than one over a sixth of the
+   * other's sample space.
+   *
+   * It is checked as an EXACT RATIONAL and not as "the denominator times `H`".
+   * Without draw cards the denominator is literally `H · C(N, H)` and the two
+   * readings coincide; with them, each part's denominator is the lcm of its
+   * ordering factors times `C(N, ℓ)`, and dividing those factors by `H` can
+   * change the lcm by more than `H`. The fraction is the same either way, and
+   * the fraction is the claim.
+   */
+  it('is the undrawn score exactly, when nothing names the drawn set', () => {
+    const criteria = [drawNeeds(bit(2))];
+    const of = (drawn: true | undefined) =>
+      createBlendScorer(
+        drawProblem({
+          n: [4, 2, 2],
+          H: 3,
+          draw: { 1: { n: 2 } },
+          criteria,
+          ...(drawn === undefined ? {} : { drawn }),
+        }),
+      ).score([4, 2, 2]);
+    const split = of(true);
+    const plain = of(undefined);
+    expect(split.parts.map((part) => part.prefix)).toEqual(plain.parts.map((part) => part.prefix));
+    split.parts.forEach((part, at) => {
+      const theirs = plain.parts[at]!;
+      // Cross-multiplied in BigInt: equal rationals, with no rounding to hide
+      // behind and no assumption about which denominator either is written over.
+      expect(BigInt(part.num) * BigInt(theirs.den)).toBe(BigInt(theirs.num) * BigInt(part.den));
+      expect(BigInt(part.successNum) * BigInt(theirs.den)).toBe(
+        BigInt(theirs.successNum) * BigInt(part.den),
+      );
+    });
+    expect(split.pDisplay).toBeCloseTo(plain.pDisplay, 12);
+  });
+
+  /**
+   * A criterion that STOPS the draws fetches nothing, so the hand it keeps drew
+   * exactly one card — and `then 2x` can never hold in that branch. It is worth
+   * a test rather than a comment because the alternative is a silent zero on a
+   * criterion the writer thought they had just made easier to meet.
+   *
+   * Said in WEIGHTS, so that the claim is about the split criterion alone: the
+   * stopping criterion is worth 1 and met by every hand, the split one is worth
+   * 9, and a run that never reaches the split one scores exactly 1.
+   */
+  it('never meets `then 2x` on a hand that stopped: the drawn set is then one card', () => {
+    const n = [2, 2, 4];
+    const anyHand = (over: Partial<CompiledCriterion>): CompiledCriterion => ({
+      slots: [],
+      limits: [],
+      weight: 1,
+      ...over,
+    });
+    const of = (stop: true | undefined) =>
+      drawProblem({
+        n,
+        H: 3,
+        drawn: true,
+        draw: { 1: { n: 2 } },
+        criteria: [
+          anyHand(stop === undefined ? {} : { stop }),
+          thenNeeds(bit(2), { weight: 9 }, 2),
+        ],
+      });
+
+    const stopped = of(true);
+    const scored = createBlendScorer(stopped).score(n);
+    // Every hand stops, every hand is worth the 1, and no hand ever reaches
+    // the 9 — exactly 1, not merely close to it.
+    expect(scored.pDisplay).toBe(1);
+    expect(scored.pDisplay).toBeCloseTo(exhaustive(stopped, n, 3).weight, 12);
+
+    // Drop the stop and the very same split criterion is met often: the
+    // difference is the stopping, not the criterion.
+    const drawing = of(undefined);
+    expect(createBlendScorer(drawing).score(n).pDisplay).toBeGreaterThan(1);
+  });
+
+  it('agrees with Monte Carlo on a deck too large to walk', () => {
+    const n = [20, 3, 17];
+    const problem = drawProblem({
+      n,
+      max: [25, 3, 17],
+      H: 6,
+      deckSize: 40,
+      drawn: true,
+      draw: { 1: { n: 2 } },
+      criteria: [thenNeeds(bit(2), { slots: [bit(2)] }, 2)],
+    });
+    const exact = createBlendScorer(problem).score(n);
+    const p = exact.parts.reduce((sum, part) => sum + part.successNum / part.den, 0);
+    const sampled = estimateDraws(problem, n, 6, { samples: 400_000, seed: 20250921 });
+    expect(p).toBeGreaterThan(0.01);
+    // Five sigma of a 400,000-sample estimate is under half a percentage point.
+    expect(Math.abs(sampled.p - p)).toBeLessThan(5 * sampled.stderr);
+  });
+});

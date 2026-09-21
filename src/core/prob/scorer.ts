@@ -393,7 +393,7 @@ function createDrawScorers(problem: Problem, H: number, opts: SuccessSetOptions)
       H,
       prefix,
       den,
-      outcomes: 1,
+      outcomes: set.outcomes,
       terms: rows,
       complemented: false,
       groups: part.groups.length,

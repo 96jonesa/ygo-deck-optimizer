@@ -288,7 +288,7 @@ export const CRITERION_SYNTAX: ExampleSection = {
       note: 'One token decides which `or` you wrote: a count, `exactly`, `at most`, `no`, or a `(` before one of those starts a new term. Anything else continues the description.',
     },
     {
-      heading: 'The card you draw going second',
+      heading: 'The cards you draw going second',
       rows: [
         {
           syntax: '1x {starter} and 1x {extender} then 1x [Ash Blossom & Joyous Spring]',
@@ -302,16 +302,17 @@ export const CRITERION_SYNTAX: ExampleSection = {
         { syntax: '1x {starter} then no trap', means: 'the card you draw is not a trap' },
         {
           syntax: '1x monster then 2x trap',
-          means: 'an error — one card cannot be two cards',
-          fails: 'the sixth card is one card',
+          means:
+            'an error HERE — one card cannot be two cards. Mark a line as drawing cards and it becomes a question: `then` is then about everything you drew',
+          fails: 'the card you draw is one card',
         },
         {
           syntax: '1x monster then 1x trap then 1x spell',
-          means: 'an error — one card is drawn, not two',
+          means: 'an error — the hand comes in two pieces, not three',
           fails: 'a criterion has one `then`',
         },
       ],
-      note: '`then` is a different question from asking the same of all six cards together: it fixes WHICH card is which, and it is the question to ask when the extra card has to be the answer. A row with a `then` must be tagged going second — going first there is no sixth card.',
+      note: '`then` is a different question from asking the same of all six cards together: it fixes WHICH cards are which, and it is the question to ask when the extra cards have to be the answer. A row with a `then` must be tagged going second — going first nothing is drawn. With DRAW CARDS in the template it means everything you drew: the card for turn and whatever the draw cards fetched, so `then 2x monster` is then writable and fails on any hand that drew nothing.',
     },
     {
       heading: 'Two errors worth recognizing',
@@ -508,6 +509,16 @@ export const DRAW_REFERENCE: FactSection = {
       means:
         'Whichever way you stopped or drew, EVERY criterion is then judged on the hand you have. A criterion you tick is still checked after drawing when your opening did not stop you, and one you leave alone still counts when something else stopped you.',
     },
+    {
+      label: '`then` becomes about everything you drew',
+      means:
+        'Going second, `then` normally asks about the one card you draw for turn. With draw cards it asks about that card AND everything they fetched — so `then 2x monster` is a question you can now write, and it fails on any hand that drew nothing.',
+    },
+    {
+      label: 'What `then` means when you stop',
+      means:
+        'A criterion that stops you fetches nothing, so the hand you keep drew exactly one card. Anything after `then` that needs two cards can never hold in that branch, and scores nothing for it.',
+    },
   ],
   notes: [
     'ONE DECISION, taken before you draw anything. Either you activate nothing, or you activate everything — every draw card in the hand, and every one those draw into. There is no choosing card by card.',
@@ -515,7 +526,7 @@ export const DRAW_REFERENCE: FactSection = {
     'Exactly one moment is ever scored. If your opening stopped you, your opening is what counts; if you drew, the hand you ended up with is what counts — even when it is worth less, and even when it is worth nothing.',
     'MORE CARDS CAN BE WORSE. “No hand traps” counts your whole hand, and “exactly one starter” is broken by a second one — so drawing into them turns a hand that worked into one that does not, and the score falls as you add copies. That is what "stop here" is there to stop.',
     'The deck cannot run out: a template whose draw cards could ask for more cards than the deck holds is refused rather than scored as though it could not happen.',
-    'Draw cards and the going-second split (`then`) cannot be used together. The card you draw for turn stops being one of six equally likely ones once a draw card has to be among your opening cards to be played at all.',
+    'THE SPLIT STILL WORKS, and widens. `1x {starter} then 2x monster` going second asks that your opening five hold a starter and that the cards you drew — the one for turn, plus everything the draw cards fetched — hold two monsters. A card you played to draw with has left your hand and is in neither half.',
   ],
 };
 

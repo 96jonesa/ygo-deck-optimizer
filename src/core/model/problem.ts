@@ -5,7 +5,7 @@
  * `src/core/prob` consumes it.
  */
 
-import { MAX_RANGES, MAX_SIXTH_SLOTS } from '../criteria/ast';
+import { MAX_RANGES } from '../criteria/ast';
 import { choose } from '../prob/binomial';
 
 /** Classes, the blank class included: a class mask is a non-negative 32-bit integer. */
@@ -51,12 +51,21 @@ export const MAX_HAND = 12;
  *
  * It is a SECOND bound and not a restatement of `MAX_PREFIX`, which is the
  * mistake this constant exists to correct. The prefix bounds how DEEP the
- * enumeration reads; the cost is that depth spread over the CLASSES, and with a
- * stop criterion over the openings too. Three copies of Pot of Greed at fifteen
- * classes reach a prefix of 11 — comfortably inside `MAX_PREFIX` — and with a
- * stop criterion cost 22 million visits, where eighteen classes cost 88 million
- * and three draw-3 lines cost 2.6 BILLION. A cap on the prefix alone lets every
- * one of those through.
+ * enumeration reads; the cost is that depth spread over the CLASSES, and over
+ * the OPENINGS as well wherever the opening must be read apart from the rest of
+ * the prefix. Three copies of Pot of Greed at fifteen classes reach a prefix of
+ * 11 — comfortably inside `MAX_PREFIX` — and cost 16 million visits that way at
+ * a hand of five, where eighteen classes cost 88 million and three draw-3 lines
+ * cost 2.6 BILLION. A cap on the prefix alone lets every one of those through.
+ *
+ * TWO THINGS ask for the openings, and they cost the same: a `stop` criterion,
+ * which decides on the opening whether anything is drawn; and a hand dealt in
+ * two pieces (`HandSize.drawn`), which is what `then` needs. Measured equal
+ * visit for visit over a sweep — it is one recursion — so the figures above are
+ * the figures for `then` too, at the hand size they were taken at. Going second
+ * is a hand of six rather than five, and that alone is 4× the walk: three Pots
+ * at fifteen classes is 67 million at H = 6 and so refused, where at H = 5 it
+ * is 16 million and allowed.
  *
  * A run pays this once and then scores millions of decks against it, so five
  * seconds is affordable there. What is NOT affordable is paying it on a
@@ -163,6 +172,33 @@ export function largestHand(H: number, draws: readonly DrawClass[]): number {
 }
 
 /**
+ * THE LARGEST DRAWN SET: the most cards `then` can ever be asked about (PRD
+ * §5.6, §5.7). Going second the hand is dealt in two pieces, and with draw
+ * cards the second piece is no longer one card: it is everything from position
+ * `H − 1` on — the card drawn for turn, and whatever the draw cards fetched.
+ *
+ * Two bounds, and it is the smaller:
+ *
+ * - the POSITIONS there are, `ℓ − (H − 1)`, which is `1 + Σ n_c · k_c` — one
+ *   for the card drawn for turn, and one for each card fetched;
+ * - the whole HAND, `largestHand`, since the drawn set is part of it.
+ *
+ * Neither dominates. Three copies of Pot of Greed give 7 positions against a
+ * hand of 9, so the positions bind; six Upstart Goblins give 7 positions
+ * against a hand of 6, and the hand binds — the opening five cannot hold all
+ * six copies, so at least one resolves out of the drawn set itself.
+ *
+ * The minimum is REACHED, not merely an upper bound: of the `R` copies that
+ * resolve, at most `H − 1` can be dealt into the cards opened on, so the drawn
+ * set loses exactly `max(0, R − (H − 1))` of them, and placing the rest in the
+ * opening is always possible. With no draw card it is 1, the card drawn for
+ * turn, which is what `then` has always meant.
+ */
+export function largestDrawnSet(H: number, draws: readonly DrawClass[]): number {
+  return Math.min(longestPrefix(H, draws) - (H - 1), largestHand(H, draws));
+}
+
+/**
  * THE COMPOSITIONS `drawSet` WOULD VISIT, counted without visiting them — the
  * cost of a BUILD, known before paying it.
  *
@@ -183,6 +219,19 @@ export function largestHand(H: number, draws: readonly DrawClass[]): number {
  * copies of one recursion is how they drift, a test counts the visits of the
  * real enumeration and holds this equal to them.
  */
+/**
+ * Whether the hand of `H` is dealt in two pieces — the cards opened on, and
+ * then the card drawn for turn with whatever follows it (`HandSize.drawn`).
+ *
+ * Read off the problem's own declaration of the hand, exactly as `successSet`
+ * reads it, so that the enumeration, its cost and the denominator all answer
+ * the same question. A problem that never declares this `H` is not one, which
+ * is what a bare `createScorers(problem, H)` for another hand asks for.
+ */
+export function opensApart(problem: Pick<Problem, 'handSizes'>, H: number): boolean {
+  return problem.handSizes.find((hand) => hand.H === H)?.drawn === true;
+}
+
 export function drawWork(problem: Problem, H: number): number {
   const draws = drawClassesOf(problem.classes);
   if (draws.length === 0) return 0;
@@ -192,7 +241,10 @@ export function drawWork(problem: Problem, H: number): number {
   for (let cls = 0; cls < classCount; cls++)
     if (draws.every((spec) => spec.cls !== cls)) rest.push(cls);
   const capOf = rest.map((cls) => Math.min(problem.classes[cls]!.max, longest));
-  const stopping = problem.criteria.some(({ stop }) => stop === true);
+  // The (prefix, opening) walk is what a STOP decision needs, and equally what
+  // a hand whose last card is drawn separately needs: both read the opening `H`
+  // apart from the rest of the prefix. Either one, and the count is over PAIRS.
+  const stopping = problem.criteria.some(({ stop }) => stop === true) || opensApart(problem, H);
 
   /** The ways to give `total` cards to the non-draw classes within their maxima. */
   const spread = new Map<number, number>();
@@ -348,11 +400,16 @@ export interface CompiledRequirement {
 }
 
 /**
- * The SIXTH CARD's part of a split criterion: the same three fields, judged
- * against the ONE card drawn (PRD §5.6). `slots` holds at most one mask — it
- * is one card — and a limit there is a census over that card alone, so `no
- * trap` says the card drawn is not a trap. A ceiling of 1 or more, and a limit
- * of 1 or more, can never bind on one card and `compile` drops them.
+ * THE DRAWN SET's part of a split criterion: the same three fields, judged
+ * against what the player DREW (PRD §5.6, §5.7).
+ *
+ * Without draw cards that is the one card drawn for turn, `slots` holds at most
+ * one mask, and a limit there is a census over that card alone — `no trap` says
+ * the card drawn is not a trap. WITH draw cards it is the card drawn for turn
+ * and everything the draw cards fetched, up to `largestDrawnSet`, so `then 2x
+ * monster` becomes a question something can answer and a limit of 1 can bind.
+ * The field is still called `sixth` because that is what it is whenever nothing
+ * draws, which is every template written before draw cards existed.
  */
 export interface SixthCard {
   slots: number[];
@@ -392,15 +449,21 @@ export interface CompiledCriterion {
    */
   weight?: number;
   /**
-   * The SIXTH CARD's own part (PRD §5.6). Present: `slots`, `limits` and
-   * `reqs` above are about the OPENING FIVE — the hand less its last card —
-   * and this is about the card drawn. Absent: the criterion is judged over the
+   * THE DRAWN SET's own part (PRD §5.6). Present: `slots`, `limits` and `reqs`
+   * above are about the cards OPENED ON — the first `H − 1` dealt — and this is
+   * about everything from there on. Absent: the criterion is judged over the
    * whole hand, which is every criterion the language had before this and is
    * why such a run is byte for byte what it always was.
    *
+   * WITH DRAW CARDS the drawn set GENERALISES rather than changes: it is
+   * positions `H − 1 … ℓ − 1`, the card drawn for turn and whatever the draw
+   * cards fetched, less any copy that resolved out of it. With no draw card
+   * ℓ = H and it is the one card at position `H − 1`, bit for bit the answer
+   * this always gave.
+   *
    * It may only be judged by a hand size marked `drawn`, and `validateProblem`
    * holds it to that: the split is a statement about a hand you draw in two
-   * pieces, and going first there is no sixth card to speak of.
+   * pieces, and going first nothing is drawn to speak of.
    */
   sixth?: SixthCard;
   /**
@@ -473,6 +536,11 @@ export interface HandSize {
    * is `H` times what it was, `outcomesOf` is that `H`, and a run in which
    * nothing is split scores exactly what it always scored with both sides of
    * the fraction multiplied by it (a fact pinned by a test).
+   *
+   * WITH DRAW CARDS it says the same thing about the same position: the prefix
+   * is read as (the first `H − 1` cards, everything from `H − 1` on), and the
+   * first `H` positions being unconstrained is exactly why the card at `H − 1`
+   * is still one of `H` equally likely ones given the prefix (`drawSet`).
    *
    * It is a property of the HAND and not of the criteria, so that every score
    * of one run — the headline and each criterion's own row — is a fraction over
@@ -604,6 +672,12 @@ export function validateProblem(problem: Problem): void {
       throw new RangeError('the blank class cannot draw: its cards are the ones nothing can see');
   });
 
+  const draws = drawClassesOf(classes);
+  // What `then` may ask for: one card without draw cards, and the whole drawn
+  // set with them. Over every declared hand, since a criterion belongs to the
+  // problem rather than to one of them — and a hand that draws none refuses a
+  // split criterion outright above, so the widest hand is never too generous.
+  const drawnRoom = Math.max(...handSizes.map(({ H }) => largestDrawnSet(H, draws)));
   criteria.forEach(({ weight, sixth, ...part }, criterion) => {
     if (weight !== undefined && (!Number.isSafeInteger(weight) || weight < 1))
       throw new RangeError(
@@ -611,14 +685,15 @@ export function validateProblem(problem: Problem): void {
       );
     checkPart(part, classes.length, `criterion ${criterion}`);
     if (sixth === undefined) return;
-    if (sixth.slots.length > MAX_SIXTH_SLOTS)
+    if (sixth.slots.length > drawnRoom)
       throw new RangeError(
-        `criterion ${criterion}: the sixth card is one card, and its part asks for ${sixth.slots.length}`,
+        drawnRoom === 1
+          ? `criterion ${criterion}: the card you draw is one card, and its part asks for ${sixth.slots.length}`
+          : `criterion ${criterion}: the cards you draw are at most ${drawnRoom}, and this part asks for ${sixth.slots.length}`,
       );
-    checkPart(sixth, classes.length, `criterion ${criterion}, the sixth card`);
+    checkPart(sixth, classes.length, `criterion ${criterion}, the cards you draw`);
   });
 
-  const draws = drawClassesOf(classes);
   const most = maxCriterionWeight(problem);
   if (draws.length === 0) {
     for (const hand of problem.handSizes)
@@ -653,24 +728,9 @@ function checkDraws(
   draws: readonly DrawClass[],
   maxWeight: number,
 ): void {
-  const { deckSize, criteria } = problem;
+  const { deckSize } = problem;
   const { H } = hand;
   const where = `a hand of ${H}`;
-  // `then` (PRD §5.6) reads a set of `H` cards as `H` equally likely (opening,
-  // drawn) pairs. With draw cards it is not: a draw card has to land in the
-  // first `H` positions or it never resolves, so the card at position `H − 1`
-  // is biased towards them — measured at 0.3333 against the 0.2000 a uniform
-  // reading assumes. The two features are refused together rather than one of
-  // them quietly reading the other's sample space.
-  const split = criteria.findIndex(({ sixth }) => sixth !== undefined);
-  if (split >= 0)
-    throw new RangeError(
-      `criterion ${split} is about the card you draw, and this template has draw cards — \`then\` and draw cards cannot be judged together: the card you draw for turn is no longer one of six equally likely ones once a draw card has to be among the first ${H} to resolve`,
-    );
-  if (hand.drawn === true)
-    throw new RangeError(
-      `${where}: a hand whose last card is drawn separately cannot hold draw cards — the two read the same hand as two different sample spaces`,
-    );
 
   const prefix = longestPrefix(H, draws);
   // DECK-OUT, refused rather than modelled: the model would drop that mass
@@ -687,7 +747,7 @@ function checkDraws(
   const work = drawWork(problem, H);
   if (work > MAX_DRAW_WORK)
     throw new RangeError(
-      `${where}: these draw cards would take ${exactly(work)} compositions to build, ${overBy(work, MAX_DRAW_WORK)} the ${exactly(MAX_DRAW_WORK)} the engine allows — hold fewer copies of a draw card, merge lines the criteria cannot tell apart, or drop a "stop here"`,
+      `${where}: these draw cards would take ${exactly(work)} compositions to build, ${overBy(work, MAX_DRAW_WORK)} the ${exactly(MAX_DRAW_WORK)} the engine allows — ${remedies(problem).join(', ')}`,
     );
   const largest = largestHand(H, draws);
   if (largest > MAX_HAND)
@@ -695,8 +755,30 @@ function checkDraws(
       `${where}: these draw cards build a hand of up to ${largest} cards, and the engine judges at most ${MAX_HAND}`,
     );
   // The prefix, not the hand: a score sums over the ℓ-card prefixes, so
-  // `C(N, ℓ)` is what a numerator is bounded by.
-  checkWeightBound(deckSize, prefix, maxWeight, 1, 'prefix');
+  // `C(N, ℓ)` is what a numerator is bounded by — times `H` where the hand is
+  // dealt in two pieces, for the reason `outcomesOf` gives. It is an EARLY
+  // check and not the whole one: the ordering factors put a further lcm under
+  // the fraction, which only `drawSet` knows, and which it checks itself.
+  checkWeightBound(deckSize, prefix, maxWeight, outcomesOf(hand), 'prefix');
+}
+
+/**
+ * What to do about a build that is too large, naming only what this template
+ * actually has.
+ *
+ * The cost is the prefix spread over the CLASSES, and doubled again over the
+ * OPENINGS wherever the opening must be read apart from the rest of the prefix
+ * — which a "stop here" asks for, and which `then` asks for too. Both are worth
+ * naming, and neither is worth naming when it is not there: a refusal is code
+ * that runs only when someone is already stuck, so advice to drop a "stop here"
+ * the template does not have is worse than no advice at all.
+ */
+function remedies({ criteria }: Problem): string[] {
+  const out = ['hold fewer copies of a draw card', 'merge lines the criteria cannot tell apart'];
+  if (criteria.some(({ stop }) => stop === true)) out.push('drop a "stop here"');
+  if (criteria.some(({ sixth }) => sixth !== undefined))
+    out.push('or drop a `then` (it reads the cards you opened on apart from the cards you drew)');
+  return out;
 }
 
 /** The slots, limits and ranges of one window: a whole hand, or the card drawn. */

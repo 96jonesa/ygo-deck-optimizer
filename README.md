@@ -19,7 +19,7 @@ combinatorial probability plus a card-database lookup layer.
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | **Done**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), range requirements (`1-2x monster`: a ceiling that binds the cards it does not take, so the range means "in addition to the rest"), `exactly nx` for a range whose ends agree, the sixth-card split (`1x {starter} then 1x [Ash]`: what the opening five must hold, and what the card you draw going second must be), inline name completion in both editors (`[card]`, `{group}`, `"archetype"`), M2g files (`.ydk` deck import, template open/save with `cardSnapshot`, CSV/JSON export of a run), three run modes (going first, going second, or their exact average, with each criterion tagged for the hand it is judged in), weighted criteria (rank by expected weight rather than success rate; a hand is worth the highest weight it meets), draw cards (a line whose copies are played and replaced by `n` fresh cards, so the hand is a prefix of the deck rather than a fixed size; exact per prefix length, with a per-criterion "stop here" that keeps an opening hand that already works — engine, CLI and editor, with the per-length breakdown, the lower-bound caveat and every refusal read where the user is), and an in-app syntax reference whose every example is parsed by a test |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), range requirements (`1-2x monster`: a ceiling that binds the cards it does not take, so the range means "in addition to the rest"), `exactly nx` for a range whose ends agree, the going-second split (`1x {starter} then 1x [Ash]`: what the opening five must hold, and what the cards you draw must be — one card on its own, or the whole drawn set where a line draws), inline name completion in both editors (`[card]`, `{group}`, `"archetype"`), M2g files (`.ydk` deck import, template open/save with `cardSnapshot`, CSV/JSON export of a run), three run modes (going first, going second, or their exact average, with each criterion tagged for the hand it is judged in), weighted criteria (rank by expected weight rather than success rate; a hand is worth the highest weight it meets), draw cards (a line whose copies are played and replaced by `n` fresh cards, so the hand is a prefix of the deck rather than a fixed size; exact per prefix length, with a per-criterion "stop here" that keeps an opening hand that already works — engine, CLI and editor, with the per-length breakdown, the lower-bound caveat and every refusal read where the user is), `then` beside draw cards (the split reads the whole drawn set — the card for turn and everything the draw cards fetched — which generalises the one-card reading bit for bit), and an in-app syntax reference whose every example is parsed by a test |
 | M3 — polish | Not started |
 | M4 — release | **In progress**: installers for macOS (arm64 DMG) and Windows (x64 NSIS) built and attached by `.github/workflows/release.yml` on a `v*` tag; the suite also runs on Windows in CI. Unsigned, so each platform warns once. `v0.2.0` shipped both and the Windows build has been run on Windows |
 
@@ -119,8 +119,8 @@ also holds, and a criterion you ticked is still judged after drawing when your o
 you. Where a criterion counts the whole hand — a limit, or a range requirement's ceiling — the
 criteria panel says so beside the boxes: **drawing more cards can make a hand fail**, so copies of a
 draw card can *lower* the score, and this is the flag that stops it. Every refusal (the deck running
-out, the prefix cap, the build cap, `then` beside draw cards) is shown whole under the lines, with
-the exact figure and the remedies the engine wrote.
+out, the prefix cap, the build cap, a `then` asking for more cards than the draws can fetch) is shown
+whole under the lines, with the exact figure and the remedies the engine wrote.
 
 **Going second, you can ask what the card you draw has to be.** A going-second criterion may be
 **split** with `then`: `1x {starter} then 1x [Ash Blossom & Joyous Spring]` says the five cards you
@@ -130,9 +130,19 @@ it is the question to ask when the extra card has to be the answer. A leading `t
 about the card drawn. What follows `then` is about **one card**, so it takes one requirement at
 most (a limit is free: `then no trap` says the card drawn is not a trap), and `then 2x monster` is
 refused with the span of the thing that asked too much. The split is going-second only — going
-first there is no sixth card — so a criterion with a `then` in it must be tagged going second, and
+first nothing is drawn — so a criterion with a `then` in it must be tagged going second, and
 a template that says otherwise does not run. A criterion with no `then` is judged over all six
 cards exactly as before.
+
+**With draw cards, `then` is about everything you drew.** The card for turn *and* whatever the draw
+cards fetched, less any copy you played to draw with — so `1x {starter} then 2x monster` is a
+question you can now write, and it fails on every hand that drew nothing. The bound widens with the
+template: one card where nothing draws, and one plus what the draw cards can fetch where something
+does, capped by the hand itself (three Pots of Greed reach seven; six Upstart Goblins reach six,
+because the five you opened on cannot hold all six copies and the last resolves out of the drawn set).
+A criterion marked **Stop here** fetches nothing when it fires, so anything after its `then` that
+needs two cards can never hold in that branch — which the editor says rather than leaving it to
+score zero.
 
 Under them are the two readouts the tool exists for. **Per requirement**: the lines that fill it
 and — the point — the near misses, each with the dimension it leaves unsaid (`` `monster`:
@@ -225,13 +235,18 @@ A hand succeeds if it meets any one criterion (`src/core/criteria`: `parseCriter
 One thing is not a term but a **split** of the criterion: `then`, written once, between what the
 five cards you open on must hold and what the card you draw must be (`1x {starter} then 1x [Ash]`).
 It binds looser than `and` and `or` both, so neither side ever needs parentheses, and a leading
-`then` leaves the opening five unasked about. Its right-hand side is a criterion over **one card**:
-at most one requirement slot (`slotsOf` counts them exactly as expansion would, so the parser
-refuses `then 2x monster` with a span rather than leaving it to score zero), any number of limits,
-and a ceiling or a limit of 1 or more dropped as something one card can never break. A split
-criterion is judged only going second, and only against a hand that draws a sixth card
-(`HandSize.drawn`); `resolveTemplate` and `analyze` both refuse one tagged otherwise, in the same
-words.
+`then` leaves the opening five unasked about. Its right-hand side is a criterion over the cards you
+**drew**: at most `largestDrawnSet` requirement slots (`slotsOf` counts them exactly as expansion
+would, so the parser refuses what asks too much with a span rather than leaving it to score zero),
+any number of limits, and a ceiling or a limit of that size or more dropped as something the drawn
+set can never break. Without draw cards that bound is **one card** and every one of those rules is
+the rule it always was; with them it is one plus what the draw cards fetch, so `then 2x monster`
+parses in one template and not in another. The bound is the template's, so it is passed to the
+parser (`maxDrawnSlots`) rather than guessed — and `validateExpr` does not check it at all, for the
+same reason it reads `stop` whether or not anything draws: what a file may *say* is a different
+question from what a template makes of it. A split criterion is judged only going second, and only
+against a hand dealt in two pieces (`HandSize.drawn`); `resolveTemplate` and `analyze` both refuse
+one tagged otherwise, in the same words.
 
 The `x` may be left out wherever only a term can start (`1-2 monster`, `at most 2 trap`); the
 printer always writes it. `and` and `,` are the same and bind tighter than `or`; parentheses
@@ -400,10 +415,44 @@ and never falls. Only the build pays — and it pays 3–63× the rows.
 **Drawing can make a hand fail**, and `analyze` says so. A limit is a census over the whole hand and a
 ceiling makes a surplus card fatal, so more cards is not more chances: `exactly 1x starter` with a live
 Pot of Greed falls from 0.3734 to 0.3181, monotonically in the copies held — which is what `stop` is
-there to stop. `then` (the going-second
-split) and draw cards are **refused together**: the split reads a set of $`H`$ cards as $`H`$ equally
-likely (opening, drawn) pairs, and a draw card has to land among the first $`H`$ to resolve at all, so
-position $`H-1`$ is biased towards them — measured 0.3333 against the 0.2000 a uniform reading assumes.
+there to stop.
+
+**`then` beside draw cards means the whole drawn set**, and the same $`\psi`$ pays for it. Going
+second the hand is dealt in two pieces: positions $`0 \ldots H-2`$ are the cards you opened on and
+positions $`H-1 \ldots \ell-1`$ are everything you drew — the card for turn, and whatever the draw
+cards fetched, less any copy that resolved out of it. With no draw card $`\ell = H`$ and the drawn
+set is the one card at position $`H-1`$, so this *generalises* the sixth-card split and every
+template already written answers bit for bit what it answered; a test pins that against the plain
+success set rather than against a number typed into it.
+
+The split was once refused here, and the refusal was about a reading it no longer needs. Asking
+*which card was the sixth* wants position $`H-1`$ to be uniform over the prefix, and it is not — a
+draw card must land among the first $`H`$ to resolve at all, so that position is biased towards them
+(0.3333 against 0.2000). Asking what the drawn *set* holds never asks which card was the sixth. What
+it does need is this, and it is the whole derivation:
+
+> conditional on the prefix $`v`$, on which of it fell in the first $`H`$ positions ($`u`$), and on
+> the arrangement being valid, the card at position $`H-1`$ is of class $`d`$ with probability
+> $`u_d / H`$.
+
+Validity is $`\text{budget}(t) > t`$ at every $`t < \ell`$, and $`\text{budget}(t) = H +
+\text{draws}(\text{first } t)`$. Below $`H`$ it holds whatever stands there, since the budget starts
+at $`H`$ and never falls; at or above $`H`$ it reads the first $`H`$ positions through their
+*multiset* and not their order. So the valid arrangements factorise as (every arrangement of the
+first $`H`$) × (the valid arrangements of the extension) — which is exactly the $`\psi`$ above,
+counted from position $`H`$ — and the first $`H`$ are therefore uniformly ordered. **The split at
+$`H-1`$ sits inside the unconstrained region, so it costs no new factor**: a row is one $`(v, u)`$
+pair as before, worth $`\sum_d u_d \cdot \text{value}(u, d, v)`$ over a factor of
+$`\psi / (H \binom{\ell}{H})`$. The extra $`H`$ is `outcomesOf` the hand and rides in the *factor*,
+so the lcm picks it up and the exactness check already there covers it.
+
+It belongs to the **hand** and not to the criteria, exactly as `HandSize.drawn` says: with nothing
+split, the value does not depend on $`d`$, the sum is $`H \cdot \text{value}`$, and the score is the
+undrawn one — which is what lets one criterion of a run be split and another not while every row of
+the readout sits over one denominator. Two consequences a writer meets: `then 2x monster` becomes
+writable, bounded by `largestDrawnSet` — the smaller of the positions there are and the whole hand,
+and neither dominates — and it can never hold on a hand that **stopped**, since a criterion that
+stops fetches nothing and the drawn set is then the one card.
 
 ## Template files and decks
 

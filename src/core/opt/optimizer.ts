@@ -6,8 +6,10 @@ import {
   type FlatAlternative,
   lineInterval,
   REMAINDER_ID,
+  roomsOf,
+  type WindowRooms,
 } from '../model/compile';
-import type { HandSize, Problem } from '../model/problem';
+import { drawClassesOf, type HandSize, type Problem } from '../model/problem';
 import { countSums } from '../model/ranges';
 import {
   type BlendScore,
@@ -703,14 +705,23 @@ export function breakdown(
     return mask >>> 0;
   };
   // The same ceiling and limit dropping the whole problem got, so a criterion
-  // alone is judged exactly as it is judged among the others.
-  const largestHand = Math.max(...compiled.problem.handSizes.map(({ H }) => H));
+  // alone is judged exactly as it is judged among the others — DRAW CARDS
+  // included, which is why the rooms come off `roomsOf` and not off the hand
+  // size. A hand of five with three Pots holds up to eleven cards, and a row
+  // that dropped `at most 8x trap` as never-binding would be judging something
+  // the headline is not.
+  const draws = drawClassesOf(compiled.problem.classes);
+  const perHand = compiled.problem.handSizes.map(({ H }) => roomsOf(H, draws));
+  const rooms: WindowRooms = {
+    hand: Math.max(...perHand.map(({ hand }) => hand)),
+    opened: Math.max(...perHand.map(({ opened }) => opened)),
+    drawn: Math.max(...perHand.map(({ drawn }) => drawn)),
+  };
   return criteria.map(({ id, name, alternatives, parts, weight }) => {
     // Its own alternatives, unweighted whatever the run does: this row is a
     // probability, and a weight here would scale it into something else.
     const own = alternatives.map(
-      (alternative) =>
-        compileCriterion({ ...alternative, weight: 1 }, maskOf, largestHand).criterion,
+      (alternative) => compileCriterion({ ...alternative, weight: 1 }, maskOf, rooms).criterion,
     );
     // Every one of its own alternatives in the parts it counts for, none in
     // the others — the same shape of blend the run has, so its numbers sit
