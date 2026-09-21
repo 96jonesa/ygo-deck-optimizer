@@ -186,8 +186,8 @@ export interface TemplateCriterion {
   /**
    * Whether the player would STOP for this criterion (PRD §5.7): `true` and an
    * opening hand that already meets it activates no draw card. Absent is false
-   * (`stopsFor`) — the checkbox is checked, which means "I am willing to lose
-   * this by drawing".
+   * (`stopsFor`) — the "Stop here" box is UNTICKED, which means "I draw
+   * regardless, and accept that drawing may lose this".
    *
    * It is the STOP DECISION and not an eligibility list. Whichever window the
    * decision lands on, every criterion is judged in it: a `stop` criterion is

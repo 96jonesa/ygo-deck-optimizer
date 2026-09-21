@@ -513,7 +513,9 @@ The parts **sum**; they are disjoint outcomes, not the weighted mean the first/s
 
 There is exactly **one stop timing** (Andy, 2026-09-20): either nothing is activated, or everything resolves to the fixed point. There is deliberately no card-by-card choice — that is a decision tree, and `φ` exists because the continuation is determined once you commit.
 
-Each criterion carries **`stop`** (default false). Andy's sentence is the definition: *unchecked (`stop`) means "I would stop for this"; checked means "I am willing to lose this by drawing."*
+Each criterion carries **`stop`** (default false): **`true` means "I would stop for this"**, so an opening hand that already meets it activates nothing, and **false — the default — means you draw regardless**, accepting that drawing may lose it.
+
+Andy asked for this as *"a checkbox next to each criteria, checked by default (drawing by default)"*, i.e. a **drawing** box. The field is its inverse, `stop`, so that absent means today's behaviour and no template needs rewriting — and the UI shows the box as **"Stop here", unticked by default**. Carrying Andy's original sentence across that inversion is how this section, the field's own doc comment and the PRD all came to state the polarity backwards while `DRAW_REFERENCE` — which a test executes — stated it correctly. **The executable reference is the one that was right.**
 
 ```
 look at the opening H cards

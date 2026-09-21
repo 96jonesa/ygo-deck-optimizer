@@ -201,7 +201,7 @@ Requested by Andy, 2026-09-20. A line may be marked a **draw card**: drawn, it i
 
 **There is one decision, taken before anything is drawn**: either nothing is activated, or everything resolves. There is no choosing card by card — that is a decision tree rather than a question with an answer, and it is the simplification that makes this exact rather than approximate.
 
-Each criterion carries **"stop here"**, off by default. Unchecked means *"I would stop for this"*; checked means *"I am willing to lose this by drawing."*
+Each criterion carries **"stop here"**, off by default. **Ticked** means *"I would stop for this"* — an opening hand that already meets it activates nothing. **Unticked**, the default, means you draw regardless and accept that drawing may lose it.
 
 ```
 look at your opening hand
