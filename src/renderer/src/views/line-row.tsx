@@ -4,6 +4,7 @@ import type {
   Issue,
   LineAnalysis,
   Span,
+  TemplateGroup,
   TemplateLine,
 } from '../../../shared/types';
 import {
@@ -24,7 +25,7 @@ import {
   drawLineText,
 } from '../model/draw-view';
 import { splitAtSpan } from '../model/span';
-import { isCardLine } from '../model/template-edit';
+import { groupBoxes, isCardLine } from '../model/template-edit';
 import { CardPicker } from './card-picker';
 import { CompletingInput } from './completing-input';
 import { CopyRangeField, useField } from './fields';
@@ -151,6 +152,43 @@ function DrawMarker({
   );
 }
 
+/**
+ * One checkbox per group under a line that names a card, ticked iff the group
+ * holds it (`groupBoxes`). The group's card list is the only record: ticking
+ * adds the card to it and unticking takes it out, and removing the LINE leaves
+ * the group alone — so a card added back to the deck shows ticked again.
+ */
+function GroupBoxes({
+  lineId,
+  card,
+  groups,
+  onGroup,
+}: {
+  lineId: string;
+  card: CardHit;
+  groups: readonly TemplateGroup[];
+  onGroup: (groupId: string, card: CardHit, member: boolean) => void;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <span className="line-groups" data-testid={`groups-${lineId}`}>
+      {groupBoxes(groups, card.passcode).map((box) => (
+        <label key={box.id} htmlFor={`group-box-${lineId}-${box.id}`}>
+          <input
+            type="checkbox"
+            id={`group-box-${lineId}-${box.id}`}
+            data-testid={`group-box-${lineId}-${box.id}`}
+            checked={box.checked}
+            aria-label={`${card.name} in group ${box.name}`}
+            onChange={(event) => onGroup(box.id, card, event.target.checked)}
+          />{' '}
+          {box.name}
+        </label>
+      ))}
+    </span>
+  );
+}
+
 export interface LineRowProps {
   line: TemplateLine;
   /** What `analyze` made of it; `null` while the analysis is one edit behind. */
@@ -158,6 +196,8 @@ export interface LineRowProps {
   /** The display fields of a named card, as far as they are known. */
   known: CardHit | null;
   cardState: CardState;
+  /** The template's groups, for the checkboxes under a line that names a card. */
+  groups: readonly TemplateGroup[];
   /** The most copies a line may be set to. */
   deckSize: number;
   first: boolean;
@@ -166,6 +206,8 @@ export interface LineRowProps {
   onRange: (range: CopyRange) => void;
   /** What the line DRAWS, or `null` to stop being a draw card. */
   onDraw: (draw: DrawDraft | null) => void;
+  /** Put the line's card in group `groupId`, or take it out. */
+  onGroup: (groupId: string, card: CardHit, member: boolean) => void;
   onMove: (by: number) => void;
   onRemove: () => void;
 }
@@ -175,12 +217,14 @@ export function LineRow({
   found,
   known,
   cardState,
+  groups,
   deckSize,
   first,
   last,
   onText,
   onRange,
   onDraw,
+  onGroup,
   onMove,
   onRemove,
 }: LineRowProps) {
@@ -274,6 +318,9 @@ export function LineRow({
           </button>
         </span>
         <DrawMarker line={line} onDraw={onDraw} />
+        {hit !== null && (
+          <GroupBoxes lineId={line.id} card={hit} groups={groups} onGroup={onGroup} />
+        )}
       </div>
 
       <div className="line-readout" data-testid={`readout-${line.id}`}>

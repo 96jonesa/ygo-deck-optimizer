@@ -1862,3 +1862,25 @@ ul.readout {
 .drawing-note > .hint {
   max-width: 72ch;
 }
+
+/*
+ * The group checkboxes under a line that names a card: one per group, on a row
+ * of their own below the draw marker, in the text's column. Many groups wrap
+ * rather than widen the row.
+ */
+.line-groups {
+  display: flex;
+  grid-column: 2 / -1;
+  grid-row: 3;
+  flex-wrap: wrap;
+  gap: 0.2rem var(--sp-3);
+  align-items: center;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.line-groups label {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+}

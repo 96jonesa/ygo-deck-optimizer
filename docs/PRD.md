@@ -355,7 +355,7 @@ flowchart TB
 
 - Add/remove/reorder lines; each line is a card (autocomplete picker, passcode-backed) or a free-text description with live parse echo and match count.
 - Computed remainder row, derived totals (§6.4), and a running count of valid ratios; a clear error when the ranges cannot sum to the deck size.
-- User-defined groups (§5.2): create, name, edit membership via the picker.
+- User-defined groups (§5.2): create, name, edit membership via the picker — or by the checkbox per group under each line that names a card. A box is ticked iff the group holds that card; ticking adds it and unticking removes it. Removing the line leaves the group alone, so the card comes back ticked.
 - Deck size and hand size controls.
 - Save/load the template (lines, groups, criteria, settings) as a JSON file — the unit of sharing.
 

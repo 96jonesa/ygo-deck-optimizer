@@ -40,8 +40,8 @@ about — a description that matches nothing is a **notice**, not a failure, bec
 what its cards are known to be, not which cards exist. Below the lines sit the computed
 remainder (`Unspecified cards: 13–33`), the derived totals by kind with the lines that make them
 up, and a clear error when the ranges cannot sum to the deck size. Named **groups** — `starter`,
-`brick` — are created, renamed, filled from the picker and used in any description as
-`{starter}`. Load the motivating example, or clear it, and score it.
+`brick` — are created, renamed, filled from the picker (or from the checkbox per group under each
+card line, ticked while the group holds that card) and used in any description as `{starter}`. Load the motivating example, or clear it, and score it.
 
 **Every input format is written down where you are typing it.** Each panel carries a collapsed
 disclosure — *Syntax: describing cards* under the template's lines, *Syntax: writing criteria*
