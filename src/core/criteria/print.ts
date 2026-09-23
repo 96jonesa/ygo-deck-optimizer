@@ -1,6 +1,7 @@
 import type { DescContext } from '../desc/context';
 import { print } from '../desc/print';
 import { type Counted, canonicalizeExpr, type Expr } from './ast';
+import { CRITERION_FIELDS, type CriterionField, exprFields, FIELD_NAMES } from './fields';
 
 type PrintContext = Pick<DescContext, 'setnames' | 'groups'>;
 
@@ -68,4 +69,40 @@ function printExpr(expr: Expr, ctx: PrintContext): string {
  */
 export function printCriterion(expr: Expr, ctx: PrintContext): string {
   return printExpr(canonicalizeExpr(expr), ctx);
+}
+
+/**
+ * The canonical text of each FIELD a criterion's expression fills (PRD §5.5):
+ * what the editor shows under a field whose typed text reads differently. A
+ * plain expression is the whole-hand field's.
+ */
+export function printFields(
+  expr: Expr,
+  ctx: PrintContext,
+): Partial<Record<CriterionField, string>> {
+  const parts = exprFields(canonicalizeExpr(expr));
+  const out: Partial<Record<CriterionField, string>> = {};
+  for (const field of CRITERION_FIELDS) {
+    const part = parts[field];
+    if (part !== undefined) out[field] = printExpr(part, ctx);
+  }
+  return out;
+}
+
+/**
+ * A criterion as one line of text for a reader who cannot see the fields — a
+ * readout, a stale-AST warning, the CLI's report. A plain criterion is its
+ * canonical text, as it always was; a split one names each field it fills, in
+ * window order: `opening 5: 1x A · drawn: no trap · whole hand: at most 1x B`.
+ *
+ * Not `printCriterion`, whose split text is the version 1 keyword form and is
+ * kept because the parser still reads it (`parseCriterion` of it is the AST).
+ * This is for reading, and nothing parses it back.
+ */
+export function printCriterionFields(expr: Expr, ctx: PrintContext): string {
+  if (expr.op !== 'split') return printCriterion(expr, ctx);
+  const fields = printFields(expr, ctx);
+  return CRITERION_FIELDS.filter((field) => fields[field] !== undefined)
+    .map((field) => `${FIELD_NAMES[field]}: ${fields[field]}`)
+    .join(' · ');
 }

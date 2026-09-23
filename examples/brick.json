@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "deckSize": 40,
   "hand": { "size": 5 },
   "groups": [],

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
 import type { Expr } from '../../../src/core/criteria/ast';
@@ -22,12 +23,17 @@ import {
   soleCard,
 } from '../../../src/core/model/compile';
 import { type DrawSpec, MAX_CLASSES, validateProblem } from '../../../src/core/model/problem';
-import type { Template, TemplateLine } from '../../../src/core/model/template';
+import {
+  type Template,
+  type TemplateLine,
+  validateTemplate,
+} from '../../../src/core/model/template';
 import { handSucceeds } from '../../../src/core/prob/matcher';
-import { createBlendScorer, createScorer } from '../../../src/core/prob/scorer';
+import { createBlendScorer, createScorer, scoreBlend } from '../../../src/core/prob/scorer';
 import { same } from '../../helpers/assert';
 import { cardLevelNumerator } from '../../helpers/card-oracle';
 import { choose } from '../../helpers/combinatorics';
+import { fieldsOf } from '../../helpers/fields';
 import { CODE } from '../../helpers/fixture-cards';
 import { genExpr } from '../../helpers/gen-criteria';
 import {
@@ -44,13 +50,13 @@ const ctx = motivatingContext(await initSqlJs());
 
 function templateOf(lines: TemplateLine[], criteria: string[], overrides: Partial<Template> = {}) {
   const template: Template = {
-    version: 1,
+    version: 2,
     deckSize: 40,
     hand: { size: 5 },
     groups: [],
     lines,
     remainder: { min: 0, max: null },
-    criteria: criteria.map((text, i) => ({ id: `c${i + 1}`, text })),
+    criteria: criteria.map((text, i) => ({ id: `c${i + 1}`, ...fieldsOf(text) })),
     ...overrides,
   };
   return template;
@@ -1694,7 +1700,7 @@ describe('the sixth card through resolve and compile', () => {
 
   it('resolves the two sides into columns of ONE match matrix', () => {
     const r = resolved(secondTemplate(['1x monster then 1x trap']));
-    expect(r.criteria[0]!.canonical).toBe('1x monster then 1x trap');
+    expect(r.criteria[0]!.canonical).toBe('opening 5: 1x monster · drawn: 1x trap');
     expect(r.flat).toEqual([
       { reqs: [{ n: 1, desc: 0 }], limits: [], sixth: { reqs: [{ n: 1, desc: 1 }], limits: [] } },
     ]);
@@ -1799,7 +1805,7 @@ describe('the sixth card through resolve and compile', () => {
 
     it('refuses `both`, naming what to do about it', () => {
       expect(errorsOf(tagged('both'))).toEqual([
-        'criterion "c1": `then` and `finally` split the hand you draw going second, but this one is judged for both hands, and going first the hand is five cards and none of them is drawn after — tag it going second, or ask for the six cards together and drop the `then` or `finally`',
+        'criterion "c1": the opening-5 and drawn-cards fields split the hand you draw going second, but this one is judged for both hands, and going first the hand is five cards and none of them is drawn after — tag it going second, or move what they say into the whole-hand field and empty them',
       ]);
     });
 
@@ -1850,7 +1856,9 @@ describe('a `finally` clause through resolve and compile', () => {
 
   it('resolves all three windows into columns of ONE match matrix', () => {
     const r = resolved(secondTemplate(['1x monster then no trap finally at most 1x spell']));
-    expect(r.criteria[0]!.canonical).toBe('1x monster then no trap finally at most 1x spell');
+    expect(r.criteria[0]!.canonical).toBe(
+      'opening 5: 1x monster · drawn: no trap · whole hand: at most 1x spell',
+    );
     expect(r.flat).toEqual([
       {
         reqs: [{ n: 1, desc: 0 }],
@@ -1906,7 +1914,9 @@ describe('a `finally` clause through resolve and compile', () => {
     const template = secondTemplate(['1x monster finally 1x trap']);
     for (const when of ['first', 'both'] as const) {
       const tagged: Template = { ...template, criteria: [{ ...template.criteria[0]!, when }] };
-      expect(errorsOf(tagged)[0], when).toContain('`then` and `finally` split the hand');
+      expect(errorsOf(tagged)[0], when).toContain(
+        'the opening-5 and drawn-cards fields split the hand',
+      );
       expect(errorsOf(tagged)[0], when).toContain('tag it going second');
     }
   });
@@ -2152,7 +2162,7 @@ describe('draw cards through resolve and compile', () => {
       templateOf([drawLine('pot', 'spell', draw), line('starter', 'monster')], [], {
         hand: { size: 6 },
         mode: 'second',
-        criteria: [{ id: 'c1', text, when: 'second' }],
+        criteria: [{ id: 'c1', ...fieldsOf(text), when: 'second' }],
       });
 
     it('compiles, and marks the hand as one dealt in two pieces', () => {
@@ -2762,5 +2772,113 @@ describe('soleCard', () => {
       undefined,
     ]);
     expect(Object.keys(r.lines[2]!)).not.toContain('card');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A criterion's three fields through resolve and compile (PRD §5.5)
+// ---------------------------------------------------------------------------
+
+describe('the criterion fields through resolve and compile', () => {
+  /**
+   * The deck of the brief's targets: going second, 3 level 4 monsters, 3 level
+   * 8 monsters, 8 traps and 26 other cards — every count pinned, so the run is
+   * one deck and its score one exact fraction over 6 · C(40, 6) = 23,030,280.
+   */
+  const deck = (criteria: Template['criteria']): Template =>
+    templateOf(
+      [
+        line('fours', 'level 4 monster', 3, 3),
+        line('eights', 'level 8 monster', 3, 3),
+        line('traps', 'trap', 8, 8),
+      ],
+      [],
+      {
+        hand: { size: 6 },
+        mode: 'second',
+        remainder: { min: 26, max: 26 },
+        criteria: criteria.map((criterion) => ({ ...criterion, when: 'second' as const })),
+      },
+    );
+
+  const scoreOf = (template: Template) => {
+    const c = compiled(resolved(template));
+    const totals = c.problem.classes.map(({ min }) => min);
+    const [part] = scoreBlend(c.problem, totals).parts;
+    return { num: part!.num, den: part!.den };
+  };
+
+  it('scores the opening five and the whole hand: 7,464,666 / 23,030,280', () => {
+    const fields = scoreOf(
+      deck([{ id: 'c1', opening: '1x level 4 monster', text: 'at most 1x level 8 monster' }]),
+    );
+    expect(fields).toEqual({ num: 7_464_666, den: 23_030_280 });
+    // The same fraction as the version 1 keyword text it replaces.
+    const keywords = validateTemplate({
+      ...deck([]),
+      version: 1,
+      criteria: [
+        {
+          id: 'c1',
+          text: '1x level 4 monster finally at most 1x level 8 monster',
+          when: 'second',
+        },
+      ],
+    });
+    if (!keywords.ok) throw new Error(keywords.errors.join('\n'));
+    expect(scoreOf(keywords.template)).toEqual(fields);
+  });
+
+  it('scores all three fields: 1,548,888 / 23,030,280, the shipped example’s number', () => {
+    const three = deck([
+      {
+        id: 'c1',
+        opening: '1x level 4 monster',
+        drawn: '1x trap',
+        text: 'at most 1x level 8 monster',
+      },
+    ]);
+    expect(scoreOf(three)).toEqual({ num: 1_548_888, den: 23_030_280 });
+    const example = validateTemplate(
+      JSON.parse(
+        readFileSync(new URL('../../../examples/going-second.json', import.meta.url), 'utf8'),
+      ),
+    );
+    if (!example.ok) throw new Error(example.errors.join('\n'));
+    expect(scoreOf(example.template)).toEqual({ num: 1_548_888, den: 23_030_280 });
+  });
+
+  /**
+   * THE OPENING FIVE ALONE, which no keyword text could write: the first five
+   * cards hold a level 4 monster, whatever the sixth is. Its number comes from
+   * the hypergeometric directly — 1 − C(37, 5) / C(40, 5) — over the same
+   * denominator, 6 · C(40, 6) orderings of which card is drawn last.
+   */
+  it('scores the opening five alone as a question about the first five cards', () => {
+    const den = 6 * choose(40, 6);
+    const expected = (den / choose(40, 5)) * (choose(40, 5) - choose(37, 5));
+    const opening = scoreOf(deck([{ id: 'c1', opening: '1x level 4 monster', text: '' }]));
+    expect(opening).toEqual({ num: expected, den });
+    expect(expected).toBe(7_773_885);
+    // Which is NOT the whole hand's `1x level 4 monster`, a different question.
+    const whole = scoreOf(deck([{ id: 'c1', text: '1x level 4 monster' }]));
+    expect(whole.num / whole.den).toBeGreaterThan(opening.num / opening.den);
+  });
+
+  it('compiles the whole hand alone to the PLAIN problem a going-first criterion has', () => {
+    const second = compiled(resolved(deck([{ id: 'c1', text: '1x level 4 monster' }])));
+    expect(second.problem.criteria[0]).not.toHaveProperty('sixth');
+    expect(second.problem.criteria[0]).not.toHaveProperty('whole');
+    expect(second.problem.handSizes[0]).not.toHaveProperty('drawn');
+  });
+
+  it('names the field a parse error is in', () => {
+    const result = resolveTemplate(
+      deck([{ id: 'c1', opening: '1x level 4 monster', drawn: '2x trap', text: '' }]),
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok)
+      expect(result.errors[0]).toMatch(/^criterion "c1" \(drawn\): the card you draw is one card/);
   });
 });

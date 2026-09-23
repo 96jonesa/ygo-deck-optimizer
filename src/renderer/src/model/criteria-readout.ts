@@ -28,17 +28,6 @@ export function criterionLabel(analysis: Analysis | null, id: string): string {
   return found?.name ?? id;
 }
 
-/**
- * The canonical printed form, when it is not what the user typed — `1x
- * [Elemental HERO Stratos], …` reads back as `1x #40044918 and …`. Shown
- * beside the text so that what will be scored is never a guess; left out when
- * the two are the same string, where repeating it would say nothing.
- */
-export function canonicalText(found: CriterionAnalysis | null): string | null {
-  if (found === null || !found.parsed.ok) return null;
-  return found.parsed.canonical === found.text ? null : found.parsed.canonical;
-}
-
 export interface ExpansionPreview {
   /** Canonical text of each flat alternative, in `analyze`'s order. */
   alternatives: string[];
@@ -75,16 +64,18 @@ export function expansionPreview(
  * criterion writes them. Two appearances are the same count only when BOTH
  * ends agree: `1x` and `1-2x` are different things and read as `1x / 1-2x`.
  *
- * And one asked of the SIXTH CARD, or of the WHOLE HAND by a `finally` part, is
- * never the same as one asked of the criterion's own window: `1x trap` of the
- * card you draw is a different statement from `1x trap` in six cards, so each is
- * kept apart and marked. The CLI's `countsOf` says the same, in the same order,
- * and the two are held to it by tests on either side.
+ * And one asked of the OPENING FIVE or of the CARDS DRAWN — a criterion's first
+ * two fields (PRD §5.5) — is never the same as one asked of the whole hand: `1x
+ * trap` of the card you draw is a different statement from `1x trap` in six
+ * cards, so each is kept apart and marked with its field. The whole-hand field
+ * goes unmarked, alone or beside the others, as every count of a criterion
+ * written before the fields did. The CLI's `countsOf` says the same, in the same
+ * order, and the two are held to it by tests on either side.
  */
-const windowOf = ({ sixth, whole }: Appearance): 0 | 1 | 2 =>
-  sixth === true ? 1 : whole === true ? 2 : 0;
+const windowOf = ({ opening, sixth }: Appearance): 0 | 1 | 2 =>
+  opening === true ? 0 : sixth === true ? 1 : 2;
 
-const WINDOW_SUFFIX = ['', ' drawn', ' in the whole hand'] as const;
+const WINDOW_SUFFIX = [' in the opening 5', ' drawn', ''] as const;
 
 function countsOf(
   appearsIn: readonly Appearance[],

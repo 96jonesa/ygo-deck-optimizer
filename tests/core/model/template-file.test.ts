@@ -16,7 +16,7 @@ const CARDS = new FakeCards([ASH, BLUE]);
 
 function templateOf(overrides: Partial<Template> = {}): Template {
   const template: Template = {
-    version: 1,
+    version: 2,
     deckSize: 40,
     hand: { size: 5 },
     groups: [],
@@ -60,7 +60,9 @@ describe('namedPasscodes', () => {
   it('collects a card named as the card you draw, which a result depends on just as much', () => {
     const template = templateOf({
       lines: [{ id: 'l1', text: 'monster', min: 0, max: 3 }],
-      criteria: [{ id: 'k1', text: '1x #89631139 then 1x #14558127', when: 'second' }],
+      criteria: [
+        { id: 'k1', opening: '1x #89631139', drawn: '1x #14558127', text: '', when: 'second' },
+      ],
     });
     expect(namedPasscodes(template, ctxFor(template))).toEqual([14558127, 89631139]);
     // And so the snapshot records it: without it the file could not be checked.
@@ -71,11 +73,20 @@ describe('namedPasscodes', () => {
   it("writes the split back in the criterion's stored AST, and reads it in again", () => {
     const template = templateOf({
       lines: [{ id: 'l1', text: 'monster', min: 0, max: 3 }],
-      criteria: [{ id: 'k1', text: '1x monster then 1x #14558127', when: 'second' }],
+      criteria: [
+        { id: 'k1', opening: '1x monster', drawn: '1x #14558127', text: '', when: 'second' },
+      ],
     });
     const { template: saved, warnings } = templateToFile(template, ctxFor(template));
     expect(warnings).toEqual([]);
     expect(saved.criteria[0]!.expr).toMatchObject({ op: 'split' });
+    // Each field apart, in the order the cards arrive, and the empty whole hand as `text`.
+    expect(saved.criteria[0]).toMatchObject({
+      opening: '1x monster',
+      drawn: '1x #14558127',
+      text: '',
+    });
+    expect(Object.keys(saved.criteria[0]!).slice(0, 4)).toEqual(['id', 'opening', 'drawn', 'text']);
     // And a round trip through `validateTemplate` gives back the same AST: the
     // stored form is authoritative (TDD §14), so it has to survive the check.
     const reread = validateTemplate(JSON.parse(JSON.stringify(saved)));
@@ -370,5 +381,93 @@ describe('templateToFile with draw cards', () => {
       expect(reread.template.lines[1]).not.toHaveProperty('draw');
       expect(reread.template.criteria[0]!.stop).toBe(true);
     }
+  });
+});
+
+/**
+ * The fields round trip (TDD §14): saving writes version 2 with each field
+ * apart, and reading it back gives the template that was saved. A version 1
+ * file converts on load, and from then on is a version 2 file like any other.
+ */
+describe('templateToFile and validateTemplate round trips', () => {
+  const SECOND = templateOf({
+    hand: { size: 6 },
+    mode: 'second',
+    lines: [
+      { id: 'l1', text: 'monster', min: 0, max: 3 },
+      {
+        id: 'l2',
+        card: { passcode: 14558127, name: 'Ash Blossom & Joyous Spring' },
+        min: 0,
+        max: 3,
+      },
+    ],
+    criteria: [
+      {
+        id: 'k1',
+        opening: '1x monster',
+        drawn: '1x #14558127',
+        text: 'no #89631139',
+        when: 'second',
+      },
+      { id: 'k2', opening: '1x monster', text: '', when: 'second', stop: true },
+      { id: 'k3', drawn: 'no monster', text: '', when: 'second', weight: 3 },
+      { id: 'k4', text: '2x monster', when: 'both' },
+    ],
+  });
+
+  /** Written, serialised, read back: what opening a saved file gives. */
+  const reread = (template: Template): Template => {
+    const { template: file, warnings } = templateToFile(template, ctxFor(template));
+    expect(warnings).toEqual([]);
+    const read = validateTemplate(JSON.parse(JSON.stringify(file)));
+    if (!read.ok) throw new Error(read.errors.join('\n'));
+    return read.template;
+  };
+
+  it('saves version 2, and reads back every field as it was saved', () => {
+    const once = reread(SECOND);
+    expect(once.version).toBe(2);
+    expect(once.criteria.map(({ expr: _expr, ...rest }) => rest)).toEqual(SECOND.criteria);
+    // And the file itself is a fixed point: saved again, it is the same bytes.
+    const saved = templateToFile(once, ctxFor(once)).template;
+    expect(reread(once)).toEqual(once);
+    expect(JSON.stringify(templateToFile(reread(once), ctxFor(once)).template)).toBe(
+      JSON.stringify(saved),
+    );
+  });
+
+  it('opens a version 1 file, saves it as version 2, and opens that to the same template', () => {
+    const v1 = {
+      version: 1,
+      deckSize: 40,
+      hand: { size: 6 },
+      mode: 'second',
+      groups: [],
+      lines: [{ id: 'l1', text: 'monster', min: 0, max: 3 }],
+      remainder: { min: 0, max: null },
+      criteria: [
+        { id: 'k1', text: '1x monster then no monster finally at most 2x monster', when: 'second' },
+        { id: 'k2', text: 'finally 1x monster', when: 'second' },
+        { id: 'k3', text: '1x monster', when: 'both' },
+      ],
+    };
+    const opened = validateTemplate(v1);
+    if (!opened.ok) throw new Error(opened.errors.join('\n'));
+    expect(
+      opened.template.criteria.map(({ id, opening, drawn, text }) => ({
+        id,
+        opening,
+        drawn,
+        text,
+      })),
+    ).toEqual([
+      { id: 'k1', opening: '1x monster', drawn: 'no monster', text: 'at most 2x monster' },
+      { id: 'k2', opening: undefined, drawn: undefined, text: '1x monster' },
+      { id: 'k3', opening: undefined, drawn: undefined, text: '1x monster' },
+    ]);
+    const once = reread(opened.template);
+    expect(reread(once)).toEqual(once);
+    expect(once.criteria.map(({ expr: _expr, ...rest }) => rest)).toEqual(opened.template.criteria);
   });
 });

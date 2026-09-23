@@ -1,6 +1,16 @@
 import type { CriterionAnalysis, TemplateCriterion } from '../../../shared/types';
-import { issuesToList, parseFailureOf, worstSeverity } from '../model/analysis-view';
-import { canonicalText, expansionPreview } from '../model/criteria-readout';
+import { issuesToList, worstSeverity } from '../model/analysis-view';
+import { expansionPreview } from '../model/criteria-readout';
+import {
+  type CriterionField,
+  FIELD_HINTS,
+  FIELD_LABELS,
+  FIELD_PLACEHOLDER,
+  fieldCanonical,
+  fieldFailureOf,
+  fieldText,
+  shownFields,
+} from '../model/criterion-fields';
 import {
   CRITERION_WEIGHT_MAX,
   CRITERION_WHENS,
@@ -17,6 +27,81 @@ import { IssueList, ParseFailure } from './line-row';
 // and — where an `OR` made more than one of them — the flat alternatives it
 // will actually be scored as (PRD §5.3). The row is the line row's markup down
 // to the class names, so the two editors line up in the same left column.
+//
+// Going second it says it in THREE fields (PRD §5.5) — the opening five, the
+// cards drawn, the whole hand — and otherwise in one, the whole hand. Each
+// field carries its own parse error and its own canonical echo, so a mistake
+// is marked in the field it was typed into.
+
+/** One field of a criterion: its label when the row has more than one, the input, and what was understood of it. */
+function CriterionFieldInput({
+  criterion,
+  field,
+  found,
+  labelled,
+  onText,
+}: {
+  criterion: TemplateCriterion;
+  field: CriterionField;
+  found: CriterionAnalysis | null;
+  labelled: boolean;
+  onText: (text: string) => void;
+}) {
+  const { id } = criterion;
+  const [text, setText] = useField(fieldText(criterion, field));
+  const label = FIELD_LABELS[field];
+  const hint = FIELD_HINTS[field];
+  const failure = fieldFailureOf(found, field);
+  const canonical = fieldCanonical(found, criterion, field);
+  // The whole-hand field keeps the ids it had when it was the only field, so
+  // everything that found a criterion's text still finds it.
+  const suffix = field === 'text' ? '' : `-${field}`;
+  const inputId = field === 'text' ? `criterion-text-${id}` : `criterion-${field}-${id}`;
+  return (
+    <div className="criterion-field" data-field={field}>
+      {labelled && (
+        <label
+          className="criterion-field-label"
+          htmlFor={inputId}
+          data-testid={`criterion-label-${field}-${id}`}
+        >
+          {label}
+        </label>
+      )}
+      {labelled && hint !== undefined && (
+        <span className="criterion-field-hint" data-testid={`criterion-hint-${field}-${id}`}>
+          {hint}
+        </span>
+      )}
+      <CompletingInput
+        id={inputId}
+        value={text}
+        label={labelled ? `${label} of criterion ${id}` : `Criterion ${id}`}
+        placeholder={
+          labelled ? FIELD_PLACEHOLDER : '1x [Ash Blossom], 1x monster, at most 1x [Brick]'
+        }
+        onChange={(next) => {
+          setText(next);
+          onText(next);
+        }}
+      />
+      {failure !== null ? (
+        <ParseFailure
+          text={text}
+          message={failure.message}
+          span={failure.span}
+          testId={`criterion-parse-error-${id}`}
+        />
+      ) : (
+        canonical !== null && (
+          <p className="line-echo criterion-field-echo">
+            <code data-testid={`criterion-canonical-${id}${suffix}`}>{canonical}</code>
+          </p>
+        )
+      )}
+    </div>
+  );
+}
 
 export interface CriterionRowProps {
   criterion: TemplateCriterion;
@@ -32,7 +117,7 @@ export interface CriterionRowProps {
   drawing: boolean;
   first: boolean;
   last: boolean;
-  onText: (text: string) => void;
+  onField: (field: CriterionField, text: string) => void;
   onName: (name: string) => void;
   onWhen: (when: CriterionWhen) => void;
   onWeight: (weight: number) => void;
@@ -50,7 +135,7 @@ export function CriterionRow({
   drawing,
   first,
   last,
-  onText,
+  onField,
   onName,
   onWhen,
   onWeight,
@@ -59,14 +144,11 @@ export function CriterionRow({
   onRemove,
 }: CriterionRowProps) {
   const { id } = criterion;
-  const [text, setText] = useField(criterion.text);
   const [name, setName] = useField(criterion.name ?? '');
   // The weight the ANALYSIS reports, which is where the default lives (TDD §3),
   // exactly as the tag below it is.
   const weight = found?.weight ?? criterion.weight ?? 1;
   const [weightText, setWeightText] = useField(String(weight));
-  const failure = parseFailureOf(found);
-  const canonical = canonicalText(found);
   const preview = expansionPreview(found, handSize);
   const issues = issuesToList(found);
   const severity = worstSeverity(found?.issues ?? []);
@@ -80,6 +162,11 @@ export function CriterionRow({
   // marked as a draw card — the user's tick, apparently lost. Whether the flag
   // is in force is `drawing`, which is what decides the box is shown at all.
   const stop = criterion.stop ?? false;
+  const fields = shownFields(criterion, when);
+  // Labels whenever the row shows more than one field, or is the going-second
+  // one: its three windows are what the labels are for. A going-first row with
+  // only the whole hand is one field, as it always was.
+  const labelled = when === 'second' || fields.length > 1;
 
   return (
     <li
@@ -95,16 +182,18 @@ export function CriterionRow({
         <span className="line-id" title="a criterion">
           {id}
         </span>
-        <CompletingInput
-          id={`criterion-text-${id}`}
-          value={text}
-          label={`Criterion ${id}`}
-          placeholder="1x [Ash Blossom], 1x monster, at most 1x [Brick]"
-          onChange={(next) => {
-            setText(next);
-            onText(next);
-          }}
-        />
+        <div className="criterion-fields" data-testid={`criterion-fields-${id}`}>
+          {fields.map((field) => (
+            <CriterionFieldInput
+              key={field}
+              criterion={criterion}
+              field={field}
+              found={found}
+              labelled={labelled}
+              onText={(next) => onField(field, next)}
+            />
+          ))}
+        </div>
         {/*
           The name sits on a second grid row of its own, under the text and in
           its column: a criterion is long — the example's is 70 characters —
@@ -236,20 +325,6 @@ export function CriterionRow({
           <p className="line-echo" data-testid={`criterion-stop-note-${id}`}>
             {stopStateNote(stop)}
           </p>
-        )}
-        {failure !== null ? (
-          <ParseFailure
-            text={criterion.text}
-            message={failure.message}
-            span={failure.span}
-            testId={`criterion-parse-error-${id}`}
-          />
-        ) : (
-          canonical !== null && (
-            <p className="line-echo">
-              <code data-testid={`criterion-canonical-${id}`}>{canonical}</code>
-            </p>
-          )
         )}
         {preview !== null && (
           <div className="alternatives" data-testid={`criterion-alternatives-${id}`}>

@@ -466,12 +466,17 @@ describe('createAppStore', () => {
     });
   });
 
-  describe('setCriterionText', () => {
-    it('edits the criterion the user is typing into', () => {
+  describe('setCriterionField', () => {
+    it('edits the field of the criterion the user is typing into', () => {
       const store = createAppStore();
       store.getState().addCriterion();
-      store.getState().setCriterionText('c1', '1x monster');
+      store.getState().setCriterionField('c1', 'text', '1x monster');
       expect(store.getState().template.criteria[0]).toMatchObject({ text: '1x monster' });
+      store.getState().setCriterionField('c1', 'opening', '1x spell');
+      expect(store.getState().template.criteria[0]).toMatchObject({
+        opening: '1x spell',
+        text: '1x monster',
+      });
     });
   });
 

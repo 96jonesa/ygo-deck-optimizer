@@ -1,0 +1,44 @@
+{
+  "version": 2,
+  "deckSize": 40,
+  "hand": {
+    "size": 6
+  },
+  "mode": "second",
+  "weighted": false,
+  "groups": [],
+  "lines": [
+    {
+      "id": "fours",
+      "text": "level 4 monster",
+      "min": 3,
+      "max": 3
+    },
+    {
+      "id": "eights",
+      "text": "level 8 monster",
+      "min": 3,
+      "max": 3
+    },
+    {
+      "id": "traps",
+      "text": "trap",
+      "min": 8,
+      "max": 8
+    }
+  ],
+  "remainder": {
+    "min": 26,
+    "max": 26
+  },
+  "criteria": [
+    {
+      "id": "three-fields",
+      "name": "a level 4 to open on, a trap drawn for turn, and no second level 8 by then",
+      "opening": "1x level 4 monster",
+      "drawn": "1x trap",
+      "text": "at most 1x level 8 monster",
+      "when": "second"
+    }
+  ]
+}

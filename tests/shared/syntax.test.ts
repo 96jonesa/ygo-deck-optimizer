@@ -4,6 +4,7 @@ import { TYPE_EFFECT, TYPE_MONSTER, TYPE_SPELL, TYPE_TRAP } from '../../src/core
 import type { CardRecord } from '../../src/core/cards/record';
 import { canonicalizeExpr } from '../../src/core/criteria/ast';
 import { expand } from '../../src/core/criteria/expand';
+import { parseCriterionField } from '../../src/core/criteria/fields';
 import { parseCriterion } from '../../src/core/criteria/parser';
 import { canonicalize } from '../../src/core/desc/ast';
 import { matcher } from '../../src/core/desc/evaluate';
@@ -113,8 +114,12 @@ describe('EXAMPLE_SECTIONS', () => {
   // plainest description there is and as the criterion that forgot its count.
   // Within one table a repeat is drift, and this is what catches it.
   it('writes every example once within its own section', () => {
+    // The field is part of what is written: `no trap` in the drawn-cards field
+    // says something else than `no trap` as a whole criterion.
     for (const section of EXAMPLE_SECTIONS) {
-      const written = section.groups.flatMap((group) => group.rows.map((row) => row.syntax));
+      const written = section.groups.flatMap((group) =>
+        group.rows.map((row) => `${row.field ?? ''} ${row.syntax}`),
+      );
       expect(new Set(written).size, section.id).toBe(written.length);
     }
   });
@@ -566,7 +571,7 @@ describe('DRAW_REFERENCE', () => {
    * reference goes on repeating after it stops being true — so what it says
    * now is checked against what the engine does, not merely read.
    */
-  describe('what it says about `then`', () => {
+  describe('what it says about the drawn-cards field', () => {
     it('no longer says the two cannot be used together', () => {
       const text = [...DRAW_REFERENCE.notes, ...DRAW_REFERENCE.rows.map((row) => row.means)].join(
         ' ',
@@ -574,7 +579,7 @@ describe('DRAW_REFERENCE', () => {
       expect(text).not.toContain('cannot be used together');
     });
 
-    it('says `then` becomes the whole drawn set, and that a stop leaves one card', () => {
+    it('says the field becomes the whole drawn set, and that a stop leaves one card', () => {
       const text = [...DRAW_REFERENCE.notes, ...DRAW_REFERENCE.rows.map((row) => row.means)].join(
         ' ',
       );
@@ -583,19 +588,20 @@ describe('DRAW_REFERENCE', () => {
     });
 
     /**
-     * The criterion reference calls `then 2x trap` an error and the draw
-     * reference calls it a question. Both are executed here: the first against
-     * the parser's default, the second against the bound a template with draw
-     * cards gives it — so the two cannot drift apart or from the engine.
+     * The criterion reference calls `2x trap` in the drawn-cards field an error
+     * and the draw reference calls it a question. Both are executed here: the
+     * first against the field's default bound, the second against the bound a
+     * template with draw cards gives it — so the two cannot drift apart or from
+     * the engine.
      */
     it('is right BOTH ways: an error by default, a question once a line draws', () => {
       const row = CRITERION_SYNTAX.groups
         .flatMap((group) => group.rows)
-        .find((candidate) => candidate.syntax === '1x monster then 2x trap');
+        .find((candidate) => candidate.field === 'drawn' && candidate.syntax === '2x trap');
       if (row === undefined) throw new Error('the criterion reference no longer writes that row');
       expect(row.fails).toBeDefined();
-      expect(parseCriterion(row.syntax, CTX).ok).toBe(false);
-      expect(parseCriterion(row.syntax, CTX, { maxDrawnSlots: 3 }).ok).toBe(true);
+      expect(parseCriterionField('drawn', row.syntax, CTX).ok).toBe(false);
+      expect(parseCriterionField('drawn', row.syntax, CTX, { maxDrawnSlots: 3 }).ok).toBe(true);
     });
   });
 

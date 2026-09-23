@@ -340,7 +340,7 @@ describe('createJudge', () => {
     it('estimates `3 unique {Starter}` through a resolved template, one card split over two lines', async () => {
       const starters = [STRATOS, 90000010, 90000020];
       const template: Template = {
-        version: 1,
+        version: 2,
         deckSize: 40,
         hand: { size: 5 },
         groups: [
@@ -407,7 +407,7 @@ describe('createJudge', () => {
     it('estimates `exactly 2 unique {Starter}` through a resolved template, at the lead’s target', async () => {
       const starters = [STRATOS, 90000010, 90000020, 90000030];
       const template: Template = {
-        version: 1,
+        version: 2,
         deckSize: 40,
         hand: { size: 5 },
         groups: [
@@ -749,7 +749,7 @@ describe('the overlap case of PRD §5.4', () => {
 
   it('holds through a resolved template, where B is known to be a monster from the database', async () => {
     const template: Template = {
-      version: 1,
+      version: 2,
       deckSize: 40,
       hand: { size: 5 },
       groups: [],

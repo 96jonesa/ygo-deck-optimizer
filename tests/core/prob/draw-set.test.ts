@@ -400,7 +400,7 @@ describe('drawWork', () => {
     };
     const stopping = messageOf(shapeOf(18, 3, 2, true));
     expect(stopping).toContain('"stop here"');
-    expect(stopping).not.toContain('`then`');
+    expect(stopping).not.toContain('drawn-cards field');
 
     // The same shape, its cost coming from a split rather than from a stop.
     const split = {
@@ -409,7 +409,7 @@ describe('drawWork', () => {
       criteria: [{ slots: [], limits: [], sixth: { slots: [bit(17)], limits: [] } }],
     };
     const splitting = messageOf(split);
-    expect(splitting).toContain('`then`');
+    expect(splitting).toContain("empty a criterion's opening-5 and drawn-cards fields");
     expect(splitting).not.toContain('"stop here"');
     // And both keep what is always true.
     for (const message of [stopping, splitting]) {

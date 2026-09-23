@@ -2,7 +2,8 @@ import type { CardRecord } from '../cards/record';
 import { KINDS, type Kind } from '../cards/vocabulary';
 import type { Expr, FlatCriterion } from '../criteria/ast';
 import { expand, expandAll } from '../criteria/expand';
-import { countPrefix, printCriterion } from '../criteria/print';
+import { type CriterionField, FIELD_NAMES } from '../criteria/fields';
+import { countPrefix, printCriterionFields, printFields } from '../criteria/print';
 import { findSubsumed } from '../criteria/subsumes';
 import type { Description } from '../desc/ast';
 import type { CardLookup, DescContext, SetnameLookup } from '../desc/context';
@@ -113,17 +114,32 @@ export interface Issue {
   message: string;
   /** Where in the line's or criterion's text, for a `parse` error. */
   span?: Span;
+  /** Which of a criterion's fields `span` is in (PRD §5.5). */
+  field?: CriterionField;
 }
 
 export type ParsedText =
   | {
       ok: true;
-      /** Canonical text. */
+      /** Canonical text; a split criterion's names its fields (`printCriterionFields`). */
       canonical: string;
       /** What was understood, for the reader (PRD §5.2); a criterion has none. */
       echo?: string;
+      /**
+       * A criterion's canonical text FIELD BY FIELD (PRD §5.5), for the editor
+       * to show under each field whose typed text reads differently. A line
+       * has none.
+       */
+      fields?: Partial<Record<CriterionField, string>>;
     }
-  | { ok: false; message: string; span: Span };
+  | {
+      ok: false;
+      message: string;
+      /** Inside `field`'s text, for a criterion; inside the text, for a line. */
+      span: Span;
+      /** Which of a criterion's fields the span is in; a line has none. */
+      field?: CriterionField;
+    };
 
 export interface LineAnalysis {
   id: string;
@@ -182,6 +198,14 @@ export interface Appearance {
    * the two alike would be showing the same row for two questions.
    */
   sixth?: true;
+  /**
+   * Whether it is asked of the OPENING FIVE — the opening-5 field of a criterion
+   * that splits the hand (PRD §5.5). Without it the criterion's own part is
+   * about the whole hand, which is what the whole-hand field alone means; the
+   * same words over five cards and over six are different statements, and a
+   * readout that showed them alike would be misattributing a field.
+   */
+  opening?: true;
   /**
    * Whether it is asked of the WHOLE HAND by a `finally` part (PRD §5.5), where
    * the criterion's own part is about the first five. The same argument: `at most
@@ -256,7 +280,12 @@ export interface SubsumedAlternative {
 export interface CriterionAnalysis {
   id: string;
   name?: string;
+  /** The whole-hand field, as typed: the one field every criterion has. */
   text: string;
+  /** The opening-5 field, going second (PRD §5.5); absent when empty. */
+  opening?: string;
+  /** The drawn-cards field, going second; absent when empty. */
+  drawn?: string;
   /**
    * Which hand it is judged for, defaulted (`whenOf`). The editor groups the
    * criteria by it: which criteria belong to which part is decided here and
@@ -564,13 +593,23 @@ function flatText(flat: FlatCriterion, ctx: DescContext): string {
     ];
     return parts.join(', ');
   };
-  // A split alternative reads as it is written, in window order: the five you
-  // open on, `then` the cards you draw, `finally` the whole hand. An empty
-  // five-card part is the one that leads with its separator.
-  const parts = [sideText(flat)].filter((text) => text !== '');
-  if (flat.sixth !== undefined) parts.push(`then ${sideText(flat.sixth)}`);
-  if (flat.whole !== undefined) parts.push(`finally ${sideText(flat.whole)}`);
-  return parts.length === 0 ? '(nothing: every hand meets it)' : parts.join(' ');
+  if (flat.sixth === undefined && flat.whole === undefined) {
+    const text = sideText(flat);
+    return text === '' ? '(nothing: every hand meets it)' : text;
+  }
+  // A split alternative names its fields, in window order, as the criterion's
+  // canonical text does (`printCriterionFields`); a window it asks nothing of —
+  // the empty whole hand of an opening-5 field on its own — is left out.
+  const parts = (
+    [
+      [FIELD_NAMES.opening, sideText(flat)],
+      [FIELD_NAMES.drawn, flat.sixth === undefined ? '' : sideText(flat.sixth)],
+      [FIELD_NAMES.text, flat.whole === undefined ? '' : sideText(flat.whole)],
+    ] as const
+  )
+    .filter(([, text]) => text !== '')
+    .map(([name, text]) => `${name}: ${text}`);
+  return parts.length === 0 ? '(nothing: every hand meets it)' : parts.join(' · ');
 }
 
 /** One pass over the database; remembered in `ctx.memo`, under a key that holds all it depends on. */
@@ -881,16 +920,23 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       issues: [],
     };
     if (criterion.name !== undefined) out.name = criterion.name;
+    if (criterion.opening !== undefined) out.opening = criterion.opening;
+    if (criterion.drawn !== undefined) out.drawn = criterion.drawn;
     const result = criterionMeaning(criterion, descCtx, { maxDrawnSlots });
     if (!result.ok) {
       // Both, for the reason given on the line-parse failure above.
-      out.parsed = { ok: false, message: result.message, span: result.span };
-      out.issues.push({ ...error('parse', result.message), span: result.span });
+      const { message, span, field } = result;
+      out.parsed = { ok: false, message, span, field };
+      out.issues.push({ ...error('parse', message), span, field });
       parsedCriteria.push(null);
       return out;
     }
     if (result.stale !== null) out.issues.push(warning('stale-text', result.stale));
-    out.parsed = { ok: true, canonical: printCriterion(result.expr, descCtx) };
+    out.parsed = {
+      ok: true,
+      canonical: printCriterionFields(result.expr, descCtx),
+      fields: printFields(result.expr, descCtx),
+    };
     // A criterion that names the card you draw is a criterion about going
     // second, and `resolveTemplate` refuses it any other way round; saying so
     // here, in the same words, is what stops the readout and the run from
@@ -922,7 +968,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
        */
       const register = (
         side: FlatCriterion | NonNullable<FlatCriterion['sixth']>,
-        where: { sixth?: true; whole?: true },
+        where: { opening?: true; sixth?: true; whole?: true },
       ) => {
         for (const { n, max, unique, desc } of side.reqs)
           column(desc).required.push({
@@ -936,7 +982,11 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
         for (const { n, desc } of side.limits)
           column(desc).limited.push({ criterion: criterion.id, alternative, n, ...where });
       };
-      register({ reqs, limits }, {});
+      // A split alternative's own part is the OPENING FIVE; an unsplit one's is the whole hand.
+      register(
+        { reqs, limits },
+        sixth === undefined && whole === undefined ? {} : { opening: true },
+      );
       if (sixth !== undefined) register(sixth, { sixth: true });
       if (whole !== undefined) register(whole, { whole: true });
     });

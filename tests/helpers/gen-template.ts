@@ -49,7 +49,7 @@ export function templateOf(
   overrides: Partial<Template> = {},
 ): Template {
   return {
-    version: 1,
+    version: 2,
     deckSize: 40,
     hand: { size: 5 },
     groups: [],
@@ -204,7 +204,7 @@ export function genFuzzTemplate(rng: Rng): Template {
         : `${rng.int(0, 7)}x ${text()}, at most ${rng.int(0, 7)}x ${text()}`,
   }));
   return {
-    version: 1,
+    version: 2,
     deckSize: rng.pick([40, 40, 40, 60, 41, 0, 1, 5, 39, 61, 1000]),
     hand: { size: rng.pick([5, 5, 5, 6, 0, 1, 7, 100]) },
     groups: rng.chance(0.7) ? FUZZ_GROUPS : [],

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Expr } from '../../../src/core/criteria/ast';
 import { parseCriterion } from '../../../src/core/criteria/parser';
-import { printCriterion } from '../../../src/core/criteria/print';
+import {
+  printCriterion,
+  printCriterionFields,
+  printFields,
+} from '../../../src/core/criteria/print';
 import type { Description } from '../../../src/core/desc/ast';
 import { parse } from '../../../src/core/desc/parser';
 import { cardRecord, contextOf, FakeCards } from '../../helpers/desc-context';
@@ -303,6 +307,44 @@ describe('printCriterion', () => {
 
   it('prints archetypes by code when there is no setname table', () => {
     expect(printCriterion(req(1, '"Sky Striker" spell'), noSetnames)).toBe('1x "?":0x115 spell');
+  });
+});
+
+describe('printFields', () => {
+  it('prints a plain expression as the whole-hand field', () => {
+    expect(printFields(req(1, 'monster'), ctx)).toEqual({ text: '1x monster' });
+  });
+
+  it('prints each part of a split as the field it came from', () => {
+    const split: Expr = {
+      op: 'split',
+      five: req(1, 'monster'),
+      sixth: atMost(0, 'trap'),
+      whole: or(req(2, 'spell'), req(1, 'trap')),
+    };
+    expect(printFields(split, ctx)).toEqual({
+      opening: '1x monster',
+      drawn: 'no trap',
+      text: '2x spell or 1x trap',
+    });
+    expect(printFields({ op: 'split', five: req(1, 'monster') }, ctx)).toEqual({
+      opening: '1x monster',
+    });
+  });
+});
+
+describe('printCriterionFields', () => {
+  it('prints a plain expression exactly as `printCriterion` does', () => {
+    const plain = and(req(1, 'monster'), or(req(1, 'spell'), atMost(0, 'trap')));
+    expect(printCriterionFields(plain, ctx)).toBe(printCriterion(plain, ctx));
+  });
+
+  it('names each field of a split, in window order, leaving out those it does not fill', () => {
+    const split: Expr = { op: 'split', sixth: atMost(0, 'trap'), whole: req(2, 'spell') };
+    expect(printCriterionFields(split, ctx)).toBe('drawn: no trap · whole hand: 2x spell');
+    expect(printCriterionFields({ op: 'split', five: req(1, 'monster') }, ctx)).toBe(
+      'opening 5: 1x monster',
+    );
   });
 });
 

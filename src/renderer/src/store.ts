@@ -15,6 +15,7 @@ import type {
 import { type AnalysisView, NO_ANALYSIS, reduceAnalysis } from './model/analysis-view';
 import { statusHeadline } from './model/card-status';
 import type { CopyRange } from './model/copy-range';
+import type { CriterionField } from './model/criterion-fields';
 import type { CriterionWhen, RunMode } from './model/deck-form';
 import type { DrawDraft } from './model/draw-view';
 import type { FileStatus } from './model/files';
@@ -26,9 +27,9 @@ import {
   EMPTY_TEMPLATE,
   withCardLine,
   withCriterion,
+  withCriterionField,
   withCriterionName,
   withCriterionStop,
-  withCriterionText,
   withCriterionWeight,
   withCriterionWhen,
   withDeckSize,
@@ -146,7 +147,8 @@ export interface AppState {
   setFileStatus(status: FileStatus | null): void;
   addCriterion(): void;
   dropCriterion(id: string): void;
-  setCriterionText(id: string, text: string): void;
+  /** One of a criterion's fields (PRD §5.5): the whole hand, or going second the opening five or the cards drawn. */
+  setCriterionField(id: string, field: CriterionField, text: string): void;
   /** The criterion's own name; cleared to nothing, it goes back to being called by its id. */
   setCriterionName(id: string, name: string): void;
   /** Which hand the criterion is judged for. */
@@ -249,7 +251,7 @@ export function createAppStore(): AppStore {
       setFileStatus: (file) => set({ file }),
       addCriterion: edit(withCriterion),
       dropCriterion: edit(withoutCriterion),
-      setCriterionText: edit(withCriterionText),
+      setCriterionField: edit(withCriterionField),
       setCriterionName: edit(withCriterionName),
       setCriterionWhen: edit(withCriterionWhen),
       setCriterionWeight: edit(withCriterionWeight),

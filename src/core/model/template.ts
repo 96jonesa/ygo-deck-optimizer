@@ -1,11 +1,19 @@
 import type { Expr } from '../criteria/ast';
+import { v1Fields } from '../criteria/fields';
 import { validateExpr } from '../criteria/validate';
 import type { Description } from '../desc/ast';
 import { validateDescription } from '../desc/validate';
 import type { DrawSpec } from './problem';
 
-/** The only template file version this build reads (TDD §14). */
-export const TEMPLATE_VERSION = 1;
+/**
+ * The template file version this build writes (TDD §14). Version 2 stores a
+ * criterion's three fields apart (PRD §5.5); a version 1 file is still read,
+ * and converted on load (`v1Fields`), and saving it writes version 2.
+ */
+export const TEMPLATE_VERSION = 2;
+
+/** The older version this build reads and converts: criteria written with `then` / `finally`. */
+export const TEMPLATE_VERSION_CONVERTED = 1;
 
 export const DECK_SIZE_MIN = 40;
 export const DECK_SIZE_MAX = 60;
@@ -77,22 +85,20 @@ export function whenOf(criterion: Pick<TemplateCriterion, 'when'>): CriterionWhe
 export const CRITERION_WEIGHT_MAX = 1000;
 
 /**
- * Why a criterion split across the opening five, the cards drawn and the whole
- * hand must be tagged going second — in the one wording `resolveTemplate` and
- * `analyze` both use, so that the run and the readout cannot come to disagree
- * about it.
+ * Why a criterion with something in its opening-5 or drawn-cards field must be
+ * tagged going second — in the one wording `resolveTemplate` and `analyze` both
+ * use, so that the run and the readout cannot come to disagree about it.
  *
  * It is an ERROR and not a warning, and not the criterion quietly going
- * unjudged. `then` says which card is which, and only the hand you draw a sixth
- * card into has a sixth card to say it about; going first there is nothing for
- * the second half of the criterion to be true or false of. `finally` names no
- * card drawn and is refused all the same: what it adds is a question about the
- * whole hand BESIDE one about the first five, and going first there is no "first
- * five" apart from the hand. A tag saying
- * otherwise is a contradiction the user wrote down, and the tag is also what the
- * editor groups the criteria by — so narrowing it silently would leave a
- * criterion sitting under a heading that no longer describes it. Tagging it
- * going second costs nothing, an AVERAGE included: the average judges every
+ * unjudged, and not the fields quietly emptied when the tag is changed (PRD
+ * §5.5): the text the user typed is kept, and this says what to do with it. The
+ * drawn-cards field is about the card you draw, and going first no card is
+ * drawn for it to be true or false of. The opening-5 field is refused all the
+ * same: it is a question about the first five APART from the hand, and going
+ * first there is no "first five" apart from the hand. The tag is also what the
+ * editor groups the criteria by, so narrowing it silently would leave a
+ * criterion under a heading that no longer describes it. Tagging it going
+ * second costs nothing, an AVERAGE included: the average judges every
  * criterion, and a going-second one in its six-card half.
  */
 export function splitNeedsSecond(when: CriterionWhen): string {
@@ -100,7 +106,7 @@ export function splitNeedsSecond(when: CriterionWhen): string {
     when === 'first'
       ? 'this one is judged going first, where the hand is five cards and none of them is drawn after'
       : 'this one is judged for both hands, and going first the hand is five cards and none of them is drawn after';
-  return `\`then\` and \`finally\` split the hand you draw going second, but ${judged} — tag it going second, or ask for the six cards together and drop the \`then\` or \`finally\``;
+  return `the opening-5 and drawn-cards fields split the hand you draw going second, but ${judged} — tag it going second, or move what they say into the whole-hand field and empty them`;
 }
 
 /** A criterion's weight; one that says nothing is worth 1 (PRD §5.6). */
@@ -167,10 +173,25 @@ export type TemplateLine =
   | (LineRange & { card: TemplateCard })
   | (LineRange & { text: string; desc?: Description });
 
+/**
+ * A criterion: up to three fields of text (PRD §5.5, `src/core/criteria/fields.ts`)
+ * and the one expression they state.
+ *
+ * `text` is the WHOLE-HAND field, and the one every criterion has — a going-first
+ * or either-hand criterion has no other, and neither has any criterion written
+ * before the fields existed, so every one of those keeps the field it always
+ * had. `opening` and `drawn` are the going-second windows, absent when empty.
+ */
 export interface TemplateCriterion {
   id: string;
   name?: string;
+  /** The whole hand; empty is "anything". */
   text: string;
+  /** The five cards you open on, going second; absent is "anything". */
+  opening?: string;
+  /** The cards you draw going second — the one for turn and what draw cards fetch; absent is "anything". */
+  drawn?: string;
+  /** ONE expression for the fields together: the split when there is more than the whole hand. */
   expr?: Expr;
   /** Which hand it is judged for; absent is `both` (`whenOf`). */
   when?: CriterionWhen;
@@ -439,10 +460,30 @@ class Validator {
       : { id, min, max, ...drawn, text, desc };
   }
 
-  criterion(where: string, value: unknown): TemplateCriterion | undefined {
+  /**
+   * `version` is the FILE's: a version 1 criterion is one text with `then` and
+   * `finally` in it, laid out in the fields here (`v1Fields`), and a version 2
+   * one has the fields already.
+   */
+  criterion(where: string, value: unknown, version: number): TemplateCriterion | undefined {
     if (!isObject(value)) return this.fail(`${where}: must be an object, not ${show(value)}`);
     const id = this.text(where, 'id', value.id);
-    const text = this.draftText(where, 'text', value.text);
+    const written = this.draftText(where, 'text', value.text);
+    let fields: { opening?: string; drawn?: string; text: string } | undefined;
+    if (written !== undefined) {
+      if (version === TEMPLATE_VERSION_CONVERTED) fields = v1Fields(written);
+      else {
+        fields = { text: written };
+        // An empty field is "anything", and is stored as no field at all — the
+        // one spelling the editor saves it in.
+        for (const field of ['opening', 'drawn'] as const) {
+          const given = value[field];
+          if (given === undefined) continue;
+          const read = this.draftText(where, field, given);
+          if (read !== undefined && read.trim() !== '') fields[field] = read;
+        }
+      }
+    }
     if (value.name !== undefined && typeof value.name !== 'string')
       this.fail(`${where}: \`name\` must be text, not ${show(value.name)}`);
     let when: CriterionWhen | undefined;
@@ -480,8 +521,10 @@ class Validator {
       if (typeof value.stop === 'boolean') stop = value.stop;
       else this.fail(`${where}: \`stop\` must be true or false, not ${show(value.stop)}`);
     }
-    if (id === undefined || text === undefined) return undefined;
-    const out: TemplateCriterion = { id, text };
+    if (id === undefined || fields === undefined) return undefined;
+    const out: TemplateCriterion = { id, text: fields.text };
+    if (fields.opening !== undefined) out.opening = fields.opening;
+    if (fields.drawn !== undefined) out.drawn = fields.drawn;
     if (typeof value.name === 'string') out.name = value.name;
     if (expr !== undefined) out.expr = expr;
     if (when !== undefined) out.when = when;
@@ -577,17 +620,26 @@ class Validator {
  * every field the box model assumes of it is asserted before `implies` can
  * meet it, and `resolveTemplate` can compare it with a fresh parse of the text
  * by stringifying both.
+ *
+ * A VERSION 1 file is read and converted (TDD §14): its criteria's `then` /
+ * `finally` text is laid out in the three fields (`v1Fields`), its stored ASTs
+ * are kept exactly as they were, and what comes back is a version 2 template —
+ * which is what saving it writes. A plain version 1 criterion is about the
+ * whole hand, and lands in the whole-hand field.
  */
 export function validateTemplate(json: unknown): ValidateResult {
   if (!isObject(json))
     return { ok: false, errors: [`a template is a JSON object, not ${show(json)}`] };
-  if (json.version !== TEMPLATE_VERSION) {
+  if (json.version !== TEMPLATE_VERSION && json.version !== TEMPLATE_VERSION_CONVERTED) {
     const found = json.version === undefined ? 'no `version`' : `\`version\` ${show(json.version)}`;
     return {
       ok: false,
-      errors: [`this file has ${found}; this build reads version ${TEMPLATE_VERSION} templates`],
+      errors: [
+        `this file has ${found}; this build reads version ${TEMPLATE_VERSION} templates, and converts version ${TEMPLATE_VERSION_CONVERTED}`,
+      ],
     };
   }
+  const version = json.version;
 
   const v = new Validator();
   const deckSize = v.count('template', 'deckSize', json.deckSize);
@@ -645,7 +697,7 @@ export function validateTemplate(json: unknown): ValidateResult {
 
   const rawCriteria = v.list('criteria', json.criteria, true);
   const criteria = rawCriteria.map((criterion, i) =>
-    v.criterion(labelOf('criteria', i, criterion), criterion),
+    v.criterion(labelOf('criteria', i, criterion), criterion, version),
   );
   v.duplicates(
     'criteria',

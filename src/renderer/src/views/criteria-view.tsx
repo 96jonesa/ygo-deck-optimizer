@@ -198,7 +198,7 @@ export function CriteriaView() {
   const problem = useApp((state) => state.analysis.problem);
   const addCriterion = useApp((state) => state.addCriterion);
   const dropCriterion = useApp((state) => state.dropCriterion);
-  const setCriterionText = useApp((state) => state.setCriterionText);
+  const setCriterionField = useApp((state) => state.setCriterionField);
   const setCriterionName = useApp((state) => state.setCriterionName);
   const setCriterionWhen = useApp((state) => state.setCriterionWhen);
   const setCriterionWeight = useApp((state) => state.setCriterionWeight);
@@ -230,7 +230,7 @@ export function CriteriaView() {
       drawing={drawing}
       first={at === 0}
       last={at === criteria.length - 1}
-      onText={(text) => setCriterionText(criterion.id, text)}
+      onField={(field, text) => setCriterionField(criterion.id, field, text)}
       onName={(name) => setCriterionName(criterion.id, name)}
       onWhen={(when) => setCriterionWhen(criterion.id, when)}
       onWeight={(weight) => setCriterionWeight(criterion.id, weight)}

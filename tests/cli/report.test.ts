@@ -17,6 +17,7 @@ import {
 } from '../../src/cli/report';
 import { analyze } from '../../src/core/model/analyze';
 import type { TemplateLine } from '../../src/core/model/template';
+import { fieldsOf } from '../helpers/fields';
 import { CODE } from '../helpers/fixture-cards';
 import { templateOf } from '../helpers/gen-template';
 import { motivatingContext, motivatingTemplate } from '../helpers/motivating';
@@ -180,7 +181,11 @@ describe('matchingSection', () => {
         analyze(
           templateOf(
             lines,
-            texts.map((text, at) => ({ id: `c${at + 1}`, text, when: 'second' as const })),
+            texts.map((text, at) => ({
+              id: `c${at + 1}`,
+              ...fieldsOf(text),
+              when: 'second' as const,
+            })),
             { hand: { size: 6 }, mode: 'second' },
           ),
           ctx,
@@ -188,33 +193,42 @@ describe('matchingSection', () => {
       );
     expect(second(['1x monster then 1x trap'])).toMatch(/^ {2}requirement +1x drawn trap/m);
     expect(second(['1x monster then no trap'])).toMatch(/^ {2}limit +no drawn trap/m);
-    // Asked of the hand AND of the card drawn: two counts, the hand's first.
-    expect(second(['1x trap then 1x trap'])).toMatch(/^ {2}requirement +1x \/ 1x drawn trap/m);
+    // Asked of the opening five AND of the card drawn: two counts, in the order the cards arrive.
+    expect(second(['1x trap then 1x trap'])).toMatch(
+      /^ {2}requirement +1x in the opening 5 \/ 1x drawn trap/m,
+    );
   });
 
-  /** The third window, in the same words the renderer's readout uses. */
-  it('marks a requirement or a limit asked of the whole hand by a `finally` part', () => {
+  /**
+   * The whole-hand field, in the same words the renderer's readout uses: it
+   * goes UNMARKED, alone or beside the others, and the opening-5 field is what
+   * is marked when there is one.
+   */
+  it('marks the opening five, and leaves the whole-hand field unmarked', () => {
     const lines = [line('m', 'monster'), line('t', 'trap')];
     const second = (texts: string[]) =>
       matchingSection(
         analyze(
           templateOf(
             lines,
-            texts.map((text, at) => ({ id: `c${at + 1}`, text, when: 'second' as const })),
+            texts.map((text, at) => ({
+              id: `c${at + 1}`,
+              ...fieldsOf(text),
+              when: 'second' as const,
+            })),
             { hand: { size: 6 }, mode: 'second' },
           ),
           ctx,
         ),
       );
+    expect(second(['1x monster finally 2x trap'])).toMatch(/^ {2}requirement +2x trap/m);
+    expect(second(['1x monster finally at most 1x trap'])).toMatch(/^ {2}limit +at most 1x trap/m);
     expect(second(['1x monster finally 2x trap'])).toMatch(
-      /^ {2}requirement +2x in the whole hand trap/m,
+      /^ {2}requirement +1x in the opening 5 monster/m,
     );
-    expect(second(['1x monster finally at most 1x trap'])).toMatch(
-      /^ {2}limit +at most 1x in the whole hand trap/m,
-    );
-    // All three windows at once: the criterion's own first, then drawn, then whole.
+    // All three fields at once, in the order the cards arrive.
     expect(second(['1x trap then 1x trap finally 2x trap'])).toMatch(
-      /^ {2}requirement +1x \/ 1x drawn \/ 2x in the whole hand trap/m,
+      /^ {2}requirement +1x in the opening 5 \/ 1x drawn \/ 2x trap/m,
     );
   });
 

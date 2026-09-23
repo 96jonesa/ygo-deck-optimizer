@@ -31,6 +31,14 @@
 export interface Example {
   /** Typed exactly as written; the test parses this string. */
   readonly syntax: string;
+  /**
+   * Which of a criterion's fields it is typed into (PRD §5.5): the opening five,
+   * the cards drawn, or the whole hand. Set, the test parses the row as that
+   * field does — `then` and `finally` refused, the drawn-cards field bounded to
+   * one card — and the reference shows the field's label beside it. Absent, the
+   * row is a plain criterion: what any field, or the one field going first, reads.
+   */
+  readonly field?: 'opening' | 'drawn' | 'text';
   readonly means: string;
   /**
    * Set on a row that shows an ERROR: the text does not parse, and the app's
@@ -327,66 +335,46 @@ export const CRITERION_SYNTAX: ExampleSection = {
       note: 'One token decides which `or` you wrote: a count, `exactly`, `at most`, `no`, or a `(` before one of those starts a new term. Anything else continues the description.',
     },
     {
-      heading: 'The cards you draw going second',
+      heading: 'Going second: three fields',
       rows: [
         {
-          syntax: '1x {starter} and 1x {extender} then 1x [Ash Blossom & Joyous Spring]',
-          means:
-            'the FIVE cards you open on hold a starter and an extender, and the card you draw is Ash Blossom',
+          field: 'opening',
+          syntax: '1x {starter} and 1x {extender}',
+          means: 'the FIVE cards you open on hold a starter and an extender',
         },
         {
-          syntax: 'then 1x [Ash Blossom & Joyous Spring]',
-          means: 'only the card you draw is asked about; the five may be anything',
+          field: 'drawn',
+          syntax: '1x [Ash Blossom & Joyous Spring]',
+          means: 'the card you draw for turn is Ash Blossom',
         },
-        { syntax: '1x {starter} then no trap', means: 'the card you draw is not a trap' },
+        { field: 'drawn', syntax: 'no trap', means: 'the card you draw is not a trap' },
         {
-          syntax: '1x monster then 2x trap',
+          field: 'text',
+          syntax: 'at most 1x trap',
           means:
-            'an error HERE — one card cannot be two cards. Mark a line as drawing cards and it becomes a question: `then` is then about everything you drew',
+            'all SIX cards hold at most one trap — the field a limit that the drawn card can break belongs in',
+        },
+        {
+          field: 'drawn',
+          syntax: '2x trap',
+          means:
+            'an error HERE — one card cannot be two cards. Mark a line as drawing cards and it becomes a question: the field is then about everything you drew',
           fails: 'the card you draw is one card',
         },
         {
-          syntax: '1x monster then 1x trap then 1x spell',
-          means: 'an error — the hand comes in two pieces, not three',
-          fails: 'a criterion has one `then`',
+          field: 'opening',
+          syntax: '1x monster then 1x trap',
+          means: 'an error — the fields replace `then`: the trap goes in the drawn-cards field',
+          fails: 'no `then` needed',
+        },
+        {
+          field: 'opening',
+          syntax: '1x monster finally at most 1x trap',
+          means: 'an error — the fields replace `finally`: the limit goes in the whole-hand field',
+          fails: 'no `finally` needed',
         },
       ],
-      note: '`then` is a different question from asking the same of all six cards together: it fixes WHICH cards are which, and it is the question to ask when the extra cards have to be the answer. A row with a `then` must be tagged going second — going first nothing is drawn. With DRAW CARDS in the template it means everything you drew: the card for turn and whatever the draw cards fetched, so `then 2x monster` is then writable and fails on any hand that drew nothing.',
-    },
-    {
-      heading: 'The whole hand, going second',
-      rows: [
-        {
-          syntax: '1x {starter} finally at most 1x trap',
-          means:
-            'your opening FIVE hold a starter, and all SIX hold at most one trap — both must be true',
-        },
-        {
-          syntax: '1x {starter} then 1x [Ash Blossom & Joyous Spring] finally 2x monster',
-          means:
-            'all three at once: a starter in the five, Ash as the card you draw, and two monsters across the six',
-        },
-        {
-          syntax: 'finally 2x monster',
-          means: 'only the whole hand is asked about; the five and the card drawn may be anything',
-        },
-        {
-          syntax: '1x monster finally 1x monster',
-          means:
-            'one monster in your opening five answers BOTH: each part is judged over its own cards, and nothing is spent twice',
-        },
-        {
-          syntax: '1x monster finally 1x trap finally 1x spell',
-          means: 'an error — there is one hand, so there is one `finally`',
-          fails: 'a criterion has one `finally`',
-        },
-        {
-          syntax: '1x monster finally 1x trap then 1x spell',
-          means: 'an error — `then` comes first: the cards you draw, then the hand they leave you',
-          fails: '`then` comes before `finally`',
-        },
-      ],
-      note: '`finally` is a FULL criterion over all six cards — requirements, limits, ranges, `or`, the lot — standing beside one about the first five. It is what to write when you need something EARLY and a limit LATE: `at most 1x brick` over five does not give you `at most 1x brick` over six, and the card you draw is exactly what breaks it. It may stand with or without a `then`, and either way the part before it becomes a question about the opening five alone. A row with a `finally` must be tagged going second, as a `then` must.',
+      note: 'Fill any of the three, in any combination: an empty field means anything, and every filled one must hold, each over its own cards — so one monster in your opening five answers both `1x monster` there and `1x monster` in the whole hand. The first two are a different question from asking the same of all six cards together: they fix WHICH cards are which, which is the question to ask when the extra card has to be the answer. With only the whole hand filled, a going-second criterion is exactly what it would be going first, and a going-first or either-hand criterion has that field alone. With DRAW CARDS in the template the drawn-cards field is everything you drew — the card for turn and whatever the draw cards fetched — so `2x monster` there is writable, and fails on any hand that drew nothing. Template files saved before the fields wrote these parts with `then` and `finally` in one text; opening one converts it into the fields.',
     },
     {
       heading: 'Two errors worth recognizing',
@@ -406,7 +394,7 @@ export const CRITERION_SYNTAX: ExampleSection = {
   ],
   notes: [
     'A hand succeeds if it meets ANY ONE criterion: between criteria it is always `or`.',
-    'Which hand a criterion is judged for — going first, going second, either hand — is the control on the row, not something written in its text. A criterion with a `then` or a `finally` in it has to be the going-second one.',
+    'Which hand a criterion is judged for — going first, going second, either hand — is the control on the row, not something written in its text. A criterion with anything in its opening-5 or drawn-cards field has to be the going-second one.',
     'What a criterion is WORTH is a control too, not text: turn on “Weight the criteria” and every row gets a number. See “What weighting the criteria does”.',
   ],
 };
@@ -516,6 +504,7 @@ export const FILE_REFERENCE: FactSection = {
   ],
   notes: [
     'A saved template keeps what each line MEANS beside its text, so a file opened after the vocabulary has changed still means what it meant.',
+    'A file saved by an older version, whose going-second criteria wrote `then` and `finally` in one text, opens with those parts in the three fields; saving it writes the new format, which the older version cannot open.',
     'Nothing is ever written to your EDOPro install.',
   ],
 };
@@ -584,17 +573,17 @@ export const DRAW_REFERENCE: FactSection = {
         'Whichever way you stopped or drew, EVERY criterion is then judged on the hand you have. A criterion you tick is still checked after drawing when your opening did not stop you, and one you leave alone still counts when something else stopped you.',
     },
     {
-      label: '`then` becomes about everything you drew',
+      label: 'The drawn-cards field becomes everything you drew',
       means:
-        'Going second, `then` normally asks about the one card you draw for turn. With draw cards it asks about that card AND everything they fetched — so `then 2x monster` is a question you can now write, and it fails on any hand that drew nothing.',
+        'Going second, the drawn-cards field normally asks about the one card you draw for turn. With draw cards it asks about that card AND everything they fetched — so `2x monster` there is a question you can now write, and it fails on any hand that drew nothing.',
     },
     {
-      label: 'What `then` means when you stop',
+      label: 'What the fields mean when you stop',
       means:
-        'A criterion that stops you fetches nothing, so the hand you keep drew exactly one card. Anything after `then` that needs two cards can never hold in that branch, and scores nothing for it.',
+        'A criterion that stops you fetches nothing, so the hand you keep drew exactly one card: the drawn-cards field is judged on that one card for turn, and the whole-hand field on the six. Anything in the drawn-cards field that needs two cards can never hold in that branch, and scores nothing for it.',
     },
     {
-      label: '`finally` is the hand you end up holding',
+      label: 'The whole-hand field is the hand you end up holding',
       means:
         'It asks about every card still in your hand when the drawing stops — the five you opened on, the card for turn and everything fetched, less the draw cards you played. So it is the one place to put a limit that drawing can break, which is exactly what it is for.',
     },
@@ -605,8 +594,8 @@ export const DRAW_REFERENCE: FactSection = {
     'Exactly one moment is ever scored. If your opening stopped you, your opening is what counts; if you drew, the hand you ended up with is what counts — even when it is worth less, and even when it is worth nothing.',
     'MORE CARDS CAN BE WORSE. “No hand traps” counts your whole hand, and “exactly one starter” is broken by a second one — so drawing into them turns a hand that worked into one that does not, and the score falls as you add copies. That is what "stop here" is there to stop.',
     'The deck cannot run out: a template whose draw cards could ask for more cards than the deck holds is refused rather than scored as though it could not happen.',
-    'THE SPLIT STILL WORKS, and widens. `1x {starter} then 2x monster` going second asks that your opening five hold a starter and that the cards you drew — the one for turn, plus everything the draw cards fetched — hold two monsters. A card you played to draw with has left your hand and is in neither half.',
-    'AND `finally` IS THE ANSWER TO "more cards can be worse". `1x {starter} finally at most 1x brick` asks for the starter in your opening five and counts the bricks over the hand you ended up with — so it scores the thing you actually care about instead of pretending the cards you drew cannot hurt you.',
+    'THE FIELDS STILL WORK, and widen. Going second, `1x {starter}` in the opening-5 field and `2x monster` in the drawn-cards field ask that your opening five hold a starter and that the cards you drew — the one for turn, plus everything the draw cards fetched — hold two monsters. A card you played to draw with has left your hand and is in neither.',
+    'AND THE WHOLE-HAND FIELD IS THE ANSWER TO "more cards can be worse". `1x {starter}` in the opening-5 field and `at most 1x brick` in the whole-hand field ask for the starter in your opening five and count the bricks over the hand you ended up with — so the run scores the thing you actually care about instead of pretending the cards you drew cannot hurt you.',
   ],
 };
 

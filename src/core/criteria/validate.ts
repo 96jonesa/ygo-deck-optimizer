@@ -115,12 +115,12 @@ class ExprValidator {
           return this.fail(
             `${where}: \`split\` is the whole of a criterion — the cards you open on, then the cards you draw, finally the whole hand — and cannot stand inside \`and\`, \`or\` or another \`split\``,
           );
-        // A split with NEITHER dealt-window part nor a whole-hand part says
-        // nothing: no text writes it, and it would read as a criterion met by
-        // every hand rather than as the mistake it is.
-        if (value.sixth === undefined && value.whole === undefined)
+        // A split of NO part says nothing: nothing writes it, and it would read
+        // as a criterion met by every hand rather than as the mistake it is. A
+        // `five` alone is the opening-5 field filled by itself, and is fine.
+        if (value.five === undefined && value.sixth === undefined && value.whole === undefined)
           return this.fail(
-            `${where}: a \`split\` needs a \`sixth\` (what you drew) or a \`whole\` (the whole hand), or both — with neither it asks nothing`,
+            `${where}: a \`split\` needs a \`five\` (the opening five), a \`sixth\` (what you drew) or a \`whole\` (the whole hand) — with none it asks nothing`,
           );
         const parts = {
           five:

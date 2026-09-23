@@ -862,7 +862,7 @@ function remedies({ criteria }: Problem): string[] {
   if (criteria.some(({ stop }) => stop === true)) out.push('drop a "stop here"');
   if (criteria.some(isSplit))
     out.push(
-      'or drop a `then` or `finally` (either reads the cards you opened on apart from the cards you drew)',
+      "or empty a criterion's opening-5 and drawn-cards fields (either reads the cards you opened on apart from the cards you drew)",
     );
   return out;
 }

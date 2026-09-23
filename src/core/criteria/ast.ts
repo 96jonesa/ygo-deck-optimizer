@@ -30,7 +30,8 @@ export const MAX_RANGES = 12;
 export const MAX_SIXTH_SLOTS = 1;
 
 /**
- * Why a `then` part asks for more than the drawn set can hold — in the ONE
+ * Why the drawn-cards field (the AST's `sixth` part, which a version 1 file
+ * wrote after `then`) asks for more than the drawn set can hold — in the ONE
  * wording the parser, `expand` and `validateExpr` all use, so that the same
  * mistake does not read as three different mistakes depending on where it is
  * caught. The advice differs with the bound: at one card the way out is to ask
@@ -38,8 +39,8 @@ export const MAX_SIXTH_SLOTS = 1;
  */
 export function tooManyDrawnSlots(asked: number, allowed: number): string {
   return allowed === 1
-    ? `the card you draw is one card, and this asks ${asked} of it: after \`then\`, write one requirement — \`1x …\` — or limits alone, as in \`no trap\`. Mark a line as drawing cards and \`then\` becomes about everything you drew, which can be more than one`
-    : `you draw at most ${allowed} cards here, and this asks ${asked} of them: after \`then\`, write at most ${allowed} requirement slot(s), or limits alone, as in \`no trap\``;
+    ? `the card you draw is one card, and this asks ${asked} of it: in the drawn-cards field, write one requirement — \`1x …\` — or limits alone, as in \`no trap\`. Mark a line as drawing cards and the field becomes about everything you drew, which can be more than one`
+    : `you draw at most ${allowed} cards here, and this asks ${asked} of them: in the drawn-cards field, write at most ${allowed} requirement slot(s), or limits alone, as in \`no trap\``;
 }
 
 /** `n×` a description: `n` distinct cards of a requirement, or the ceiling of a limit. */
@@ -112,9 +113,11 @@ export type Expr =
   | { op: 'atMost'; n: number; desc: Description }
   /**
    * `five` absent is "the opening five may be anything": `then 1x [Ash Blossom
-   * & Joyous Spring]`. At least one of `sixth` / `whole` is present — a split
-   * with neither says nothing the language can express, and it is the invariant
-   * `validateExpr` holds a loaded AST to.
+   * & Joyous Spring]`. At least one part is present — a split with none asks
+   * nothing, and it is the invariant `validateExpr` holds a loaded AST to. A
+   * `five` ALONE is the editor's opening-5 field filled by itself (PRD §5.5):
+   * the first five cards and nothing else, which `expand` judges as a split
+   * whose whole hand may be anything. No keyword text writes it.
    */
   | { op: 'split'; five?: Expr; sixth?: Expr; whole?: Expr };
 
