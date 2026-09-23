@@ -52,9 +52,16 @@ export interface Counted {
  * A requirement's count: at least `n` cards, and — when it was written as the
  * RANGE `a-b×` — at most `max` of them. `max: undefined` is no ceiling, which
  * is what a plain `n×` means.
+ *
+ * `unique` is `n× unique D`: the `n` cards it takes must be `n` DIFFERENT cards
+ * (Andy, 2026-09-22). It is `n× D` plus that one rule and nothing else — it
+ * takes cards exactly as a plain requirement does, so a card given to it is
+ * given to nothing else — and it never has a ceiling. Absent is false, and is
+ * every requirement written before it.
  */
 export interface CountedRange extends Counted {
   max?: number;
+  unique?: true;
 }
 
 /**
@@ -62,7 +69,9 @@ export interface CountedRange extends Counted {
  * - `req`: DISTINCT drawn cards are assigned to it — at least `n` (`n >= 1`,
  *   or `n >= 0` with a ceiling), and at most `max` when it has one. A
  *   requirement with a ceiling also binds the cards NOT assigned to it: see
- *   `FlatCriterion`;
+ *   `FlatCriterion`. With `unique` the cards assigned to it must moreover be
+ *   different CARDS, not merely different copies: `3x unique {Starter}` is three
+ *   starters no two of which are the same card. It never has a `max`;
  * - `atMost`: a count over the WHOLE hand, not an assignment (`n >= 0`);
  *   `no X` is `atMost 0`.
  *
@@ -97,7 +106,7 @@ export interface CountedRange extends Counted {
 export type Expr =
   | { op: 'and'; args: Expr[] }
   | { op: 'or'; args: Expr[] }
-  | { op: 'req'; n: number; max?: number; desc: Description }
+  | { op: 'req'; n: number; max?: number; unique?: true; desc: Description }
   | { op: 'atMost'; n: number; desc: Description }
   /**
    * `five` absent is "the opening five may be anything": `then 1x [Ash Blossom
@@ -150,7 +159,8 @@ export function slotsOf(expr: Expr): number {
  *
  * 1. every card is assigned to AT MOST ONE requirement, and only to one whose
  *    description it matches;
- * 2. every requirement `i` receives a count within `[n_i, max_i]`;
+ * 2. every requirement `i` receives a count within `[n_i, max_i]`, and a
+ *    `unique` one receives cards no two of which are the same card;
  * 3. every card left UNASSIGNED matches no requirement that has a ceiling;
  * 4. every limit holds as a census over the whole hand.
  *
@@ -231,10 +241,17 @@ export interface FlatSixth {
 export function canonicalizeExpr(expr: Expr): Expr {
   if (expr.op === 'req') {
     const desc = canonicalize(expr.desc);
-    // Absent rather than `undefined`, so that a plain `n×` keeps the JSON it has always had.
-    return expr.max === undefined
-      ? { op: 'req', n: expr.n, desc }
-      : { op: 'req', n: expr.n, max: expr.max, desc };
+    // Absent rather than `undefined`, so that a plain `n×` keeps the JSON it has
+    // always had — and `unique` likewise absent when false, between the count
+    // and the description, so that every AST written before it stringifies as
+    // it did and `meaning.ts` calls none of them stale.
+    return {
+      op: 'req',
+      n: expr.n,
+      ...(expr.max === undefined ? {} : { max: expr.max }),
+      ...(expr.unique === true ? { unique: true as const } : {}),
+      desc,
+    };
   }
   if (expr.op === 'atMost') return { op: 'atMost', n: expr.n, desc: canonicalize(expr.desc) };
   if (expr.op === 'split') {

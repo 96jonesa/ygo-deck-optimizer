@@ -416,6 +416,102 @@ describe("Hall's condition against brute-force assignment, hand by hand", () => 
 });
 
 /**
+ * `n× unique D` (TDD §10.1): a requirement node of demand `n` taking at most one
+ * card of each class. The engine decides it by condition (A') over subsets of
+ * requirement nodes and, beside a ceiling, (B'); the oracle hands the cards out
+ * one at a time and never counts anything. Classes stand for cards here, which
+ * is what `compileProblem`'s identity columns make them.
+ */
+describe('unique requirements against brute-force assignment', () => {
+  // Classes: 0 blank, 1 A, 2 B, 3 C — three different cards, all starters.
+  const STARTERS = 0b1110;
+  const threeUnique: CompiledCriterion = {
+    slots: [],
+    limits: [],
+    uniques: [{ mask: STARTERS, n: 3 }],
+  };
+
+  it('counts different cards, not copies', () => {
+    const matches = compileMatcher(problemOf([threeUnique]));
+    expect(matches([0, 1, 1, 1], 3)).toBe(true);
+    expect(matches([0, 2, 1, 0], 3)).toBe(false);
+    expect(matches([0, 3, 0, 0], 3)).toBe(false);
+  });
+
+  it('takes cards as any requirement does: one given to it is given to nothing else', () => {
+    // `3 unique {Starter}, 1x {Extender}` with C the only extender: C cannot be both.
+    const withExtender: CompiledCriterion = {
+      slots: [0b1000],
+      limits: [],
+      uniques: [{ mask: STARTERS, n: 3 }],
+    };
+    const matches = compileMatcher({
+      ...problemOf([withExtender]),
+      handSizes: [{ H: 5, weight: 1 }],
+    });
+    expect(matches([0, 1, 1, 1], 3)).toBe(false);
+    // A second copy of C is the extender, and three different starters remain.
+    expect(matches([0, 1, 1, 2], 4)).toBe(true);
+    // A second A is no help: the unique requirement will not take it, and it is no extender.
+    expect(matches([0, 2, 1, 1], 4)).toBe(false);
+  });
+
+  it('is never met by more cards than the hand holds', () => {
+    const matches = compileMatcher(problemOf([threeUnique]));
+    expect(matches([0, 1, 1, 0], 2)).toBe(false);
+  });
+
+  it('agrees with brute force on every composition of 3,000 generated criteria, ceilings included', () => {
+    let compared = 0;
+    let feasible = 0;
+    let capped = 0;
+    for (let seed = 0; seed < 3000; seed++) {
+      const rng = seededRng(71_000 + seed);
+      const classCount = rng.int(2, 6);
+      const H = rng.int(1, 6);
+      const mask = () => {
+        let out = 0;
+        for (let cls = 1; cls < classCount; cls++) if (rng.chance(0.45)) out |= 1 << cls;
+        return out;
+      };
+      const reqs = Array.from({ length: rng.int(0, 3) }, () => {
+        const reqMask = mask();
+        const min = rng.int(0, 2);
+        // A ceiling no class reaches is dropped by `compileCriterion`, so none is made here.
+        const max = rng.chance(0.5) && reqMask !== 0 ? min + rng.int(0, 2) : null;
+        return { mask: reqMask, min: max === null ? Math.max(min, 1) : min, max };
+      });
+      const criterion: CompiledCriterion = {
+        slots: reqs.flatMap(({ mask, min }) => new Array<number>(min).fill(mask)),
+        limits: rng.chance(0.2) ? [{ mask: mask(), n: rng.int(0, 2) }] : [],
+        uniques: Array.from({ length: rng.int(1, 2) }, () => ({ mask: mask(), n: rng.int(1, 3) })),
+      };
+      if (reqs.some(({ max }) => max !== null)) {
+        criterion.reqs = reqs;
+        capped++;
+      }
+      const problem: Problem = {
+        ...problemOf([criterion], classCount),
+        handSizes: [{ H, weight: 1 }],
+      };
+      const matches = compileMatcher(problem);
+      for (const h of compositions(classCount, H)) {
+        const expected = bruteForceMeets(criterion, h);
+        same(matches(h, H), expected, () => ({ seed, h, H, criterion }));
+        compared++;
+        if (expected) feasible++;
+      }
+    }
+    // Pinned so the size of the check is on record; it moves only if the generator does.
+    expect({ compared, feasible, capped }).toEqual({
+      compared: 177_173,
+      feasible: 17_226,
+      capped: 1285,
+    });
+  });
+});
+
+/**
  * Weighted criteria (PRD §5.6): what a hand is WORTH, rather than whether it
  * succeeds. The engine sorts the criteria by weight and stops at the first one
  * met; the oracle asks every criterion and takes the maximum, so the sort is

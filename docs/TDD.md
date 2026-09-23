@@ -322,7 +322,7 @@ criterion   := [ orExpr ] [ "then" orExpr ] [ "finally" orExpr ]   -- at least o
 orExpr      := andExpr ( "or" andExpr )*
 andExpr     := term ( ( "and" | "," ) term )*
 term        := "(" orExpr ")" | requirement | limit
-requirement := COUNT description | "exactly" ONE description
+requirement := COUNT [ "unique" ] description | "exactly" ONE description
 limit       := "at most" ONE description | "no" description
 
 COUNT       := INT [ "-" INT ] [ "x" | "×" ]     -- 1x, 2×, 1-2x, 1-2
@@ -355,6 +355,8 @@ differently.
 
 The two `or`s (PRD §5.3) are separated with one token of lookahead: after `or`, a `COUNT`, `at most`, `no`, `exactly`, or `(`-followed-by-one-of-those starts a new *term* (criterion-level); anything else continues the *description*. So `1x [C] or 2x [D]` is a criterion-level choice, `1x [C] or [E]` is one slot either card can fill, and `1x ([C] or [E])` says the latter explicitly. Two consequences worth stating: a description-level `or` binds tighter than `and` (`1x [C] or [E] and 1x [D]` is two terms), and the printer always parenthesizes a description-level `or` (`1x (#1 or #2)`) — for the reader, since the lookahead re-parses the bare form identically. `COUNT` is digits then `x` only where the `x` *ends a word*, or `×` anywhere, so `"Warrior":0x2066` keeps its hex code; a hex token where a count belongs gets a message saying so. In the app the criterion structure is built from rows and groups, not typed; the text form is the canonical serialization used by the CLI harness, tests, and copy/paste.
 
+`n unique D` asks for $`n`$ **different** cards of `D` (PRD §5.3): the word stands straight after a count and nowhere else, and it is a **floor** — `exactly 3 unique`, `1-3 unique`, `at most 2 unique` and `no unique` are each refused with the span of the count and the word, and a stray `unique` inside a description is refused with its own. It prints `3x unique D`, and its AST key is **absent when false** and written between `n` and `desc`, so every AST stored before it stringifies as it did and `meaning.ts` calls none of them stale.
+
 `exactly n` is **sugar for the range `n-n` and nothing else**: it goes through the same construction, so it yields the very node `n-nx` yields and no later pass can tell which was typed. That is the whole of its implementation — no rule in expansion, the matcher, or the scorer knows the word exists. It is requirement-only: a limit already names one ceiling, and there is no census that means "exactly". Going the other way, `countPrefix` writes `exactly nx` whenever a range's ends agree, so `1-1x monster` reads back as `exactly 1x monster` — while `[2, 2]` is still never printed `2x`, which would silently drop the ceiling. The renderer may not import core (§3), so `criteria-readout.ts` carries its own copy of that rule; the two are kept in step by tests on either side pinning the same strings, not by sharing code.
 
 ```ts
@@ -362,12 +364,12 @@ The two `or`s (PRD §5.3) are separated with one token of lookahead: after `or`,
 export type Expr =
   | { op: 'and'; args: Expr[] }
   | { op: 'or'; args: Expr[] }        // two members, not 'and' | 'or': the merged form defeats narrowing
-  | { op: 'req'; n: number; max?: number; desc: Description }   // `max` only from a range; `1-1x` and `exactly 1x` are one node
+  | { op: 'req'; n: number; max?: number; unique?: true; desc: Description }   // `max` only from a range; `1-1x` and `exactly 1x` are one node; `unique` never beside `max`
   | { op: 'atMost'; n: number; desc: Description }   // "no X" = atMost 0
   | { op: 'split'; five?: Expr; sixth?: Expr; whole?: Expr };   // the three windows; at least one of sixth / whole
 
 export interface FlatCriterion {
-  reqs: { n: number; max?: number; desc: Description }[];
+  reqs: { n: number; max?: number; unique?: true; desc: Description }[];
   limits: { n: number; desc: Description }[];
   sixth?: { reqs: ...; limits: ... };   // the cards drawn
   whole?: { reqs: ...; limits: ... };   // the whole hand, what `finally` writes
@@ -388,9 +390,9 @@ would judge that window over all six cards and answer a different question in si
 
 ### 7.2 Expansion
 
-`expand(expr): FlatCriterion[]` distributes `and` over `or` (PRD §5.3). The template's list of criteria is an `or` at the root, so the engine receives one list of flat criteria. Within a flat criterion, requirements with structurally identical descriptions merge by **summing** their counts (`1x A and 1x A` needs two distinct cards) and limits by taking the **minimum**. The order of the guards is merge → de-duplicate → cap → drop: duplicates are removed *during* distribution and the cap of **256** counts distinct alternatives, so forty copies of `(1x A or 1x A)` are one alternative while a genuine $`2^{40}`$ product fails fast without being built; alternatives whose slots exceed the hand size are dropped only at the end (`dropped` is reported, and an empty result with `dropped > 0` is the "can never be satisfied" warning). `expandAll` is called with the **largest** hand of a first/second blend — a six-slot alternative survives and is simply infeasible at $`H = 5`$.
+`expand(expr): FlatCriterion[]` distributes `and` over `or` (PRD §5.3). The template's list of criteria is an `or` at the root, so the engine receives one list of flat criteria. Within a flat criterion, requirements with structurally identical descriptions merge by **summing** their counts (`1x A and 1x A` needs two distinct cards) and limits by taking the **minimum**. A `unique` requirement merges with **nothing** — not with another `unique` one (`2 unique S and 1 unique S` lets the second take another copy of a card the first holds, which `3 unique S` forbids) and not with a plain one — though two alternatives that differ only in the order of their `unique` requirements are still one. The order of the guards is merge → de-duplicate → cap → drop: duplicates are removed *during* distribution and the cap of **256** counts distinct alternatives, so forty copies of `(1x A or 1x A)` are one alternative while a genuine $`2^{40}`$ product fails fast without being built; alternatives whose slots exceed the hand size are dropped only at the end (`dropped` is reported, and an empty result with `dropped > 0` is the "can never be satisfied" warning). `expandAll` is called with the **largest** hand of a first/second blend — a six-slot alternative survives and is simply infeasible at $`H = 5`$.
 
-Subsumption (PRD §8.3): flat criterion $`A`$ is subsumed by $`B`$ when any hand satisfying $`A`$ satisfies $`B`$. The tool detects the sufficient condition that is cheap and common — $`B`$'s requirements inject into $`A`$'s with each $`A`$-slot description implying its $`B`$-slot's, and every limit of $`B`$ is implied by a limit of $`A`$ — and reports it as a notice. The condition is sufficient, not necessary — measured once against brute force it missed about 4% of true subsumptions (two limits of $`A`$ jointly covering one of $`B`$, an unsatisfiable $`A`$) — which is acceptable precisely because subsumed criteria are still evaluated: this is advice, not an optimization the results depend on.
+Subsumption (PRD §8.3): flat criterion $`A`$ is subsumed by $`B`$ when any hand satisfying $`A`$ satisfies $`B`$. The tool detects the sufficient condition that is cheap and common — $`B`$'s requirements inject into $`A`$'s with each $`A`$-slot description implying its $`B`$-slot's, and every limit of $`B`$ is implied by a limit of $`A`$ — and reports it as a notice. The condition is sufficient, not necessary — measured once against brute force it missed about 4% of true subsumptions (two limits of $`A`$ jointly covering one of $`B`$, an unsatisfiable $`A`$) — which is acceptable precisely because subsumed criteria are still evaluated: this is advice, not an optimization the results depend on. A $`B`$ with a `unique` requirement is never claimed to subsume anything (that its cards differ is one more way to reject a hand, and slots cannot cover it); a `unique` requirement in $`A`$ alone is read as the plain `n×` inside it, whose cards still fill $`B`$'s slots.
 
 ## 8. From template to problem
 
@@ -408,6 +410,7 @@ export interface ClassInfo { lineIds: string[]; min: number; max: number }   // 
 export interface CompiledCriterion {
   slots: number[];                  // one bitmask of classes per requirement slot (n× expanded to n slots)
   limits: { mask: number; n: number }[];
+  uniques?: { mask: number; n: number }[];   // `n unique D`: NOT in `slots`; absent when there is none
 }
 ```
 
@@ -415,7 +418,19 @@ Steps:
 
 1. **Match matrix.** For every line (plus the remainder) and every distinct description appearing in any flat criterion, compute `implies(line, desc)`.
 2. **Classes.** Lines with identical rows in the match matrix are interchangeable for scoring and merge into one class whose count is the sum of theirs; the class range is the sum of the line ranges (integer intervals sum to an integer interval). Lines with an all-false row are *irrelevant* (PRD §5.6) and form the **blank** class (index 0), whose bit appears in no mask. The remainder usually joins them — but **not always**: its description is the universe, so it fills any requirement that is itself the universe (`1x card`), and then it is an ordinary class with its own bit while the blank class may be empty (no lines, total 0). Found by the M1a oracle, which hit this in over 30 generated problems; `compile` must not assume the remainder is blank. Class count is capped at 30 **including blank**, so every mask is a non-negative 32-bit integer; exceeding it is a clear error. `validateProblem` enforces this along with "the blank bit appears in no mask" — which M1a showed is a contract for merging rather than a numerical necessity (the scorer never reads the blank count), and is kept because it makes classes unambiguous.
-3. **Slots and limits** become class bitmasks. A limit that can never bind ($`n \ge`$ the largest hand) or that counts nothing (mask 0) is dropped and listed in `droppedLimits` so the UI can say so; a *slot* with mask 0 is kept — nothing fills it, and the criterion scores 0.
+3. **Slots and limits** become class bitmasks. A limit that can never bind ($`n \ge`$ the largest hand) or that counts nothing (mask 0) is dropped and listed in `droppedLimits` so the UI can say so; a *slot* with mask 0 is kept — nothing fills it, and the criterion scores 0. A `unique` requirement becomes `uniques[i] = { mask, n }` beside the slots, never in them: a slot would let one class fill all $`n`$.
+
+**Identity columns: classes must be cards where a `unique` requirement looks** (PRD §5.3). Step 2 merges lines the criteria cannot tell apart, so three starters that fill the same descriptions become one class of total 9 — and which starter a card is has gone. The matcher's `unique` rule is "at most one card per CLASS" (§10.1), which is "one per CARD" only if every class a `unique` requirement can take is one card. So every line that fills the description of a `unique` requirement of a **judged** alternative adds its passcode to its class key — an identity column, one per distinct card:
+
+| lines | row | identity | class |
+| --- | --- | --- | --- |
+| `#A` ×2, `#A` ×1 | fills `{Starter}` | A, A | one class, total 3 — one card |
+| `#B` ×3 | fills `{Starter}` | B | its own class |
+| `monster` ×2 | fills no `unique` description | — | as before |
+
+Different cards part; the same passcode on two lines still merges, which is what makes them one card (they are the `duplicate-card` warning's two lines). "Always treated as" aliases have passcodes of their own and part; alternate artwork was collapsed to one passcode by `CardIndex.resolve` long before this. The passcode is the one `soleCard` reads off the line's description — a single `card` alternative — and a line that could fill a `unique` requirement **without** one (a group, an `or`, anything generic, or the remainder) is refused, in `compileProblem` and as a `not-one-card` error on the line in `analyze`: how many different cards such a line holds is unknown. That check reads **every** alternative, not only the judged ones — the criterion is wrong as written whichever hand it is for.
+
+The columns are added **only** where a judged alternative has a `unique` requirement, and only to lines that fill one, so every template without one keeps a byte-identical partition and answer (a test compiles 400 generated templates with and without every line's passcode and compares the JSON). The class count grows by the number of distinct cards; when that alone is what passes `MAX_CLASSES`, the refusal says so and gives the count without it.
 
 `compileProblem` returns the `Problem` together with what a `Problem` deliberately forgets: per-class member lines with their ranges (for expanding a class vector back to line ratios, and for the sweep tables of §11.2) and `classOfLine`. Classes are ordered blank, then by first member line in template order, remainder last. A first/second blend is compiled from a template resolved at the **larger** hand; compiling for a hand larger than the one the criteria were expanded for is refused, since its six-slot alternatives are already gone.
 
@@ -445,7 +460,7 @@ Each part's **success set** then comes from only its own criteria (`successSet` 
 
 | Field | Content |
 | --- | --- |
-| per line | parse echo, database match count and samples, errors (unknown word, `min` above `max`, a line that can hold no card) — no copy limit, per line or across alias groups (PRD §5.1) — and a `no-match` **notice** when a generic line matches no card — allowed, but sometimes a slip |
+| per line | parse echo, database match count and samples, errors (unknown word, `min` above `max`, a line that can hold no card, a line that could fill a `unique` requirement without naming one card) — no copy limit, per line or across alias groups (PRD §5.1) — and a `no-match` **notice** when a generic line matches no card — allowed, but sometimes a slip |
 | per requirement | lines that fill it; **near misses** — lines whose description is *compatible* with the requirement but does not imply it, each with the first dimension that is unstated (`monster`: Level unstated), and the text of the line that would (`level 4 or lower monster`) for the one-click split (PRD §6.4) |
 | per limit | lines it counts; under-specified lines it ignores, with their total range (the "ignores 13–33 unspecified cards" notice, PRD §6.3–6.4) |
 | criteria | expansion preview, subsumption notices, never-satisfiable warnings, cards named in criteria but absent from the template |
@@ -475,6 +490,23 @@ A hand is a composition $`h = (h_c)`$ over classes with $`\sum_c h_c = H`$. For 
 - **A range requirement `a-bx D`** (PRD §5.3) carries a ceiling as well as a floor: between `a` and `b` cards, counted after the other requirements have taken theirs. A hand succeeds iff some assignment gives each card to at most one requirement whose description it matches, puts every requirement's count inside its `[a, b]`, and leaves **no unassigned card matching a requirement that has a finite ceiling** — that last clause is what makes a ceiling bind at all, and is the formal reading of "in addition to". The `x` is optional on both forms; the printer always writes it, and writes `exactly nx` when the two ends agree (§7.1).
 
   This is a transportation problem, but it needs no per-hand search: by Hoffman's circulation theorem every cut of the network is trivial but two, so the test is Hall's condition above plus, for each subset $`Y`$ of the *capped* requirements, $`\sum_{c \in M(Y)} h_c \le \sum_{i \in Y} b_i`$, where $`M(Y)`$ holds the classes only $`Y`$ can take — excluding whatever an unbounded requirement, or a ceiling outside $`Y`$, would accept, since that surplus is never trapped. Both families are precomputed per criterion; the bounds are integral, so a feasible circulation *is* an assignment of whole cards. A criterion with no ceiling keeps the Hall path untouched, chosen once when the matcher is compiled: measured at 53.3 ms before and after, against 76.9 ms with every requirement capped (partly the larger success set rather than the matching).
+- **A `unique` requirement `n unique D`** (PRD §5.3) takes $`n`$ cards no two of which are the same card. §8's identity columns make every class it can take one card, so in the transportation problem it is ONE requirement node of demand $`n`$ whose edge from each class in its mask carries **at most one** card, where a plain slot's edge is unbounded. That is a transportation problem with edge capacities, and max-flow/min-cut still decides it with no search. Take any set $`T`$ of requirement nodes — each plain slot one node of demand 1, each `unique` requirement one node of demand $`n_u`$. A cut that leaves $`T`$ on the sink side must, for each class $`c`$, either cut its supply (cost $`h_c`$) or cut all its edges into $`T`$; the second costs $`\infty`$ if some plain slot of $`T`$ accepts $`c`$, and otherwise one per `unique` node of $`T`$ that does. Each class is minimised independently, so the requirements are feasible iff
+
+```math
+\forall\, T:\quad \sum_{c} \min\bigl(h_c,\ \mathrm{cap}_T(c)\bigr) \;\ge\; \sum_{t \in T} d_t,
+\qquad
+\mathrm{cap}_T(c) = \begin{cases} \infty & \text{a plain slot of } T \text{ accepts } c \\ \#\{u \in T \text{ unique} : c \in M(u)\} & \text{otherwise} \end{cases}
+```
+
+  which is Hall's condition above whenever $`T`$ holds no `unique` node. Capacities are whole numbers, so a feasible flow is an assignment of whole cards. It is precomputed per criterion like Hall's: one entry per distinct pair of (plain-slot union, per-class `unique` count), the counts held as **levels** — $`L_j`$ is the classes outside the union that at least $`j`$ of the subset's `unique` nodes accept — so a hand is $`\sum_{c \in U} h_c + \sum_j \#\{c \in L_j : h_c \ge j\}`$ against the demand — $`U`$ being the union — and never a search.
+
+  **Beside a ceiling** the Hoffman argument above goes through with the same edge changed, and only the (B) family moves: a class trapped by a set $`Y`$ of ceilings may now send one card to each `unique` requirement that accepts it, so
+
+```math
+\forall\, Y:\quad \sum_{c \in M(Y)} \max\bigl(0,\ h_c - k_c\bigr) \;\le\; \sum_{i \in Y} b_i
+```
+
+  with $`k_c`$ the number of `unique` requirements whose mask holds $`c`$ (the cuts through a `unique` node's sink edge are unbounded, since it has no ceiling, and drop out). Both conditions were checked against brute-force assignment of concrete cards on 40,000 random instances — up to five classes, hands up to seven, up to three plain requirements half of them capped and up to two `unique` ones — with zero disagreements, before any of it was written; a test keeps checking the implementation against the class-level brute force on 177,173 compositions of 3,000 generated criteria, 1,285 of them with a ceiling. A criterion with no `unique` requirement builds none of this and runs the loops it always ran.
 - **Limits** are counts over the whole hand: $`\sum_{c \in \text{mask}} h_c \le n`$.
 
 The hand succeeds if any flat criterion has its requirements feasible and all its limits satisfied.
@@ -835,7 +867,8 @@ Each novel layer gets an oracle that is independent of it, and the oracle is wri
 | `evaluate` | Golden cases against the fixture; archetype matching pinned with the `0x1066 / 0x2066 / 0x3066` triple |
 | Implication | (1) **Soundness against the database**: for generated pairs, whenever `implies(L, q)`, every fixture card satisfying `L` satisfies `q`. (2) **Completeness, tested as deliberately** (PRD §11 — a weak relation overstates limit-bearing criteria): hand-written must-imply cases for every dimension and combinator, including `spell ⇒ non-tuner`, the split-range case of §6.2, and sub-archetype ⇒ archetype. (3) Must-not-imply cases, headed by `monster ⇏ level 4 or lower monster` |
 | Expansion | `expand` vs a direct recursive evaluator of the expression tree that tries every branch choice and every assignment, on generated expressions and hands |
-| Hand matcher | Hall's condition vs brute-force assignment, exhaustively for small class counts |
+| Hand matcher | Hall's condition vs brute-force assignment, exhaustively for small class counts; the `unique` conditions of §10.1 likewise, ceilings included |
+| `unique` requirements | A **card-level** oracle (`tests/helpers/card-oracle.ts`): every hand of a small deck with duplicate copies, dealt as concrete cards whose identity is their passcode and judged straight off the criterion tree — shares no classes, masks or conditions with the engine. The PRD §5.3 targets (15,174, 163,062, 43,092 and 3,411 of 658,008) were computed by an assignment search before any code, and are pinned. Windows and draw cards against the certain oracle, as exact fractions |
 | Scorer | Closed-form anchors (3 copies in 40, 5 drawn: $`1 - \binom{37}{5}/\binom{40}{5}`$, numerator exactly 222,111 of 658,008); **differential test against the Monte Carlo oracle** of §10.4 over generated problems, agreeing within 5 standard errors, with fixed seeds so the test is deterministic; complement storage must not change any numerator |
 | Lower bound | PRD §10's property test, scoped as PRD §6.3 requires: limit-free criteria never report above the true odds of a concrete fill; an adversarial fill under a limit must come out lower |
 | Optimizer | Class-vector enumeration vs naive score-every-raw-ratio on small templates: same best numerator, same tie sets, same sweep tables; the counting DP's `total` equals the number of vectors visited |

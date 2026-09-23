@@ -75,6 +75,12 @@ function slotsInject(
  * decide. A range in `A` alone is harmless: its ceilings only shrink the hands
  * `A` accepts, and `A`'s lower bounds still fill `B`'s slots.
  *
+ * A `B` with a `unique` requirement is given up on for the same reason: its
+ * rule that the cards differ is one more way for `B` to reject a hand `A`
+ * accepts, and slots cannot say it. A `unique` requirement in `A` alone is
+ * harmless and is read as the plain `n×` it contains: whatever cards a hand
+ * gives it are `n` cards of its description, which is all `B`'s slots need.
+ *
  * `true` is a proof. `false` is NOT a refutation — the condition is not
  * necessary: two limits of `A` never combine to cover one of `B` (`no monster
  * and no spell` against `no (monster or spell)`), an `A` that no hand can
@@ -133,7 +139,7 @@ function holdsOver(
   ctx: Implication,
   maxHandSize: number,
 ): boolean {
-  if (B.reqs.some(({ max }) => max !== undefined)) return false;
+  if (B.reqs.some(({ max, unique }) => max !== undefined || unique === true)) return false;
   const holds = relationOf(ctx);
   const covered = B.limits.every(
     (b) => b.n >= maxHandSize || A.limits.some((a) => a.n <= b.n && holds(b.desc, a.desc)),

@@ -30,6 +30,11 @@ export interface GenExprOptions {
    * `finally C` alike.
    */
   wholeChance?: number;
+  /**
+   * How often a plain requirement is `n× unique` — `n` DIFFERENT cards. 0 by
+   * default, and for the same reason: the draw is not taken where it is 0.
+   */
+  uniqueChance?: number;
 }
 
 /**
@@ -72,7 +77,10 @@ function genLeaf(rng: Rng, options: GenExprOptions): Expr {
     const n = rng.pick([0, 0, 1, 1, 1, 2]);
     return { op: 'req', n, max: n + rng.pick([0, 0, 1, 1, 2]), desc };
   }
-  return { op: 'req', n: rng.pick([1, 1, 1, 1, 1, 1, 2, 2, 3]), desc };
+  const n = rng.pick([1, 1, 1, 1, 1, 1, 2, 2, 3]);
+  const uniqueChance = options.uniqueChance ?? 0;
+  if (uniqueChance > 0 && rng.chance(uniqueChance)) return { op: 'req', n, unique: true, desc };
+  return { op: 'req', n, desc };
 }
 
 function genNode(rng: Rng, options: GenExprOptions, depth: number, parent?: 'and' | 'or'): Expr {

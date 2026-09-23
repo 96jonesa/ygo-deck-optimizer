@@ -21,6 +21,34 @@ function errors(value: unknown): string[] {
 const REQ = { op: 'req', n: 1, desc: { anyOf: [{ t: 'clause', clause: { kinds: ['monster'] } }] } };
 
 describe('validateExpr', () => {
+  describe('a unique requirement', () => {
+    it('accepts what the parser produces, and gives it back canonical', () => {
+      for (const text of [
+        '3x unique monster',
+        '1x #89631139 and 2x unique monster',
+        'then 1x unique trap',
+      ])
+        expect(errors(ast(text)), text).toEqual([]);
+      const result = validateExpr({ desc: REQ.desc, unique: true, n: 2, op: 'req' }, 'expr');
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      expect(Object.keys(result.expr)).toEqual(['op', 'n', 'unique', 'desc']);
+    });
+
+    it('refuses `unique` that is not `true`, beside a ceiling, of no cards, or on a limit', () => {
+      expect(errors({ ...REQ, unique: false })).toEqual([
+        'expr: `unique` is `true` or left out, not false',
+      ]);
+      expect(errors({ ...REQ, unique: 'yes' })[0]).toContain('not "yes"');
+      expect(errors({ ...REQ, max: 2, unique: true })).toEqual([
+        'expr: a `unique` requirement takes no `max`; it asks for at least `n` different cards',
+      ]);
+      expect(errors({ ...REQ, n: 0, unique: true })[0]).toContain('at least 1 card, not 0');
+      expect(errors({ ...REQ, op: 'atMost', unique: true })).toEqual([
+        'expr: a limit counts copies and has no `unique`',
+      ]);
+    });
+  });
+
   describe('a split', () => {
     it('accepts what the parser produces, either side present or not', () => {
       for (const text of [

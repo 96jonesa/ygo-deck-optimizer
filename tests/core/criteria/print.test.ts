@@ -227,6 +227,15 @@ describe('printCriterion', () => {
     }
   });
 
+  it('prints a `unique` requirement as `nx unique`, where it was typed', () => {
+    expect(printCriterion({ op: 'req', n: 3, unique: true, desc: d('#1 or #2') }, ctx)).toBe(
+      '3x unique (#1 or #2)',
+    );
+    expect(
+      printCriterion(and(req(1, '#1'), { op: 'req', n: 2, unique: true, desc: d('monster') }), ctx),
+    ).toBe('1x #1 and 2x unique monster');
+  });
+
   it('prints a limit as at most, and as no when nothing is allowed', () => {
     expect(printCriterion(atMost(2, 'trap'), ctx)).toBe('at most 2x trap');
     expect(printCriterion(atMost(1, '#2'), ctx)).toBe('at most 1x #2');
@@ -315,6 +324,25 @@ describe('parseCriterion/printCriterion round trip (E3)', () => {
     expect(ranges).toBeGreaterThan(2000);
     // Equal bounds print as `exactly nx`, so the round trip above covers both spellings.
     expect(equal).toBeGreaterThan(500);
+  });
+
+  it('round-trips 3,000 generated criteria that include `unique` requirements, key order and all', () => {
+    const rng = seededRng(0xe3e3d01e);
+    let uniques = 0;
+    const counts = (expr: Expr): number => {
+      if (expr.op === 'and' || expr.op === 'or')
+        return expr.args.reduce((sum, arg) => sum + counts(arg), 0);
+      return expr.op === 'req' && expr.unique === true ? 1 : 0;
+    };
+    for (let i = 0; i < 3000; i++) {
+      const expr = genExpr(rng, { ...options, rangeChance: 0.2, uniqueChance: 0.5 });
+      uniques += counts(expr);
+      const text = printCriterion(expr, ctx);
+      const result = parseCriterion(text, ctx);
+      expect(result, `case ${i}: ${text}`).toEqual({ ok: true, expr });
+      if (result.ok) expect(JSON.stringify(result.expr), text).toBe(JSON.stringify(expr));
+    }
+    expect(uniques).toBeGreaterThan(1500);
   });
 
   it('parses the canonical text of 3,000 generated criteria back to the same AST', () => {

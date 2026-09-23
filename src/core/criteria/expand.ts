@@ -97,19 +97,37 @@ const nothing = (): Parts => ({ reqs: new Map(), limits: new Map() });
 /**
  * Descriptions are merged when they are structurally identical and never when
  * they merely mean the same (TDD §5.1): canonical JSON is the identity.
+ *
+ * A `unique` requirement is keyed apart — `#0 ` and the JSON, the number being
+ * which `unique` requirement on that description it is — because it is NEVER
+ * merged, with a plain requirement or with another `unique` one (`merged`).
  */
-function leafOf<T extends Counted>(counted: T): Map<string, T> {
+function leafOf<T extends Counted & { unique?: true }>(counted: T): Map<string, T> {
   const desc = canonicalize(counted.desc);
-  return new Map([[JSON.stringify(desc), { ...counted, desc }]]);
+  const key = JSON.stringify(desc);
+  return new Map([[counted.unique === true ? `#0 ${key}` : key, { ...counted, desc }]]);
 }
 
-function merged<T extends Counted>(
+/** The description's JSON behind a requirement's key: a `unique` one's without its ordinal. */
+const descKeyOf = (key: string) => (key.startsWith('#') ? key.slice(key.indexOf(' ') + 1) : key);
+
+function merged<T extends Counted & { unique?: true }>(
   a: Map<string, T>,
   b: Map<string, T>,
   combine: (earlier: T, later: T) => T,
 ): Map<string, T> {
   const out = new Map(a);
   for (const [key, later] of b) {
+    // Two `unique` requirements on one description are NOT one requirement of
+    // their sum: `2x unique S and 1x unique S` lets the second take another copy
+    // of a card the first holds, which `3x unique S` forbids. So a `unique` one
+    // takes the first ordinal free, and never `combine`s.
+    if (later.unique === true) {
+      let ordinal = 0;
+      while (out.has(`#${ordinal} ${descKeyOf(key)}`)) ordinal++;
+      out.set(`#${ordinal} ${descKeyOf(key)}`, later);
+      continue;
+    }
     const earlier = out.get(key);
     out.set(key, earlier === undefined ? later : combine(earlier, later));
   }
@@ -149,8 +167,15 @@ function both(a: Draft, b: Draft): Draft {
 
 /** Equal for two drafts exactly when they ask the same, in whatever order. */
 function identityOf(draft: Draft): string {
+  // A `unique` requirement enters by its description and not its ordinal, so
+  // `1x unique S and 2x unique S` and its reverse are one alternative.
   const sideOf = ({ reqs, limits }: Parts) => [
-    [...reqs].map(([key, { n, max }]) => `${n}-${max ?? ''}x${key}`).sort(),
+    [...reqs]
+      .map(
+        ([key, { n, max, unique }]) =>
+          `${n}-${max ?? ''}${unique === true ? 'u' : ''}x${descKeyOf(key)}`,
+      )
+      .sort(),
     [...limits].map(([key, { n }]) => `${n}x${key}`).sort(),
   ];
   // Every window is part of what the alternative ASKS, so two alternatives
@@ -271,9 +296,11 @@ function alternativesOf(expr: Expr): Draft[] {
       // rules out leftovers, so it stays.
       const asks = expr.n > 0 || expr.max !== undefined;
       const leaf: CountedRange =
-        expr.max === undefined
-          ? { n: expr.n, desc: expr.desc }
-          : { n: expr.n, max: expr.max, desc: expr.desc };
+        expr.unique === true
+          ? { n: expr.n, unique: true, desc: expr.desc }
+          : expr.max === undefined
+            ? { n: expr.n, desc: expr.desc }
+            : { n: expr.n, max: expr.max, desc: expr.desc };
       return [{ reqs: asks ? leafOf(leaf) : new Map(), limits: new Map() }];
     }
     case 'atMost':
@@ -298,7 +325,10 @@ function alternativesOf(expr: Expr): Draft[] {
  * 1. `and` is distributed over `or`. Within each alternative, requirements
  *    with structurally identical descriptions are merged by `bothReqs` —
  *    lower bounds add, ceilings add, and an unbounded one voids the ceiling —
- *    limits by keeping the smaller; nothing is merged semantically.
+ *    limits by keeping the smaller; nothing is merged semantically. A `unique`
+ *    requirement is merged with NOTHING, which is the one exception: two of
+ *    them are not one of their sum, and one beside a plain requirement is not
+ *    a plain requirement.
  * 2. Duplicate alternatives are removed, whatever the order of their parts.
  *    This happens throughout the distribution, and the cap is on what is left:
  *    more than `MAX_FLAT_CRITERIA` DISTINCT alternatives at any point is an

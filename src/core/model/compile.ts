@@ -63,7 +63,38 @@ export interface ResolvedLine {
   max: number | null;
   /** Set when the line's cards DRAW (PRD §5.7). */
   draw?: DrawSpec;
+  /**
+   * The ONE card the line names (`soleCard`), by passcode: set for a picked
+   * card, `[Name]` and `#passcode`, and left out for a line that could be any
+   * of several cards — a group, an `or`, anything generic, and the remainder.
+   * It is the card's IDENTITY for a `unique` requirement (TDD §8).
+   */
+  card?: number;
 }
+
+/**
+ * The one card `desc` names, or `undefined` when it could be any of several —
+ * which a `unique` requirement cannot count, since how many DIFFERENT cards
+ * such a line holds is unknown. One alternative, a card: `[Ash Blossom]`,
+ * `#14558127`, a picked card. A group names several even when it holds one
+ * member today, so `{Starter}` is never one card: what it means must not turn
+ * on how full the group happens to be.
+ */
+export function soleCard(desc: Description): number | undefined {
+  const [only] = desc.anyOf;
+  return desc.anyOf.length === 1 && only?.t === 'card' ? only.passcode : undefined;
+}
+
+/**
+ * Why a line that could fill a `unique` requirement is refused when it does not
+ * name ONE card — in the one wording `compileProblem` and `analyze` both use.
+ */
+export const VAGUE_FOR_UNIQUE =
+  'could be any of several cards, so how many different ones it holds is unknown — split it into one line per card to use it in a `unique` requirement';
+
+/** The same, for the unspecified cards, which cannot be split into lines of their own. */
+export const VAGUE_REMAINDER_FOR_UNIQUE =
+  'the unspecified cards could be any cards at all, so how many different ones they hold is unknown — a `unique` requirement cannot count them; give the cards it should count lines of their own, one line per card';
 
 /** A distinct description of some requirement or limit: one column of the match matrix. */
 export interface ResolvedDescription {
@@ -85,9 +116,13 @@ export interface ResolvedCounted {
   desc: number;
 }
 
-/** A requirement: `n` cards at least, and `max` at most when it was written `a-b×`. */
+/**
+ * A requirement: `n` cards at least, and `max` at most when it was written
+ * `a-b×` — or, `unique`, `n` DIFFERENT cards and no ceiling (`n× unique D`).
+ */
 export interface ResolvedRange extends ResolvedCounted {
   max?: number;
+  unique?: true;
 }
 
 /** One side of a resolved alternative: requirements and limits over columns. */
@@ -213,8 +248,9 @@ export function indexFlat(
   stopOf: (at: number) => boolean = () => false,
 ): ResolvedFlat[] {
   const side = ({ reqs, limits }: Pick<FlatCriterion, 'reqs' | 'limits'>): ResolvedSide => ({
-    reqs: reqs.map(({ n, max, desc }) => {
+    reqs: reqs.map(({ n, max, unique, desc }) => {
       const column = columnOf(desc, 'inRequirement');
+      if (unique === true) return { n, unique: true, desc: column };
       return max === undefined ? { n, desc: column } : { n, max, desc: column };
     }),
     limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc, 'inLimit') })),
@@ -324,6 +360,7 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
     // A generic line needs no existing card: it states what its cards are known to be, not
     // which cards exist (PRD §5.1). `count` is reported, and analyze() notes a zero.
     const count = ctx.cards.count(matcher(desc, members));
+    const card = soleCard(desc);
     lines.push({
       id: line.id,
       isRemainder: false,
@@ -336,6 +373,9 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
       // What a line DRAWS travels with it into the classes, where it is part of
       // the class key: a draw line is never merged into the blank class.
       ...(line.draw === undefined ? {} : { draw: line.draw }),
+      // And which ONE card it is, where it is one: a `unique` requirement tells
+      // cards apart by it.
+      ...(card === undefined ? {} : { card }),
     });
   }
   lines.push({
@@ -558,6 +598,11 @@ export interface CompileInput {
     max: number | null;
     /** Set when the line's cards DRAW (PRD §5.7). */
     draw?: DrawSpec;
+    /**
+     * The one card the line names, by passcode (`soleCard`): its identity for a
+     * `unique` requirement. A line that FILLS one and has none is an error.
+     */
+    card?: number;
   }[];
   /** `matrix[line][description]`, one row per entry of `lines`. */
   matrix: readonly (readonly boolean[])[];
@@ -721,7 +766,13 @@ export function compileCriterion(
     /** Stamped on what this window drops, so a readout can say which window it was. */
     from: { sixth?: true; whole?: true },
   ): SixthCard => {
-    const compiled = side.reqs.map(({ n, max, desc }): CompiledRequirement => {
+    // A `unique` requirement stands apart from the plain ones: its cards may not
+    // repeat a class, which no slot can say (`CompiledUnique`).
+    const plain = side.reqs.filter(({ unique }) => unique !== true);
+    const uniques = side.reqs.flatMap(({ n, unique, desc }) =>
+      unique === true ? [{ mask: maskOf(desc), n }] : [],
+    );
+    const compiled = plain.map(({ n, max, desc }): CompiledRequirement => {
       const mask = maskOf(desc);
       if (max === undefined) return { mask, min: n, max: null };
       const reason = mask === 0 ? 'counts-nothing' : max >= room ? 'never-binds' : undefined;
@@ -742,6 +793,7 @@ export function compileCriterion(
     // Left out when nothing is left to say: `slots` alone is the criterion the
     // language had before ranges, and the matcher's old path judges it.
     if (compiled.some(({ max }) => max !== null)) part.reqs = compiled;
+    if (uniques.length > 0) part.uniques = uniques;
     return part;
   };
 
@@ -886,6 +938,40 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
   const seen = columnsOf((at) => mine.has(at));
   const dead = new Set([...columnsOf((at) => !mine.has(at))].filter((desc) => !seen.has(desc)));
 
+  /** The columns some `unique` requirement of the chosen alternatives asks for, in any window. */
+  const uniqueColumnsOf = (which: (at: number) => boolean): number[] => {
+    const out = new Set<number>();
+    flat.forEach((alternative, at) => {
+      if (!which(at)) return;
+      for (const side of [alternative, alternative.sixth, alternative.whole])
+        for (const { unique, desc } of side?.reqs ?? []) if (unique === true) out.add(desc);
+    });
+    return [...out];
+  };
+  // A line that could fill a `unique` requirement must be ONE card, or how many
+  // different cards it holds is unknown. Over EVERY alternative and not only the
+  // judged ones: the criterion is wrong as written whichever hand it is for, and
+  // `analyze` says so on the line whatever the mode.
+  const everyUnique = uniqueColumnsOf(() => true);
+  lines.forEach(({ id, isRemainder, card }, line) => {
+    if (card !== undefined || !everyUnique.some((desc) => matrix[line]![desc])) return;
+    errors.push(
+      isRemainder ? VAGUE_REMAINDER_FOR_UNIQUE : `line ${JSON.stringify(id)} ${VAGUE_FOR_UNIQUE}`,
+    );
+  });
+  if (errors.length > 0) return { ok: false, errors };
+  /**
+   * The columns whose lines get an IDENTITY (TDD §8): a `unique` requirement of
+   * an alternative this run judges takes at most one card of each class, which
+   * is "one card of each CARD" only if every class it can take is one card. So a
+   * line filling one keys its class by its passcode as well — different cards
+   * part, and two lines naming the same card still merge.
+   *
+   * Only where this run judges such a requirement, so that every run without one
+   * keeps the partition, and the answer, it always had.
+   */
+  const identifying = uniqueColumnsOf((at) => mine.has(at));
+
   for (const { id, min, max } of lines) {
     const isCount = (value: number) => Number.isInteger(value) && value >= 0;
     if (!isCount(min) || (max !== null && (!isCount(max) || min > max)))
@@ -898,7 +984,9 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
   const blank: CompiledClassInfo = { lines: [], min: 0, max: 0, fills: [] };
   const classes = [blank];
   const classOfRow = new Map<string, number>();
-  const classOfLine = lines.map(({ id, min, max, draw }, line) => {
+  /** The class keys WITHOUT identities: what `MAX_CLASSES` would count had no `unique` split them. */
+  const unidentified = new Set<string>();
+  const classOfLine = lines.map(({ id, min, max, draw, card }, line) => {
     const row = matrix[line]!;
     // A description only the other hand's criteria mention distinguishes
     // nothing this run can see (`dead`), so it splits no class here.
@@ -915,11 +1003,14 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
       draw === undefined
         ? ''
         : `|draws ${draw.n}${draw.oncePerTurn === true ? ` once per turn as ${id}` : ''}`;
-    const key = `${fills.join(',')}${drawKey}`;
+    const identity =
+      card !== undefined && identifying.some((desc) => row[desc]) ? `|card ${card}` : '';
+    const key = `${fills.join(',')}${drawKey}${identity}`;
     let cls = fills.length === 0 && draw === undefined ? 0 : classOfRow.get(key);
     if (cls === undefined) {
       cls = classes.length;
       classOfRow.set(key, cls);
+      unidentified.add(`${fills.join(',')}${drawKey}`);
       classes.push({ lines: [], min: 0, max: 0, fills, ...(draw === undefined ? {} : { draw }) });
     }
     const member = { id, line, min, max: max ?? Math.max(deckSize, min) };
@@ -929,13 +1020,22 @@ export function compileProblem(input: CompileInput, opts: CompileOptions = {}): 
     into.max += member.max;
     return cls;
   });
-  if (classes.length > MAX_CLASSES)
+  if (classes.length > MAX_CLASSES) {
+    // A `unique` requirement makes every card it can take a class of its own,
+    // which is the one way to pass the cap that "merge lines" cannot fix — so
+    // say it is why, when it is.
+    const without = unidentified.size + 1;
+    const because =
+      without <= MAX_CLASSES
+        ? ` — a \`unique\` requirement makes every different card it can take a class of its own, which is what takes it past; without that it would be ${without}`
+        : ' — merge lines, or drop requirements that split them';
     return {
       ok: false,
       errors: [
-        `the criteria tell ${classes.length} classes of card apart, the blank class included; the engine scores at most ${MAX_CLASSES} — merge lines, or drop requirements that split them`,
+        `the criteria tell ${classes.length} classes of card apart, the blank class included; the engine scores at most ${MAX_CLASSES}${because}`,
       ],
     };
+  }
 
   // The ROOM each window of a criterion is judged in: the largest any part of
   // this run can hold, which draw cards make larger than the hand size. It is

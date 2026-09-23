@@ -24,11 +24,11 @@ import { createPrng } from '../../src/core/util/prng';
 /** A criterion as the oracle reads it: the compiled one, judged by hand. */
 type OracleCriterion = Pick<
   CompiledCriterion,
-  'limits' | 'reqs' | 'slots' | 'weight' | 'stop' | 'sixth' | 'whole'
+  'limits' | 'reqs' | 'slots' | 'uniques' | 'weight' | 'stop' | 'sixth' | 'whole'
 >;
 
 /** One window of a criterion: the whole hand, the cards opened on, or the drawn set. */
-type Window = Pick<CompiledCriterion, 'limits' | 'reqs' | 'slots'>;
+type Window = Pick<CompiledCriterion, 'limits' | 'reqs' | 'slots' | 'uniques'>;
 
 /**
  * What a criterion is read against. A plain list is ONE window — the hand — and
@@ -72,7 +72,8 @@ const accepts = (mask: number, cls: number) => ((mask >>> cls) & 1) === 1;
  * Every card is offered to each requirement that accepts it and still has room,
  * and then to none at all — which only a card no CEILING would have counted may
  * be, since a ceiling is a census and cannot look away from a card it matches.
- * Limits are a census over the window.
+ * Limits are a census over the window. A `unique` requirement takes at most one
+ * card of each CLASS, which `compileProblem` makes one card.
  */
 function meetsWindow(window: Window, hand: readonly number[]): boolean {
   for (const { mask, n } of window.limits) {
@@ -82,9 +83,15 @@ function meetsWindow(window: Window, hand: readonly number[]): boolean {
   }
   const reqs = requirementsOf(window);
   const capped = reqs.filter(({ max }) => max !== Number.POSITIVE_INFINITY);
+  const uniques = window.uniques ?? [];
   const taken = reqs.map(() => 0);
+  const holding = uniques.map(() => new Set<number>());
   const place = (at: number): boolean => {
-    if (at === hand.length) return reqs.every((req, i) => taken[i]! >= req.min);
+    if (at === hand.length)
+      return (
+        reqs.every((req, i) => taken[i]! >= req.min) &&
+        uniques.every(({ n }, i) => holding[i]!.size >= n)
+      );
     const cls = hand[at]!;
     for (let i = 0; i < reqs.length; i++) {
       const req = reqs[i]!;
@@ -92,6 +99,13 @@ function meetsWindow(window: Window, hand: readonly number[]): boolean {
       taken[i]!++;
       const done = place(at + 1);
       taken[i]!--;
+      if (done) return true;
+    }
+    for (let i = 0; i < uniques.length; i++) {
+      if (!accepts(uniques[i]!.mask, cls) || holding[i]!.has(cls)) continue;
+      holding[i]!.add(cls);
+      const done = place(at + 1);
+      holding[i]!.delete(cls);
       if (done) return true;
     }
     return capped.every((req) => !accepts(req.mask, cls)) && place(at + 1);
@@ -237,6 +251,9 @@ export interface OracleResult {
   weight: number;
   /** P(at least one criterion). */
   p: number;
+  /** `p` as the exact fraction it is, for `exhaustive`: `hits` of `orders`. */
+  hits?: number;
+  orders?: number;
   /** Prefix length to its probability; the lengths the process actually reaches. */
   lengths: Map<number, number>;
   /** Orders in which the deck ran out. */
@@ -281,6 +298,8 @@ export function exhaustive(problem: Problem, n: readonly number[], H: number): O
   return {
     weight: weighted / total,
     p: hits / total,
+    hits,
+    orders: total,
     lengths: new Map([...lengths].map(([at, count]) => [at, count / total])),
     deckOuts: deckOuts / total,
   };

@@ -33,6 +33,16 @@ const MAX_DEPTH = 32;
 const TERM_EXAMPLES =
   'a requirement such as `1x level 4 monster`, or a limit such as `at most 1x trap` or `no trap`';
 
+/**
+ * Why `unique` cannot stand with a ceiling — `exactly 3x unique`, `1-3x unique`
+ * — in the one wording both are refused in. A ceiling on how many DIFFERENT
+ * cards a hand holds would have to say what becomes of the cards it leaves over,
+ * and that is a question of its own, so `unique` is a floor and nothing else.
+ */
+function uniqueHasNoCeiling(n: number): string {
+  return `\`unique\` asks for at least so many DIFFERENT cards and takes no ceiling: write \`${n}x unique …\``;
+}
+
 /** Internal control flow only: `parseCriterion` catches it and never lets it escape. */
 class Failure {
   constructor(
@@ -277,6 +287,11 @@ class Parser {
    * a count — `isBareCount` has taken every other one for a count already.
    */
   private missingCount(token: CriterionToken): Failure {
+    if (token.t === 'unique')
+      return new Failure(
+        '`unique` needs a count before it, as in `3x unique {starter}`: how many different cards',
+        token.span,
+      );
     if (token.t === 'hex')
       return new Failure(
         `\`${this.textOf(token)}\` reads as a hex code; put a space after the \`x\` of a count, as in \`0x dark monster\``,
@@ -324,7 +339,10 @@ class Parser {
 
   private leaf(word: TokenOf<'count' | 'atMost' | 'no' | 'exactly'>): Expr {
     this.next();
-    if (word.t === 'no') return { op: 'atMost', n: 0, desc: this.description() };
+    if (word.t === 'no') {
+      this.refuseUniqueLimit(word, 'no …');
+      return { op: 'atMost', n: 0, desc: this.description() };
+    }
     if (word.t === 'count') return this.requirement(word);
     if (word.t === 'exactly') {
       // `exactly` names one number and means it twice, so a range after it says two things at once.
@@ -334,6 +352,12 @@ class Parser {
           `\`exactly\` names one count: write \`exactly ${counted.n}x …\`, or make it the range \`${counted.n}-${counted.max}x …\``,
           counted.span,
         );
+      const unique = this.peek();
+      if (unique?.t === 'unique')
+        throw new Failure(uniqueHasNoCeiling(counted.n), {
+          start: word.span.start,
+          end: unique.span.end,
+        });
       return this.requirement({ ...counted, max: counted.n });
     }
 
@@ -344,7 +368,23 @@ class Parser {
         `a limit has one ceiling: write \`at most ${counted.max}x …\`, or make it the requirement \`${counted.n}-${counted.max}x …\``,
         counted.span,
       );
+    this.refuseUniqueLimit(word, `at most ${counted.n}x …`);
     return { op: 'atMost', n: this.checked(counted.n, counted.span), desc: this.description() };
+  }
+
+  /**
+   * A limit is a census of COPIES, and `unique` is a floor on different cards:
+   * `at most 2x unique …` and `no unique …` would be ceilings on distinctness,
+   * which the language does not have. The cursor is where the description of
+   * the limit `word` starts.
+   */
+  private refuseUniqueLimit(word: CriterionToken, rewrite: string): void {
+    const unique = this.peek();
+    if (unique?.t !== 'unique') return;
+    throw new Failure(
+      `a limit counts copies and takes no \`unique\`: write \`${rewrite}\` to limit copies, or a requirement such as \`2x unique …\` to ask for different cards`,
+      { start: word.span.start, end: unique.span.end },
+    );
   }
 
   /**
@@ -382,16 +422,24 @@ class Parser {
     };
   }
 
-  /** `n×`, `a-b×` or `exactly n×` already made `[n, n]`, and the description that follows it. */
+  /**
+   * `n×`, `a-b×` or `exactly n×` already made `[n, n]`, and the description that
+   * follows it — with `unique` between the two where the cards must differ.
+   */
   private requirement(word: TokenOf<'count'>): Expr {
     const n = this.checked(word.n, word.span);
+    const unique = this.peek()?.t === 'unique' ? this.next() : undefined;
+    if (unique !== undefined && word.max !== undefined)
+      throw new Failure(uniqueHasNoCeiling(n), { start: word.span.start, end: unique.span.end });
     if (word.max === undefined) {
       if (n < 1)
         throw new Failure(
           'a requirement needs at least 1 card; to rule cards out, write `no …` or `at most 1x …`',
           word.span,
         );
-      return { op: 'req', n, desc: this.description() };
+      return unique === undefined
+        ? { op: 'req', n, desc: this.description() }
+        : { op: 'req', n, unique: true, desc: this.description() };
     }
     const max = this.checked(word.max, word.span);
     if (max < n) throw new Failure(`a range runs low to high: write \`${max}-${n}x\``, word.span);
@@ -431,6 +479,17 @@ class Parser {
           token.t === 'then'
             ? "`then` separates the five cards you open on from the one you draw and cannot stand inside a description's parentheses; close the `)` first"
             : "`finally` separates the cards you were dealt from the whole hand they make and cannot stand inside a description's parentheses; close the `)` first",
+          token.span,
+        );
+      } else if (token.t === 'unique') {
+        // It belongs straight after a count, and a count has taken every one of
+        // those already: this one is inside a description.
+        const hint =
+          this.tokens[end - 2]?.t === 'or' && isBareCount(this.tokens[end - 1])
+            ? '; a count after `or` keeps its `x`, as in `or 3x unique {starter}`'
+            : '';
+        throw new Failure(
+          `\`unique\` goes straight after a count, as in \`3x unique {starter}\`${hint}`,
           token.span,
         );
       } else if (token.t === 'and' || isTermWord(token)) {
@@ -517,6 +576,12 @@ class Parser {
  * the very node `n-nx` parses to, so no later pass can tell the two apart. It
  * belongs to requirements alone — a limit has one ceiling already, and there
  * is no census that means "exactly".
+ *
+ * `n unique D` — `x` optional as ever — asks for `n` DIFFERENT cards of `D`. It
+ * is a FLOOR and nothing else: `exactly 3x unique`, `1-3x unique`, `at most 2x
+ * unique` and `no unique` are all refused with the span of the count and the
+ * word, since a ceiling on how many different cards a hand holds would have to
+ * say what becomes of the rest.
  */
 export function parseCriterion(
   text: string,

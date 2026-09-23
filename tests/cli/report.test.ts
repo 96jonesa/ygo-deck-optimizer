@@ -17,6 +17,7 @@ import {
 } from '../../src/cli/report';
 import { analyze } from '../../src/core/model/analyze';
 import type { TemplateLine } from '../../src/core/model/template';
+import { CODE } from '../helpers/fixture-cards';
 import { templateOf } from '../helpers/gen-template';
 import { motivatingContext, motivatingTemplate } from '../helpers/motivating';
 
@@ -142,6 +143,18 @@ describe('matchingSection', () => {
     expect(exact).toMatch(/^ {2}requirement +exactly 2x monster +\[Monster\] +filled by: m$/m);
     // The same criterion spelt as the range prints the same row: one AST, one text.
     expect(matchingSection(analyze(templateOf(lines, ['2-2x monster']), ctx))).toEqual(exact);
+  });
+
+  it('tells a `unique` requirement apart from the plain count of the same number', () => {
+    const lines = [
+      { id: 'a', card: { passcode: CODE.vanillaDragon, name: 'a' }, min: 0, max: 3 },
+      { id: 'b', card: { passcode: CODE.tunerFairy, name: 'b' }, min: 0, max: 3 },
+    ];
+    const text = `#${CODE.vanillaDragon} or #${CODE.tunerFairy}`;
+    const both = matchingSection(
+      analyze(templateOf(lines, [`2 unique ${text}`, `2x ${text}`]), ctx),
+    );
+    expect(both).toMatch(/^ {2}requirement +2x \/ 2x unique #\d+ or #\d+ /m);
   });
 
   it('writes each distinct count a requirement appears under, ranges included', () => {

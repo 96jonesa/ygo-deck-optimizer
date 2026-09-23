@@ -1,6 +1,7 @@
 import {
   type CompiledCriterion,
   type CompiledRequirement,
+  type CompiledUnique,
   isSplit,
   MAX_HAND,
   maxCriterionWeight,
@@ -47,6 +48,38 @@ import {
  * cards. Exact, both ways.
  *
  * A criterion with no ceiling never builds (B) and never looks for it.
+ *
+ * ---------------------------------------------------------------------------
+ * UNIQUE. A requirement written `n× unique D` takes `n` cards no two of which
+ * are the same card, and `compileProblem` makes every card it can take a class
+ * of its own — so it is a requirement node of demand `n` whose edge from each
+ * class in its mask carries AT MOST ONE card:
+ *
+ *     class c -> unique u   in [0, 1]      when c is in the mask of u
+ *     unique u -> sink      in [n_u, inf)
+ *
+ * The cut argument goes through with that one capacity changed. For a set `T`
+ * of requirement nodes — each slot of a plain requirement, each `unique` one
+ * whole — a class either sends its cards across (cost `h_c`) or keeps them and
+ * pays for its edges into `T`: unbounded if a plain slot of `T` accepts it, and
+ * otherwise ONE for each `unique` node of `T` that does. So (A) becomes
+ *
+ *   (A') for every T:  Σ_c min(h_c, cap_T(c)) >= Σ demand(T)
+ *
+ * which is Hall's condition when `T` holds no `unique` node. Beside a ceiling
+ * the same edge relieves (B) by one card per `unique` requirement accepting the
+ * class, since a trapped class may send that many elsewhere:
+ *
+ *   (B') for every Y:  Σ_{c trapped by Y} max(0, h_c − k_c) <= Σ_{i ∈ Y} b_i
+ *
+ * `k_c` being the number of `unique` requirements whose mask holds `c`. Both
+ * were checked against brute-force assignment of concrete cards on 40,000
+ * random instances, ceilings included, before any of this was written, and a
+ * test keeps checking them (`tests/core/prob/matcher.test.ts`). Capacities are
+ * whole numbers, so a feasible flow is still an assignment of whole cards.
+ *
+ * A criterion with no `unique` requirement builds none of it: `gale` is absent,
+ * and the loops above are the loops it always ran.
  */
 
 export interface MatcherOptions {
@@ -58,6 +91,7 @@ export interface MatcherOptions {
 export type Matcher = (h: ArrayLike<number>, H: number) => boolean;
 
 interface HallCriterion {
+  /** The cards its requirements ask for: slots, and every `unique` requirement's `n`. */
   slotCount: number;
   /** Hall's condition, one entry per DISTINCT union of slot masks: the classes, and the most slots that share them. */
   unions: Int32Array;
@@ -67,6 +101,29 @@ interface HallCriterion {
   /** Condition (B), one entry per DISTINCT trapped-class mask: the classes, and the most cards they may hold. */
   capMasks: Int32Array;
   caps: Int32Array;
+  /** Condition (A') in place of `unions` / `needs`, where there is a `unique` requirement. */
+  gale?: Gale;
+  /**
+   * For condition (B') beside a `unique` requirement: how many `unique`
+   * requirements accept each class, by class index. Absent without one.
+   */
+  uniqueCounts?: Uint8Array;
+}
+
+/**
+ * Condition (A'), one entry per DISTINCT pair of (plain-slot union, per-class
+ * `unique` counts) — the most demand of the subsets sharing it. A class's count
+ * is carried as LEVELS: `levels[j]` holds the classes outside `unions[i]` that
+ * at least `j + 1` of the subset's `unique` nodes accept, so that
+ * `Σ min(h_c, count_c)` is `Σ_j #{c ∈ levels[j] : h_c > j}` and never a loop
+ * over classes that are not there.
+ */
+interface Gale {
+  unions: Int32Array;
+  needs: Uint8Array;
+  /** `levels.slice(levelStart[i], levelStart[i + 1])` belong to entry `i`. */
+  levelStart: Int32Array;
+  levels: Int32Array;
 }
 
 /** The cards `h` holds of the classes in `mask`. */
@@ -110,13 +167,73 @@ function capsOf(reqs: readonly CompiledRequirement[]): Map<number, number> {
   return out;
 }
 
-function compileCriterion({ slots, limits, reqs }: SixthCard): HallCriterion {
+/**
+ * Condition (A') over every subset of the requirement NODES — each plain slot,
+ * and each `unique` requirement whole. Built only when `uniques` is not empty,
+ * and only when the cards asked for fit the largest hand: past it `meets`
+ * refuses the criterion without reading any of this.
+ */
+function galeOf(slots: readonly number[], uniques: readonly CompiledUnique[]): Gale {
+  const nodes = slots.length + uniques.length;
+  const byKey = new Map<string, { union: number; levels: number[]; need: number }>();
+  const counts = new Uint8Array(32);
+  for (let subset = 1; subset < 1 << nodes; subset++) {
+    let union = 0;
+    let need = 0;
+    counts.fill(0);
+    let most = 0;
+    for (let node = 0; node < nodes; node++) {
+      if (((subset >>> node) & 1) === 0) continue;
+      if (node < slots.length) {
+        union |= slots[node]!;
+        need++;
+        continue;
+      }
+      const { mask, n } = uniques[node - slots.length]!;
+      need += n;
+      for (let rest = mask; rest !== 0; rest &= rest - 1) {
+        const cls = 31 - Math.clz32(rest & -rest);
+        counts[cls]!++;
+        if (counts[cls]! > most) most = counts[cls]!;
+      }
+    }
+    // A class some plain slot of the subset accepts can send it every card, so
+    // it counts in full through `union` and not through its levels.
+    const levels: number[] = [];
+    for (let level = 1; level <= most; level++) {
+      let mask = 0;
+      for (let cls = 0; cls < 32; cls++)
+        if (counts[cls]! >= level && ((union >>> cls) & 1) === 0) mask |= 1 << cls;
+      if (mask === 0) break;
+      levels.push(mask);
+    }
+    const key = `${union}|${levels.join(',')}`;
+    const known = byKey.get(key);
+    if (known === undefined) byKey.set(key, { union, levels, need });
+    else if (need > known.need) known.need = need;
+  }
+  const entries = [...byKey.values()];
+  const levelStart = new Int32Array(entries.length + 1);
+  entries.forEach(({ levels }, at) => {
+    levelStart[at + 1] = levelStart[at]! + levels.length;
+  });
+  return {
+    unions: Int32Array.from(entries, ({ union }) => union),
+    needs: Uint8Array.from(entries, ({ need }) => need),
+    levelStart,
+    levels: Int32Array.from(entries.flatMap(({ levels }) => levels)),
+  };
+}
+
+function compileCriterion({ slots, limits, reqs, uniques }: SixthCard): HallCriterion {
   const needOf = new Map<number, number>();
+  const slotCount = slots.length + (uniques ?? []).reduce((sum, { n }) => sum + n, 0);
+  const unique = uniques !== undefined && uniques.length > 0;
   // More slots than any hand holds is never met; its 2^slots subsets are never
   // built. The bound is the largest hand DRAW CARDS can build and not the
   // opening hand — `meets` refuses a criterion with more slots than the cards
   // it is given, so a hand of eight has to be able to meet a request for seven.
-  if (slots.length <= MAX_HAND) {
+  if (!unique && slots.length <= MAX_HAND) {
     const unionOf = new Int32Array(1 << slots.length);
     const sizeOf = new Uint8Array(1 << slots.length);
     for (let subset = 1; subset < 1 << slots.length; subset++) {
@@ -130,8 +247,8 @@ function compileCriterion({ slots, limits, reqs }: SixthCard): HallCriterion {
     }
   }
   const capOf = reqs === undefined ? new Map<number, number>() : capsOf(reqs);
-  return {
-    slotCount: slots.length,
+  const out: HallCriterion = {
+    slotCount,
     unions: Int32Array.from(needOf.keys()),
     needs: Uint8Array.from(needOf.values()),
     limitMasks: Int32Array.from(limits, ({ mask }) => mask),
@@ -139,20 +256,67 @@ function compileCriterion({ slots, limits, reqs }: SixthCard): HallCriterion {
     capMasks: Int32Array.from(capOf.keys()),
     caps: Int32Array.from(capOf.values()),
   };
+  if (!unique) return out;
+  // `uniques.length <= slotCount`, so the nodes number at most `MAX_HAND`.
+  if (slotCount <= MAX_HAND) out.gale = galeOf(slots, uniques);
+  if (capOf.size > 0) {
+    const counts = new Uint8Array(32);
+    for (const { mask } of uniques)
+      for (let rest = mask; rest !== 0; rest &= rest - 1) counts[31 - Math.clz32(rest & -rest)]!++;
+    out.uniqueCounts = counts;
+  }
+  return out;
+}
+
+/** Condition (A'): every subset of requirement nodes can be paid, a `unique` one a card per class. */
+function galeHolds({ unions, needs, levelStart, levels }: Gale, h: ArrayLike<number>): boolean {
+  for (let i = 0; i < unions.length; i++) {
+    let supply = held(h, unions[i]!);
+    for (let at = levelStart[i]!; at < levelStart[i + 1]!; at++) {
+      const level = at - levelStart[i]!;
+      for (let rest = levels[at]!; rest !== 0; rest &= rest - 1)
+        if (h[31 - Math.clz32(rest & -rest)]! > level) supply++;
+    }
+    if (supply < needs[i]!) return false;
+  }
+  return true;
 }
 
 function meets(criterion: HallCriterion, h: ArrayLike<number>, H: number): boolean {
   if (criterion.slotCount > H) return false;
-  const { unions, needs, limitMasks, limitCounts } = criterion;
+  const { unions, needs, limitMasks, limitCounts, gale } = criterion;
   for (let i = 0; i < limitMasks.length; i++)
     if (held(h, limitMasks[i]!) > limitCounts[i]!) return false;
+  if (gale !== undefined) return galeHolds(gale, h);
   for (let i = 0; i < unions.length; i++) if (held(h, unions[i]!) < needs[i]!) return false;
   return true;
 }
 
 /** Condition (B): no class is left holding more cards than the ceilings that alone can take them. */
-function withinCeilings({ capMasks, caps }: HallCriterion, h: ArrayLike<number>): boolean {
+function withinCeilings(
+  { capMasks, caps, uniqueCounts }: HallCriterion,
+  h: ArrayLike<number>,
+): boolean {
+  if (uniqueCounts !== undefined) return withinCeilingsBeside(capMasks, caps, uniqueCounts, h);
   for (let i = 0; i < capMasks.length; i++) if (held(h, capMasks[i]!) > caps[i]!) return false;
+  return true;
+}
+
+/** Condition (B'): as (B), less a card of each trapped class per `unique` requirement that takes it. */
+function withinCeilingsBeside(
+  capMasks: Int32Array,
+  caps: Int32Array,
+  uniqueCounts: Uint8Array,
+  h: ArrayLike<number>,
+): boolean {
+  for (let i = 0; i < capMasks.length; i++) {
+    let trapped = 0;
+    for (let rest = capMasks[i]!; rest !== 0; rest &= rest - 1) {
+      const cls = 31 - Math.clz32(rest & -rest);
+      trapped += Math.max(0, h[cls]! - uniqueCounts[cls]!);
+    }
+    if (trapped > caps[i]!) return false;
+  }
   return true;
 }
 

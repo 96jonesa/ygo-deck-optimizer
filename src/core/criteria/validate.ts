@@ -72,6 +72,8 @@ class ExprValidator {
         const n = this.count(where, 'n', value.n);
         if (value.max !== undefined)
           this.fail(`${where}: a limit has no \`max\`; \`at most n\` is the ceiling`);
+        if (value.unique !== undefined)
+          this.fail(`${where}: a limit counts copies and has no \`unique\``);
         return n === undefined || desc === undefined ? undefined : { op: 'atMost', n, desc };
       }
       case 'req': {
@@ -86,7 +88,23 @@ class ExprValidator {
             );
           else max = ceiling;
         }
+        // `unique` is `true` or absent — never `false`, which would stringify
+        // differently from the absent key every other AST carries — and it is a
+        // floor on different cards, so it takes neither a ceiling nor a count of 0.
+        let unique = false;
+        if (value.unique !== undefined) {
+          if (value.unique !== true)
+            this.fail(`${where}: \`unique\` is \`true\` or left out, not ${show(value.unique)}`);
+          else if (value.max !== undefined)
+            this.fail(
+              `${where}: a \`unique\` requirement takes no \`max\`; it asks for at least \`n\` different cards`,
+            );
+          else if (n === 0)
+            this.fail(`${where}: a \`unique\` requirement asks for at least 1 card, not 0`);
+          else unique = true;
+        }
         if (n === undefined || desc === undefined) return undefined;
+        if (unique) return { op: 'req', n, unique: true, desc };
         return max === undefined ? { op: 'req', n, desc } : { op: 'req', n, max, desc };
       }
       case 'split': {

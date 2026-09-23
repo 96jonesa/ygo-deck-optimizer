@@ -258,6 +258,14 @@ describe('CRITERION_SYNTAX', () => {
       expect(criterion('exactly 1x monster')).toEqual(criterion('1-1x monster'));
     });
 
+    it('makes `n unique` a requirement for different cards, and never merges it with another', () => {
+      expect(criterion('3 unique {starter}')).toEqual(criterion('3x unique {starter}'));
+      expect(criterion('3 unique {starter}')).toMatchObject({ op: 'req', n: 3, unique: true });
+      const expanded = expand(criterion('3x unique {starter}, 1x {extender}'), { maxHandSize: 6 });
+      // Four cards in all: the two requirements take theirs separately.
+      expect(expanded.ok && expanded.flat[0]!.reqs.map(({ n }) => n)).toEqual([3, 1]);
+    });
+
     it('gives a range requirement a ceiling as well as a floor', () => {
       expect(criterion('1-2x monster')).toMatchObject({ op: 'req', n: 1, max: 2 });
       expect(criterion('2x monster')).toMatchObject({ op: 'req', n: 2 });

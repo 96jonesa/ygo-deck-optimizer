@@ -226,6 +226,24 @@ describe('canonicalizeExpr', () => {
     expect(JSON.stringify(canonicalizeExpr(ranged))).toContain('"max":2');
   });
 
+  it('writes `unique` between the count and the description, and leaves it out when false', () => {
+    const messy = { desc: card(1), unique: true, n: 3, op: 'req' } as Expr;
+    expect(JSON.stringify(canonicalizeExpr(messy))).toBe(
+      JSON.stringify({ op: 'req', n: 3, unique: true, desc: card(1) }),
+    );
+    // `meaning.ts` calls a stored AST stale by stringifying it: every AST written
+    // before `unique` existed must come out byte for byte as it went in.
+    for (const old of [
+      { op: 'req', n: 1, desc: card(1) },
+      { op: 'req', n: 1, max: 2, desc: card(1) },
+      and(A, { op: 'atMost', n: 0, desc: card(2) }),
+    ] as Expr[])
+      expect(JSON.stringify(canonicalizeExpr(old))).toBe(JSON.stringify(old));
+    expect(
+      JSON.stringify(canonicalizeExpr({ op: 'req', n: 1, unique: undefined, desc: card(1) })),
+    ).toBe(JSON.stringify({ op: 'req', n: 1, desc: card(1) }));
+  });
+
   it('does not touch its argument', () => {
     const expr = and(A, and(B, or(C)));
     const before = JSON.stringify(expr);

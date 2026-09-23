@@ -17,9 +17,14 @@ export interface MatchCounted {
   desc: number;
 }
 
-/** A requirement: `n` cards at least, and — written `a-b×` — `max` at most. */
+/**
+ * A requirement: `n` cards at least, and — written `a-b×` — `max` at most. A
+ * `unique` one takes `n` cards no two of which are the same CARD, told apart by
+ * the passcode their line names (`MatchProblem.lines`).
+ */
 export interface MatchRange extends MatchCounted {
   max?: number;
+  unique?: true;
 }
 
 /** What the oracle needs of a resolved template; `ResolvedTemplate` satisfies it. */
@@ -33,8 +38,14 @@ export interface MatchProblem {
    * Parallel to `matrix`: what each line DRAWS (PRD §5.7), where it does.
    * Absent, or all absent, is every template without draw cards and the oracle
    * then deals a hand of `handSize` exactly as it always did.
+   *
+   * `card` is the passcode a line names, where it names one: what a `unique`
+   * requirement tells cards apart by. LINES are this oracle's unit, and two
+   * lines naming one passcode are copies of one card, so it cannot go by line.
+   * A line with none is its own card, which only matters to a template the
+   * engine refuses anyway.
    */
-  lines?: readonly { draw?: DrawSpec }[];
+  lines?: readonly { draw?: DrawSpec; card?: number }[];
 }
 
 /** One flat alternative, with the sixth card's own part when it is split. */
@@ -190,7 +201,7 @@ export function playOut(
 
 /** A criterion as the judge holds it: requirements with both bounds, and its limits. */
 interface JudgedCriterion {
-  reqs: { min: number; max: number; desc: number }[];
+  reqs: { min: number; max: number; unique: boolean; desc: number }[];
   /** `sum of the lower bounds`: fewer cards than this can never meet it. */
   needed: number;
   /** The descriptions of the requirements that HAVE a ceiling: a card matching one cannot be left over. */
@@ -216,7 +227,8 @@ interface JudgedCriterion {
  * The assignment is searched exhaustively over concrete cards, one card at a
  * time: each is offered to every requirement that matches it and still has
  * room, and then to no requirement at all — which is only allowed when no
- * capped requirement would have had to count it. With at most six cards that
+ * capped requirement would have had to count it. A `unique` requirement also
+ * refuses a card whose passcode it already holds. With at most six cards that
  * is instant, and it shares nothing with the exact matcher, which decides the
  * same question by counting classes against precomputed subset conditions.
  */
@@ -230,10 +242,13 @@ export function createJudge(
   const matches = Array.from({ length: columns }, (_, desc) =>
     problem.matrix.map((row) => row[desc] === true),
   );
+  /** Which CARD each line is, for a `unique` requirement: its passcode, or its own index. */
+  const cardOf = problem.matrix.map((_, line) => problem.lines?.[line]?.card ?? -1 - line);
   const judged = ({ reqs, limits }: Omit<MatchFlat, 'sixth' | 'whole'>): JudgedCriterion => {
-    const bounded = reqs.map(({ n, max, desc }) => ({
+    const bounded = reqs.map(({ n, max, unique, desc }) => ({
       min: n,
       max: max ?? Number.POSITIVE_INFINITY,
+      unique: unique === true,
       desc,
     }));
     return {
@@ -266,6 +281,8 @@ export function createJudge(
 
   const assigns = ({ reqs, capped }: JudgedCriterion, from: number, to: number): boolean => {
     const taken = reqs.map(() => 0);
+    /** The cards each `unique` requirement holds: it takes no second copy of one. */
+    const holding = reqs.map(() => [] as number[]);
     /** What the requirements still owe: the search gives up once the cards left cannot pay it. */
     let owed = reqs.reduce((sum, { min }) => sum + min, 0);
     const place = (position: number): boolean => {
@@ -275,9 +292,12 @@ export function createJudge(
       for (let at = 0; at < reqs.length; at++) {
         const req = reqs[at]!;
         if (taken[at]! >= req.max || !matches[req.desc]![line]) continue;
+        if (req.unique && holding[at]!.includes(cardOf[line]!)) continue;
         if (taken[at]! < req.min) owed--;
         taken[at]!++;
+        holding[at]!.push(cardOf[line]!);
         const done = place(position + 1);
+        holding[at]!.pop();
         taken[at]!--;
         if (taken[at]! < req.min) owed++;
         if (done) return true;

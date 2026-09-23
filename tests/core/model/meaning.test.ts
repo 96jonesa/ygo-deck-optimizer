@@ -127,6 +127,16 @@ describe('criterionMeaning', () => {
     );
   });
 
+  it('is silent about a stored `unique` requirement the text says, and flags one it no longer says', () => {
+    const three = { op: 'req' as const, n: 3, unique: true as const, desc: LEVEL_4 };
+    expect(
+      criterionMeaning({ id: 'c1', text: '3x unique level 4 monster', expr: three }, CTX),
+    ).toMatchObject({ ok: true, expr: three, stale: null });
+    // `3x` is not `3x unique`: the stored one runs, and the text is flagged.
+    const meant = criterionMeaning({ id: 'c1', text: '3x level 4 monster', expr: three }, CTX);
+    expect(meant.ok && meant.stale).toContain('the saved expression `3x unique level 4 monster`');
+  });
+
   it('runs the stored expression when the text no longer parses at all', () => {
     const meant = criterionMeaning({ id: 'c1', text: '1x level 4 monstr', expr: ONE_MONSTER }, CTX);
     expect(meant).toMatchObject({ ok: true, expr: ONE_MONSTER });

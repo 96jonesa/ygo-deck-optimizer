@@ -27,6 +27,9 @@ import {
   groupMembersOf,
   indexFlat,
   REMAINDER_ID,
+  soleCard,
+  VAGUE_FOR_UNIQUE,
+  VAGUE_REMAINDER_FOR_UNIQUE,
 } from './compile';
 import { criterionMeaning, lineMeaning } from './meaning';
 import {
@@ -78,6 +81,7 @@ export type IssueCode =
   | 'duplicate-card'
   | 'unsatisfiable'
   | 'group-missing-members'
+  | 'not-one-card'
   // a group
   | 'empty-group'
   // a requirement or a limit
@@ -165,6 +169,12 @@ export interface Appearance {
   n: number;
   /** A requirement's ceiling, when it was written `a-b×`; never set for a limit. */
   max?: number;
+  /**
+   * Whether the requirement is `n× unique`: `n` DIFFERENT cards. Like a ceiling
+   * it changes what the count means — `3x` and `3x unique` of one description
+   * are different rows — and like one it is never set for a limit.
+   */
+  unique?: true;
   /**
    * Whether it is asked of the SIXTH CARD rather than of the hand (PRD §5.6).
    * It changes what the row MEANS — `1x trap` of the card you draw is a
@@ -547,7 +557,7 @@ function flatText(flat: FlatCriterion, ctx: DescContext): string {
   };
   const sideText = ({ reqs, limits }: Pick<FlatCriterion, 'reqs' | 'limits'>): string => {
     const parts = [
-      ...reqs.map(({ n, max, desc }) => counted(countPrefix(n, max), desc)),
+      ...reqs.map(({ n, max, unique, desc }) => counted(countPrefix(n, max, unique), desc)),
       ...limits.map(({ n, desc }) => counted(n === 0 ? 'no' : `at most ${n}x`, desc)),
     ];
     return parts.join(', ');
@@ -701,8 +711,8 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       rows.push({ id: line.id, isRemainder: false, desc, canonical, at });
       ({ count, samples } = summarize(desc, members, ctx));
 
-      const [only] = desc.anyOf;
-      if (desc.anyOf.length === 1 && only?.t === 'card') namedCard.set(at, only.passcode);
+      const card = soleCard(desc);
+      if (card !== undefined) namedCard.set(at, card);
       if (!intersects(desc, UNIVERSE, impliesCtx)) {
         const empty = desc.anyOf.flatMap((alt) =>
           alt.t === 'group' && (members.get(alt.groupId)?.size ?? 0) === 0
@@ -912,12 +922,13 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
         side: FlatCriterion | NonNullable<FlatCriterion['sixth']>,
         where: { sixth?: true; whole?: true },
       ) => {
-        for (const { n, max, desc } of side.reqs)
+        for (const { n, max, unique, desc } of side.reqs)
           column(desc).required.push({
             criterion: criterion.id,
             alternative,
             n,
             ...(max === undefined ? {} : { max }),
+            ...(unique === true ? { unique } : {}),
             ...where,
           });
         for (const { n, desc } of side.limits)
@@ -1021,6 +1032,30 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       };
     });
 
+  // A line that could fill a `unique` requirement has to be ONE card: a group,
+  // an `or` or a generic line holds an unknown number of different cards, and
+  // the requirement cannot count them (PRD §5.3). The error is the LINE's, since
+  // splitting the line is the fix — once per line, naming what it fills.
+  /** Whether some line could fill a `unique` requirement without being one card. */
+  let vagueForUnique = false;
+  rows.forEach((row, i) => {
+    if (namedCard.has(row.at)) return;
+    const fills = columns.flatMap((col) => {
+      const unique = col.required.find((appearance) => appearance.unique === true);
+      return col.fills[i] && unique !== undefined
+        ? [`${countPrefix(unique.n, undefined, true)} ${col.text}`]
+        : [];
+    });
+    if (fills.length === 0) return;
+    vagueForUnique = true;
+    const because = `it could fill ${ticked(fills)}`;
+    if (row.isRemainder)
+      remainderIssues.push(error('not-one-card', `${VAGUE_REMAINDER_FOR_UNIQUE} (${because})`));
+    else
+      lines[row.at]!.issues.push(
+        error('not-one-card', `this line ${VAGUE_FOR_UNIQUE} (${because})`),
+      );
+  });
   const limits = columns
     .filter((col) => col.limited.length > 0)
     .map((col): LimitAnalysis => {
@@ -1200,8 +1235,11 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     cost,
   };
   let classes: ClassesAnalysis | null = null;
+  // A line too vague for a `unique` requirement is already an error on the
+  // line, and `compileProblem` would only say it again.
   const resolves =
     rows.length === template.lines.length + 1 &&
+    !vagueForUnique &&
     parsedCriteria.every((criterion) => criterion !== null && criterion.flat !== null);
   if (resolves) {
     const all = expandAll(
@@ -1217,12 +1255,14 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
         judgedHand,
         lines: rows.map((row) => {
           const draw = template.lines[row.at]?.draw;
+          const card = namedCard.get(row.at);
           return {
             id: row.id,
             isRemainder: row.isRemainder,
             min: ranges[row.at]!.min,
             max: row.isRemainder ? remainder.max : ranges[row.at]!.max,
             ...(draw === undefined ? {} : { draw }),
+            ...(card === undefined ? {} : { card }),
           };
         }),
         matrix: rows.map((_, i) => columns.map((col) => col.fills[i]!)),

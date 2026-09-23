@@ -3299,3 +3299,108 @@ describe('createScorers with `then` and draw cards', () => {
     expect(Math.abs(sampled.p - p)).toBeLessThan(5 * sampled.stderr);
   });
 });
+
+// ---------------------------------------------------------------------------
+// `n× unique D` in every window (PRD §5.3, TDD §10.1), against the certain
+// oracle: every order of a small deck, played out, judged by assignment.
+// ---------------------------------------------------------------------------
+
+describe('unique requirements in every window, against the certain oracle', () => {
+  // Classes: 0 blank, 1–3 three DIFFERENT starters, 4 a brick, 5 a draw card.
+  const STARTERS = bit(1) | bit(2) | bit(3);
+  const BRICK = bit(4);
+  const part = (over: Partial<CompiledCriterion> = {}): CompiledCriterion => ({
+    slots: [],
+    limits: [],
+    ...over,
+  });
+  const unique = (n: number, mask = STARTERS) => ({ uniques: [{ mask, n }] });
+
+  /** Exact: the engine's fraction and the oracle's `hits / orders`, cross-multiplied in BigInt. */
+  function expectExact(problem: Problem, n: number[], H: number) {
+    const certain = exhaustive(problem, n, H);
+    const { parts } = createBlendScorer(problem).score(n);
+    // One hand size of weight 1: the score is the sum of its parts' fractions.
+    let num = 0n;
+    let den = 1n;
+    for (const p of parts) {
+      num = num * BigInt(p.den) + BigInt(p.num) * den;
+      den *= BigInt(p.den);
+    }
+    expect(num * BigInt(certain.orders!)).toBe(BigInt(certain.hits!) * den);
+    return certain;
+  }
+
+  describe('going second, nothing drawn but the card for turn', () => {
+    const n = [2, 2, 1, 1, 2];
+    const second = (criteria: CompiledCriterion[]) =>
+      drawProblem({ n, H: 6, criteria, drawn: true });
+
+    it.each([
+      ['after `then`: the card drawn is a starter', [part({ sixth: part(unique(1)) })]],
+      [
+        'in the opening five',
+        [part({ ...unique(2), sixth: part({ limits: [{ mask: BRICK, n: 0 }] }) })],
+      ],
+      [
+        'after `finally`: three different starters across all six',
+        [part({ whole: part(unique(3)) })],
+      ],
+      [
+        'every window at once, a limit late',
+        [
+          part({
+            ...unique(1),
+            sixth: part({ slots: [STARTERS | BRICK] }),
+            whole: part({ ...unique(2), limits: [{ mask: BRICK, n: 1 }] }),
+          }),
+        ],
+      ],
+      ['unsplit, over the whole hand', [part(unique(3))]],
+    ] as const)('scores a unique requirement %s exactly', (_, criteria) => {
+      const certain = expectExact(second([...criteria]), n, 6);
+      expect(certain.p).toBeGreaterThan(0);
+      expect(certain.p).toBeLessThan(1);
+    });
+
+    it('tells copies from cards: two of starter 1 are one starter', () => {
+      // Only one copy each of starters 2 and 3, and the deck holds nothing else of use.
+      const certain = expectExact(second([part({ whole: part(unique(3)) })]), n, 6);
+      const copies = expectExact(
+        second([part({ whole: part({ slots: [STARTERS, STARTERS, STARTERS] }) })]),
+        n,
+        6,
+      );
+      expect(certain.p).toBeLessThan(copies.p);
+    });
+  });
+
+  describe('beside draw cards', () => {
+    const n = [2, 2, 1, 1, 1, 1];
+    const drawing = (criteria: CompiledCriterion[], drawn?: true) =>
+      drawProblem({ n, H: 3, draw: { 5: { n: 2 } }, criteria, ...(drawn ? { drawn } : {}) });
+
+    it('scores an unsplit unique requirement over the hand the draws build', () => {
+      expectExact(drawing([part(unique(3))]), n, 3);
+    });
+
+    it('scores one after `then`, over everything drawn', () => {
+      expectExact(drawing([part({ sixth: part(unique(2)) })], true), n, 3);
+    });
+
+    it('scores one after `finally`, over the hand the player ends with', () => {
+      expectExact(drawing([part({ ...unique(1), whole: part(unique(3)) })], true), n, 3);
+    });
+
+    it('stops for one, and draws for another', () => {
+      expectExact(
+        drawing([
+          part({ ...unique(2), stop: true }),
+          part({ ...unique(3), limits: [{ mask: BRICK, n: 0 }] }),
+        ]),
+        n,
+        3,
+      );
+    });
+  });
+});
