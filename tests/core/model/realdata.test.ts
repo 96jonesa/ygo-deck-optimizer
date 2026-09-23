@@ -92,15 +92,15 @@ describe.skipIf(!EDOPRO_WORKDIR)('importing a real decklist', () => {
   it('reads the alternate-art Harpie’s Feather Duster a real deck carries', () => {
     expect(cards.get(18144507)).toBeUndefined();
     const imported = templateFromDeck([18144507, ...Array(39).fill(14558127)], cards);
-    expect(imported.warnings).toEqual([
-      'the deck holds 39 copies of Ash Blossom & Joyous Spring; a deck holds at most 3 copies of one card, so its line is 3',
-    ]);
+    // Thirty-nine copies of one card is no longer something to warn about (PRD §5.1).
+    expect(imported.warnings).toEqual([]);
     expect(imported.template.lines[0]).toEqual({
       id: 'card1',
       card: { passcode: 18144506, name: "Harpie's Feather Duster" },
       min: 1,
       max: 1,
     });
+    expect(imported.template.lines[1]).toMatchObject({ min: 39, max: 39 });
   });
 });
 

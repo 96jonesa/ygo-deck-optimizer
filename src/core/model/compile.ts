@@ -30,7 +30,6 @@ import { countSums, type IntRange } from './ranges';
 import {
   type CriterionWhen,
   countsFor,
-  NAMED_CARD_MAX,
   partsOfMode,
   type RunMode,
   splitNeedsSecond,
@@ -325,11 +324,6 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
     // A generic line needs no existing card: it states what its cards are known to be, not
     // which cards exist (PRD §5.1). `count` is reported, and analyze() notes a zero.
     const count = ctx.cards.count(matcher(desc, members));
-    const [only] = desc.anyOf;
-    if (desc.anyOf.length === 1 && only?.t === 'card' && line.max > NAMED_CARD_MAX)
-      errors.push(
-        `${label}: \`max\` is ${line.max}, but a deck holds at most ${NAMED_CARD_MAX} copies of one card`,
-      );
     lines.push({
       id: line.id,
       isRemainder: false,

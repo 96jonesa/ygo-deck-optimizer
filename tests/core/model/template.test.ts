@@ -234,12 +234,10 @@ describe('validateTemplate', () => {
     ]);
   });
 
-  it('caps a named card at three copies, but not a description', () => {
+  it('lets a named card hold more than three copies, exactly as a description may (PRD §5.1)', () => {
     const card = { passcode: 14558127, name: 'Ash Blossom' };
-    expect(validateTemplate(withLine({ id: 'l1', card, min: 0, max: 3 })).ok).toBe(true);
-    expect(errorsOf(withLine({ id: 'l1', card, min: 0, max: 4 }))).toEqual([
-      'lines[0] ("l1"): `max` is 4, but a deck holds at most 3 copies of one card',
-    ]);
+    expect(validateTemplate(withLine({ id: 'l1', card, min: 0, max: 4 })).ok).toBe(true);
+    expect(validateTemplate(withLine({ id: 'l1', card, min: 40, max: 40 })).ok).toBe(true);
     expect(validateTemplate(withLine({ id: 'l1', text: 'monster', min: 0, max: 40 })).ok).toBe(
       true,
     );

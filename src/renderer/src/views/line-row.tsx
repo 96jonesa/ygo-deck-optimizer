@@ -14,7 +14,7 @@ import {
   parseFailureOf,
   worstSeverity,
 } from '../model/analysis-view';
-import { type CopyRange, NAMED_CARD_MAX } from '../model/copy-range';
+import type { CopyRange } from '../model/copy-range';
 import {
   commitDrawN,
   DRAW_MAX,
@@ -232,7 +232,6 @@ export function LineRow({
           range={{ min: line.min, max: line.max }}
           onChange={onRange}
           cap={deckSize}
-          soft={named ? NAMED_CARD_MAX : deckSize}
           label={`line ${line.id}`}
         />
         <span className="line-buttons">

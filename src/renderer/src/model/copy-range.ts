@@ -3,12 +3,6 @@
 // it a pair of whole numbers in order — whether it is a range the deck can
 // hold is `analyze`'s to say (TDD §9).
 
-/**
- * The game's copy limit. Written out rather than imported: the renderer takes
- * no code from `core` (TDD §3). A test holds it equal to `core`'s own.
- */
-export const NAMED_CARD_MAX = 3;
-
 export interface CopyRange {
   min: number;
   max: number;
