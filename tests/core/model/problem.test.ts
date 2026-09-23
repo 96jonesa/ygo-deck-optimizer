@@ -370,6 +370,24 @@ describe('validateProblem', () => {
       expect(() => validateProblem(withUniques([{ mask: 0b111, n: 1 }]))).toThrow(/blank class/);
     });
 
+    it('accepts a ceiling, and a count of 0 beside one', () => {
+      expect(() => validateProblem(withUniques([{ mask: 0b110, n: 1, max: 2 }]))).not.toThrow();
+      expect(() => validateProblem(withUniques([{ mask: 0b110, n: 0, max: 1 }]))).not.toThrow();
+    });
+
+    it('refuses a ceiling below its count, one nothing reaches, and too many ceilings', () => {
+      expect(() => validateProblem(withUniques([{ mask: 0b110, n: 2, max: 1 }]))).toThrow(
+        /unique requirement 0: a range is 0 <= n <= max in whole cards, not 2 to 1/,
+      );
+      expect(() => validateProblem(withUniques([{ mask: 0, n: 0, max: 1 }]))).toThrow(
+        /a ceiling no class can reach binds nothing and is dropped/,
+      );
+      const many = Array.from({ length: MAX_RANGES + 1 }, () => ({ mask: 0b110, n: 0, max: 1 }));
+      expect(() => validateProblem(withUniques(many))).toThrow(
+        `the engine judges at most ${MAX_RANGES} range requirements, not ${MAX_RANGES + 1}`,
+      );
+    });
+
     it('counts its cards against what the card drawn can hold', () => {
       const problem: Problem = {
         ...valid(),

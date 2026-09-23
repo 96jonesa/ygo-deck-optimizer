@@ -15,6 +15,7 @@ import {
   type ClassInfo,
   type CompiledCriterion,
   type CompiledRequirement,
+  type CompiledUnique,
   type DrawClass,
   type DrawSpec,
   type HandSize,
@@ -118,7 +119,7 @@ export interface ResolvedCounted {
 
 /**
  * A requirement: `n` cards at least, and `max` at most when it was written
- * `a-b×` — or, `unique`, `n` DIFFERENT cards and no ceiling (`n× unique D`).
+ * `a-b×` — and with `unique`, DIFFERENT cards (`n× unique D`, `a-b× unique D`).
  */
 export interface ResolvedRange extends ResolvedCounted {
   max?: number;
@@ -250,7 +251,10 @@ export function indexFlat(
   const side = ({ reqs, limits }: Pick<FlatCriterion, 'reqs' | 'limits'>): ResolvedSide => ({
     reqs: reqs.map(({ n, max, unique, desc }) => {
       const column = columnOf(desc, 'inRequirement');
-      if (unique === true) return { n, unique: true, desc: column };
+      if (unique === true)
+        return max === undefined
+          ? { n, unique: true, desc: column }
+          : { n, max, unique: true, desc: column };
       return max === undefined ? { n, desc: column } : { n, max, desc: column };
     }),
     limits: limits.map(({ n, desc }) => ({ n, desc: columnOf(desc, 'inLimit') })),
@@ -692,6 +696,8 @@ export interface DroppedCeiling {
   n: number;
   max: number;
   reason: DroppedReason;
+  /** Whether it was a `unique` requirement's ceiling, on different cards. */
+  unique?: true;
   /** Whether it was the SIXTH CARD's ceiling, where one card is the whole hand. */
   sixth?: true;
   /** Whether it was the `finally` part's ceiling, whose window is the whole hand. */
@@ -767,11 +773,21 @@ export function compileCriterion(
     from: { sixth?: true; whole?: true },
   ): SixthCard => {
     // A `unique` requirement stands apart from the plain ones: its cards may not
-    // repeat a class, which no slot can say (`CompiledUnique`).
+    // repeat a class, which no slot can say (`CompiledUnique`). Its ceiling is
+    // dropped on the same two grounds as a plain one's: a window of `room` cards
+    // never holds more different cards than that, and a card it could take and
+    // did not can always be given to it while it is under its ceiling.
     const plain = side.reqs.filter(({ unique }) => unique !== true);
-    const uniques = side.reqs.flatMap(({ n, unique, desc }) =>
-      unique === true ? [{ mask: maskOf(desc), n }] : [],
-    );
+    const uniques = side.reqs.flatMap(({ n, max, unique, desc }): CompiledUnique[] => {
+      if (unique !== true) return [];
+      const mask = maskOf(desc);
+      if (max === undefined) return [{ mask, n }];
+      const reason = mask === 0 ? 'counts-nothing' : max >= room ? 'never-binds' : undefined;
+      if (reason === undefined) return [{ mask, n, max }];
+      droppedCeilings.push({ desc, n, max, reason, unique: true, ...from });
+      // `0-6x unique` in a hand of five asks nothing at all once its ceiling goes.
+      return n === 0 ? [] : [{ mask, n }];
+    });
     const compiled = plain.map(({ n, max, desc }): CompiledRequirement => {
       const mask = maskOf(desc);
       if (max === undefined) return { mask, min: n, max: null };

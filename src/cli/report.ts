@@ -255,12 +255,14 @@ export function classesSection(a: Analysis): string {
         reason === 'counts-nothing' ? 'no line counts against it' : 'no hand holds more cards'
       }`,
     );
-  for (const { text, n, max, reason } of a.classes.droppedCeilings)
+  for (const { text, n, max, reason, unique } of a.classes.droppedCeilings) {
+    const kind = unique === true ? ' unique' : '';
     out.push(
-      `  the ceiling of \`${n}-${max}x ${text}\` can never be exceeded and is left out, leaving \`${n}x ${text}\`: ${
+      `  the ceiling of \`${n}-${max}x${kind} ${text}\` can never be exceeded and is left out, leaving \`${n}x${kind} ${text}\`: ${
         reason === 'counts-nothing' ? 'no line fills it' : 'no hand holds more cards'
       }`,
     );
+  }
   return out.join('\n');
 }
 

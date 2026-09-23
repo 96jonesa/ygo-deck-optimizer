@@ -22,6 +22,7 @@ import {
   RUN_MODE_REFERENCE,
   WEIGHTING_REFERENCE,
 } from '../../src/shared/syntax';
+import { satisfiesTree } from '../helpers/criteria-oracle';
 import { cardRecord, contextOf, FakeCards, FakeGroups } from '../helpers/desc-context';
 import { checkExampleRow, syntaxRows } from '../helpers/syntax-rows';
 
@@ -264,6 +265,22 @@ describe('CRITERION_SYNTAX', () => {
       const expanded = expand(criterion('3x unique {starter}, 1x {extender}'), { maxHandSize: 6 });
       // Four cards in all: the two requirements take theirs separately.
       expect(expanded.ok && expanded.flat[0]!.reqs.map(({ n }) => n)).toEqual([3, 1]);
+    });
+
+    // The rows' own examples, A A B and A B C, judged by the card-level oracle
+    // straight off the parsed criterion: A to D are four different starters.
+    it('puts a ceiling on DIFFERENT cards: a further copy of a counted card breaks none', () => {
+      expect(criterion('exactly 2 unique {starter}')).toMatchObject({ n: 2, max: 2, unique: true });
+      expect(criterion('2-3 unique {starter}')).toMatchObject({ n: 2, max: 3, unique: true });
+      // Every card of these hands is a starter, and `{starter}` is all they are asked for.
+      const meets = (text: string, hand: string) =>
+        satisfiesTree(criterion(text), hand.split(' '), () => true);
+      expect(meets('exactly 2 unique {starter}', 'A A B')).toBe(true);
+      expect(meets('exactly 2 unique {starter}', 'A A B B')).toBe(true);
+      expect(meets('exactly 2 unique {starter}', 'A B C')).toBe(false);
+      expect(meets('exactly 2 unique {starter}, 1x {starter}', 'A B C')).toBe(true);
+      expect(meets('2-3 unique {starter}', 'A B C')).toBe(true);
+      expect(meets('2-3 unique {starter}', 'A B C D')).toBe(false);
     });
 
     it('gives a range requirement a ceiling as well as a floor', () => {

@@ -19,8 +19,9 @@ export interface MatchCounted {
 
 /**
  * A requirement: `n` cards at least, and — written `a-b×` — `max` at most. A
- * `unique` one takes `n` cards no two of which are the same CARD, told apart by
- * the passcode their line names (`MatchProblem.lines`).
+ * `unique` one takes cards no two of which are the same CARD, told apart by
+ * the passcode their line names (`MatchProblem.lines`), and its `max` counts
+ * different cards.
  */
 export interface MatchRange extends MatchCounted {
   max?: number;
@@ -204,8 +205,13 @@ interface JudgedCriterion {
   reqs: { min: number; max: number; unique: boolean; desc: number }[];
   /** `sum of the lower bounds`: fewer cards than this can never meet it. */
   needed: number;
-  /** The descriptions of the requirements that HAVE a ceiling: a card matching one cannot be left over. */
+  /** The descriptions of the PLAIN requirements that have a ceiling: a card matching one cannot be left over. */
   capped: number[];
+  /**
+   * The `unique` requirements that have a ceiling, by index into `reqs`: a card
+   * matching one may be left over only if it holds a copy of that very card.
+   */
+  cappedUnique: number[];
   limits: readonly MatchCounted[];
 }
 
@@ -228,7 +234,8 @@ interface JudgedCriterion {
  * time: each is offered to every requirement that matches it and still has
  * room, and then to no requirement at all — which is only allowed when no
  * capped requirement would have had to count it. A `unique` requirement also
- * refuses a card whose passcode it already holds. With at most six cards that
+ * refuses a card whose passcode it already holds, and one with a ceiling lets a
+ * card it matches be left over only when it holds that passcode. With at most six cards that
  * is instant, and it shares nothing with the exact matcher, which decides the
  * same question by counting classes against precomputed subset conditions.
  */
@@ -254,7 +261,12 @@ export function createJudge(
     return {
       reqs: bounded,
       needed: bounded.reduce((sum, { min }) => sum + min, 0),
-      capped: reqs.flatMap(({ max, desc }) => (max === undefined ? [] : [desc])),
+      capped: reqs.flatMap(({ max, unique, desc }) =>
+        max === undefined || unique === true ? [] : [desc],
+      ),
+      cappedUnique: reqs.flatMap(({ max, unique }, at) =>
+        max !== undefined && unique === true ? [at] : [],
+      ),
       limits,
     };
   };
@@ -279,15 +291,26 @@ export function createJudge(
     return true;
   };
 
-  const assigns = ({ reqs, capped }: JudgedCriterion, from: number, to: number): boolean => {
+  const assigns = (
+    { reqs, capped, cappedUnique }: JudgedCriterion,
+    from: number,
+    to: number,
+  ): boolean => {
     const taken = reqs.map(() => 0);
     /** The cards each `unique` requirement holds: it takes no second copy of one. */
     const holding = reqs.map(() => [] as number[]);
+    /** The lines given to nothing so far, for a capped `unique` requirement to judge at the end. */
+    const left: number[] = [];
     /** What the requirements still owe: the search gives up once the cards left cannot pay it. */
     let owed = reqs.reduce((sum, { min }) => sum + min, 0);
     const place = (position: number): boolean => {
       if (owed > to - position) return false;
-      if (position === to) return true;
+      if (position === to)
+        return left.every((line) =>
+          cappedUnique.every(
+            (at) => !matches[reqs[at]!.desc]![line] || holding[at]!.includes(cardOf[line]!),
+          ),
+        );
       const line = hand[position]!;
       for (let at = 0; at < reqs.length; at++) {
         const req = reqs[at]!;
@@ -302,8 +325,14 @@ export function createJudge(
         if (taken[at]! < req.min) owed++;
         if (done) return true;
       }
-      // Left over, which only a card no ceiling would have counted may be.
-      return capped.every((desc) => !matches[desc]![line]) && place(position + 1);
+      // Left over, which only a card no plain ceiling would have counted may be.
+      // A capped `unique` one decides at the end, once it is known which cards
+      // it holds: another copy of one of them is no new different card.
+      if (!capped.every((desc) => !matches[desc]![line])) return false;
+      left.push(line);
+      const done = place(position + 1);
+      left.pop();
+      return done;
     };
     return place(from);
   };

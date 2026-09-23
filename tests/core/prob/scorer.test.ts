@@ -3404,3 +3404,95 @@ describe('unique requirements in every window, against the certain oracle', () =
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// A ceiling on `unique` (TDD §10.1) in every window, against the certain oracle.
+// ---------------------------------------------------------------------------
+
+describe('capped unique requirements in every window, against the certain oracle', () => {
+  // Classes: 0 blank, 1–3 three DIFFERENT starters, 4 a brick, 5 a draw card.
+  const STARTERS = bit(1) | bit(2) | bit(3);
+  const BRICK = bit(4);
+  const part = (over: Partial<CompiledCriterion> = {}): CompiledCriterion => ({
+    slots: [],
+    limits: [],
+    ...over,
+  });
+  const ranged = (n: number, max: number, mask = STARTERS) => ({ uniques: [{ mask, n, max }] });
+
+  /** Exact: the engine's fraction and the oracle's `hits / orders`, cross-multiplied in BigInt. */
+  function expectExact(problem: Problem, n: number[], H: number) {
+    const certain = exhaustive(problem, n, H);
+    const { parts } = createBlendScorer(problem).score(n);
+    let num = 0n;
+    let den = 1n;
+    for (const p of parts) {
+      num = num * BigInt(p.den) + BigInt(p.num) * den;
+      den *= BigInt(p.den);
+    }
+    expect(num * BigInt(certain.orders!)).toBe(BigInt(certain.hits!) * den);
+    return certain;
+  }
+
+  describe('going second, nothing drawn but the card for turn', () => {
+    const n = [2, 2, 2, 1, 2];
+    const second = (criteria: CompiledCriterion[]) =>
+      drawProblem({ n, H: 6, criteria, drawn: true });
+
+    it.each([
+      ['unsplit, over the whole hand', [part(ranged(2, 2))]],
+      [
+        'in the opening five, a limit after `then`',
+        [part({ ...ranged(1, 2), sixth: part({ limits: [{ mask: BRICK, n: 0 }] }) })],
+      ],
+      ['after `finally`', [part({ whole: part(ranged(2, 2)) })]],
+      [
+        'every window at once, beside a plain ceiling',
+        [
+          part({
+            ...ranged(1, 1),
+            sixth: part({ slots: [STARTERS | BRICK] }),
+            whole: part({
+              ...ranged(2, 2),
+              slots: [STARTERS],
+              reqs: [{ mask: STARTERS, min: 1, max: 1 }],
+            }),
+          }),
+        ],
+      ],
+    ] as const)('scores a capped unique requirement %s exactly', (_, criteria) => {
+      const certain = expectExact(second([...criteria]), n, 6);
+      expect(certain.p).toBeGreaterThan(0);
+      expect(certain.p).toBeLessThan(1);
+    });
+  });
+
+  describe('beside draw cards', () => {
+    const n = [2, 2, 2, 1, 1, 1];
+    const drawing = (criteria: CompiledCriterion[], drawn?: true) =>
+      drawProblem({ n, H: 3, draw: { 5: { n: 2 } }, criteria, ...(drawn ? { drawn } : {}) });
+
+    it('scores an unsplit one over the hand the draws build', () => {
+      expectExact(drawing([part(ranged(2, 2))]), n, 3);
+    });
+
+    it('scores one after `then`, over everything drawn', () => {
+      expectExact(drawing([part({ sixth: part(ranged(1, 1)) })], true), n, 3);
+    });
+
+    it('scores one after `finally`, over the hand the player ends with', () => {
+      expectExact(drawing([part({ ...ranged(0, 1), whole: part(ranged(2, 2)) })], true), n, 3);
+    });
+
+    it('stops for one, and draws for another', () => {
+      expectExact(
+        drawing([
+          part({ ...ranged(2, 2), stop: true }),
+          part({ ...ranged(1, 2), limits: [{ mask: BRICK, n: 0 }] }),
+        ]),
+        n,
+        3,
+      );
+    });
+  });
+});

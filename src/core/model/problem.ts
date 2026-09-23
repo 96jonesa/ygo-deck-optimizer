@@ -416,6 +416,13 @@ export interface CompiledRequirement {
 export interface CompiledUnique {
   mask: number;
   n: number;
+  /**
+   * At most this many DIFFERENT cards (`exactly 2x unique`, `2-3x unique`), and
+   * absent for no ceiling — every `unique` requirement written before it, byte
+   * for byte. A card of its mask left to nothing must be of a class it took:
+   * another copy of a card it counts is no new different card (TDD §10.1).
+   */
+  max?: number;
 }
 
 /**
@@ -885,12 +892,28 @@ function checkPart(
   // is the criterion it always was.
   if (uniques.length === 0)
     throw new RangeError(`${where}: with no \`unique\` requirement, \`uniques\` is left out`);
-  uniques.forEach(({ mask, n }, at) => {
+  uniques.forEach(({ mask, n, max }, at) => {
     const unique = `${where}, unique requirement ${at}`;
     checkMask(mask, classCount, unique, 'fill a requirement');
-    if (!Number.isInteger(n) || n < 1)
-      throw new RangeError(`${unique}: it asks for a positive whole number of cards, not ${n}`);
+    if (max === undefined) {
+      if (!Number.isInteger(n) || n < 1)
+        throw new RangeError(`${unique}: it asks for a positive whole number of cards, not ${n}`);
+      return;
+    }
+    if (!isCount(n) || !isCount(max) || max < n)
+      throw new RangeError(
+        `${unique}: a range is 0 <= n <= max in whole cards, not ${n} to ${max}`,
+      );
+    if (mask === 0)
+      throw new RangeError(`${unique}: a ceiling no class can reach binds nothing and is dropped`);
   });
+  const ceilings =
+    (reqs ?? []).filter(({ max }) => max !== null).length +
+    uniques.filter(({ max }) => max !== undefined).length;
+  if (ceilings > MAX_RANGES)
+    throw new RangeError(
+      `${where}: the engine judges at most ${MAX_RANGES} range requirements, not ${ceilings}`,
+    );
 }
 
 /**

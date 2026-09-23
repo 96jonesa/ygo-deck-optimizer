@@ -73,7 +73,9 @@ const accepts = (mask: number, cls: number) => ((mask >>> cls) & 1) === 1;
  * and then to none at all — which only a card no CEILING would have counted may
  * be, since a ceiling is a census and cannot look away from a card it matches.
  * Limits are a census over the window. A `unique` requirement takes at most one
- * card of each CLASS, which `compileProblem` makes one card.
+ * card of each CLASS, which `compileProblem` makes one card; with a `max` it
+ * takes at most that many, and a card left over that it could take must be of
+ * a class it holds — checked at the end, when what it holds is known.
  */
 function meetsWindow(window: Window, hand: readonly number[]): boolean {
   for (const { mask, n } of window.limits) {
@@ -86,11 +88,18 @@ function meetsWindow(window: Window, hand: readonly number[]): boolean {
   const uniques = window.uniques ?? [];
   const taken = reqs.map(() => 0);
   const holding = uniques.map(() => new Set<number>());
+  /** The cards given to nothing so far: a capped `unique` requirement judges them at the end. */
+  const left: number[] = [];
   const place = (at: number): boolean => {
     if (at === hand.length)
       return (
         reqs.every((req, i) => taken[i]! >= req.min) &&
-        uniques.every(({ n }, i) => holding[i]!.size >= n)
+        uniques.every(({ n }, i) => holding[i]!.size >= n) &&
+        left.every((cls) =>
+          uniques.every(
+            ({ mask, max }, i) => max === undefined || !accepts(mask, cls) || holding[i]!.has(cls),
+          ),
+        )
       );
     const cls = hand[at]!;
     for (let i = 0; i < reqs.length; i++) {
@@ -102,13 +111,19 @@ function meetsWindow(window: Window, hand: readonly number[]): boolean {
       if (done) return true;
     }
     for (let i = 0; i < uniques.length; i++) {
-      if (!accepts(uniques[i]!.mask, cls) || holding[i]!.has(cls)) continue;
+      const { mask, max } = uniques[i]!;
+      if (!accepts(mask, cls) || holding[i]!.has(cls)) continue;
+      if (max !== undefined && holding[i]!.size >= max) continue;
       holding[i]!.add(cls);
       const done = place(at + 1);
       holding[i]!.delete(cls);
       if (done) return true;
     }
-    return capped.every((req) => !accepts(req.mask, cls)) && place(at + 1);
+    if (!capped.every((req) => !accepts(req.mask, cls))) return false;
+    left.push(cls);
+    const done = place(at + 1);
+    left.pop();
+    return done;
   };
   return place(0);
 }

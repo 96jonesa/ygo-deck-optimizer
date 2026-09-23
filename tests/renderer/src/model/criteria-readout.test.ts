@@ -419,6 +419,22 @@ describe('requirementRows', () => {
       expect(row.heading).toBe('3x / 3x unique {Starter}');
     });
 
+    it('writes a ceiling on `unique` as the range it is, the word after the count', () => {
+      const row = requirementRows(
+        analysisOf({
+          requirements: [
+            requirementOf('{Starter}', {
+              appearsIn: [
+                { criterion: 'c1', alternative: 0, n: 2, max: 2, unique: true },
+                { criterion: 'c2', alternative: 0, n: 2, max: 3, unique: true },
+              ],
+            }),
+          ],
+        }),
+      )[0]!;
+      expect(row.heading).toBe('exactly 2x unique / 2-3x unique {Starter}');
+    });
+
     it('writes a range whose ends agree as `exactly nx`, as the criterion text does', () => {
       const row = requirementRows(
         analysisOf({

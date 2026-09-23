@@ -89,22 +89,21 @@ class ExprValidator {
           else max = ceiling;
         }
         // `unique` is `true` or absent — never `false`, which would stringify
-        // differently from the absent key every other AST carries — and it is a
-        // floor on different cards, so it takes neither a ceiling nor a count of 0.
+        // differently from the absent key every other AST carries. It may have a
+        // ceiling like any requirement, and a count of 0 only beside one.
         let unique = false;
         if (value.unique !== undefined) {
           if (value.unique !== true)
             this.fail(`${where}: \`unique\` is \`true\` or left out, not ${show(value.unique)}`);
-          else if (value.max !== undefined)
-            this.fail(
-              `${where}: a \`unique\` requirement takes no \`max\`; it asks for at least \`n\` different cards`,
-            );
-          else if (n === 0)
+          else if (n === 0 && value.max === undefined)
             this.fail(`${where}: a \`unique\` requirement asks for at least 1 card, not 0`);
           else unique = true;
         }
         if (n === undefined || desc === undefined) return undefined;
-        if (unique) return { op: 'req', n, unique: true, desc };
+        if (unique)
+          return max === undefined
+            ? { op: 'req', n, unique: true, desc }
+            : { op: 'req', n, max, unique: true, desc };
         return max === undefined ? { op: 'req', n, desc } : { op: 'req', n, max, desc };
       }
       case 'split': {

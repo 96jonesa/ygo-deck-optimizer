@@ -80,6 +80,42 @@ import {
  *
  * A criterion with no `unique` requirement builds none of it: `gale` is absent,
  * and the loops above are the loops it always ran.
+ *
+ * ---------------------------------------------------------------------------
+ * A CEILING ON `unique`. `exactly 2x unique D`, `2-3x unique D`: at most `b_u`
+ * DIFFERENT cards (Andy, 2026-09-22). Its edge `c -> u` is `[0, 1]` as before
+ * and `u -> sink` is `[n_u, b_u]`, and the new thing is what a card left to
+ * nothing may be: one of a class some capped `unique` requirement accepts is
+ * allowed only if EVERY such requirement took a card of that class — another
+ * copy of a card already counted is no new different card. So each class `c`
+ * whose ceilings are all `unique` ones (`U_c`) is in one of two modes:
+ *
+ *     absorbed:  every card of c is assigned           s -> c in [h_c, h_c]
+ *     counted:   each u in U_c takes one card of c     c -> u in [1, 1], s -> c in [0, h_c]
+ *
+ * and a class under a plain ceiling is always absorbed. For FIXED modes that is
+ * a circulation with lower bounds, and Hoffman's cuts over it come to (A') with
+ * the counted edges' lower bounds taken off the supply — never more than (A')
+ * itself asks — and, over each set `Y` of the capped requirements, plain and
+ * `unique` alike:
+ *
+ *   (B*) Σ_c cost_Y(c) <= Σ_{i ∈ Y} b_i,  where for a class in Y's masks that
+ *        no plain requirement outside Y accepts
+ *          absorbed:  cost = max(0, h_c − o_c)      o_c = `unique` requirements outside Y accepting c
+ *          counted:   cost = |U_c ∩ Y|              (only if no plain requirement in Y accepts c)
+ *        and 0 for every other class.
+ *
+ * The modes are chosen PER CUT: each class pays the cheaper of its two, and
+ * (A') is read with nothing taken off. That the choice may be made cut by cut,
+ * rather than once for all of them, is not something the derivation gives —
+ * it was checked against an independent assignment search over concrete cards
+ * on 100,000 random instances (mixes of capped and uncapped plain and `unique`
+ * requirements, several `unique` ones, overlapping masks) with no disagreement
+ * before any of this was written, and a test keeps checking it. Without a
+ * capped `unique` requirement, (B*) is (B') term for term.
+ *
+ * A criterion with no capped `unique` requirement builds none of it: `spill`
+ * is absent, and (B) or (B') is judged exactly as before.
  */
 
 export interface MatcherOptions {
@@ -108,7 +144,26 @@ interface HallCriterion {
    * requirements accept each class, by class index. Absent without one.
    */
   uniqueCounts?: Uint8Array;
+  /** Condition (B*) in place of (B) and (B'), where a `unique` requirement has a ceiling. */
+  spill?: Spill;
 }
+
+/**
+ * Condition (B*), one entry per DISTINCT set of (class, `o_c`, counted cost)
+ * triples — the smallest cap of the subsets `Y` sharing it. A counted cost of
+ * `CANNOT` is a class a plain ceiling in `Y` holds, which must be absorbed.
+ */
+interface Spill {
+  /** `classes.slice(start[i], start[i + 1])` and the same of `others` and `counted` belong to entry `i`. */
+  start: Int32Array;
+  classes: Uint8Array;
+  others: Uint8Array;
+  counted: Uint8Array;
+  caps: Int32Array;
+}
+
+/** A counted cost no hand reaches: the class cannot be counted, only absorbed. */
+const CANNOT = 255;
 
 /**
  * Condition (A'), one entry per DISTINCT pair of (plain-slot union, per-class
@@ -225,6 +280,81 @@ function galeOf(slots: readonly number[], uniques: readonly CompiledUnique[]): G
   };
 }
 
+/**
+ * Condition (B*) over every subset `Y` of the capped requirements, plain and
+ * `unique`. Built only where some `unique` requirement has a ceiling.
+ */
+function spillOf(
+  slots: readonly number[],
+  reqs: readonly CompiledRequirement[] | undefined,
+  uniques: readonly CompiledUnique[],
+): Spill {
+  // Without `reqs` every plain requirement is uncapped, and its slots carry its mask.
+  let free = 0;
+  if (reqs === undefined) for (const mask of slots) free |= mask;
+  else for (const { mask, max } of reqs) if (max === null) free |= mask;
+  const capped = [
+    ...(reqs ?? []).flatMap(({ mask, max }) =>
+      max === null ? [] : [{ mask, max, unique: false }],
+    ),
+    ...uniques.flatMap(({ mask, max }) => (max === undefined ? [] : [{ mask, max, unique: true }])),
+  ];
+  /** Per class, the `unique` requirements WITHOUT a ceiling that accept it: always outside `Y`. */
+  const uncapped = new Uint8Array(32);
+  for (const { mask, max } of uniques)
+    if (max === undefined)
+      for (let rest = mask; rest !== 0; rest &= rest - 1)
+        uncapped[31 - Math.clz32(rest & -rest)]!++;
+
+  const byKey = new Map<string, { triples: number[]; cap: number }>();
+  for (let subset = 1; subset < 1 << capped.length; subset++) {
+    let union = 0;
+    let plainIn = 0;
+    let plainOut = free;
+    let cap = 0;
+    const inside = new Uint8Array(32);
+    const outside = uncapped.slice();
+    capped.forEach(({ mask, max, unique }, at) => {
+      const isIn = ((subset >>> at) & 1) === 1;
+      if (isIn) {
+        union |= mask;
+        cap += max;
+      }
+      if (!unique) {
+        if (isIn) plainIn |= mask;
+        else plainOut |= mask;
+        return;
+      }
+      const counts = isIn ? inside : outside;
+      for (let rest = mask; rest !== 0; rest &= rest - 1) counts[31 - Math.clz32(rest & -rest)]!++;
+    });
+    const trapped = union & ~plainOut;
+    if (trapped === 0) continue;
+    const triples: number[] = [];
+    for (let rest = trapped; rest !== 0; rest &= rest - 1) {
+      const cls = 31 - Math.clz32(rest & -rest);
+      triples.push(cls, outside[cls]!, ((plainIn >>> cls) & 1) === 1 ? CANNOT : inside[cls]!);
+    }
+    const key = triples.join(',');
+    const known = byKey.get(key);
+    if (known === undefined) byKey.set(key, { triples, cap });
+    else if (cap < known.cap) known.cap = cap;
+  }
+  const entries = [...byKey.values()];
+  const start = new Int32Array(entries.length + 1);
+  entries.forEach(({ triples }, at) => {
+    start[at + 1] = start[at]! + triples.length / 3;
+  });
+  const every = entries.flatMap(({ triples }) => triples);
+  return {
+    start,
+    classes: Uint8Array.from(every.filter((_, at) => at % 3 === 0)),
+    others: Uint8Array.from(every.filter((_, at) => at % 3 === 1)),
+    counted: Uint8Array.from(every.filter((_, at) => at % 3 === 2)),
+    caps: Int32Array.from(entries, ({ cap }) => cap),
+  };
+}
+
 function compileCriterion({ slots, limits, reqs, uniques }: SixthCard): HallCriterion {
   const needOf = new Map<number, number>();
   const slotCount = slots.length + (uniques ?? []).reduce((sum, { n }) => sum + n, 0);
@@ -246,7 +376,9 @@ function compileCriterion({ slots, limits, reqs, uniques }: SixthCard): HallCrit
       needOf.set(union, Math.max(needOf.get(union) ?? 0, sizeOf[subset]!));
     }
   }
-  const capOf = reqs === undefined ? new Map<number, number>() : capsOf(reqs);
+  const spill = uniques?.some(({ max }) => max !== undefined) === true;
+  // (B*) replaces (B) and (B') outright where it is built, so neither is.
+  const capOf = reqs === undefined || spill ? new Map<number, number>() : capsOf(reqs);
   const out: HallCriterion = {
     slotCount,
     unions: Int32Array.from(needOf.keys()),
@@ -259,7 +391,8 @@ function compileCriterion({ slots, limits, reqs, uniques }: SixthCard): HallCrit
   if (!unique) return out;
   // `uniques.length <= slotCount`, so the nodes number at most `MAX_HAND`.
   if (slotCount <= MAX_HAND) out.gale = galeOf(slots, uniques);
-  if (capOf.size > 0) {
+  if (spill) out.spill = spillOf(slots, reqs, uniques);
+  else if (capOf.size > 0) {
     const counts = new Uint8Array(32);
     for (const { mask } of uniques)
       for (let rest = mask; rest !== 0; rest &= rest - 1) counts[31 - Math.clz32(rest & -rest)]!++;
@@ -294,9 +427,10 @@ function meets(criterion: HallCriterion, h: ArrayLike<number>, H: number): boole
 
 /** Condition (B): no class is left holding more cards than the ceilings that alone can take them. */
 function withinCeilings(
-  { capMasks, caps, uniqueCounts }: HallCriterion,
+  { capMasks, caps, uniqueCounts, spill }: HallCriterion,
   h: ArrayLike<number>,
 ): boolean {
+  if (spill !== undefined) return spillHolds(spill, h);
   if (uniqueCounts !== undefined) return withinCeilingsBeside(capMasks, caps, uniqueCounts, h);
   for (let i = 0; i < capMasks.length; i++) if (held(h, capMasks[i]!) > caps[i]!) return false;
   return true;
@@ -319,6 +453,26 @@ function withinCeilingsBeside(
   }
   return true;
 }
+
+/** Condition (B*): each trapped class pays the cheaper of absorbing its cards and being counted. */
+function spillHolds(
+  { start, classes, others, counted, caps }: Spill,
+  h: ArrayLike<number>,
+): boolean {
+  for (let i = 0; i < caps.length; i++) {
+    let cost = 0;
+    for (let at = start[i]!; at < start[i + 1]!; at++) {
+      const extra = h[classes[at]!]! - others[at]!;
+      if (extra > 0) cost += Math.min(extra, counted[at]!);
+    }
+    if (cost > caps[i]!) return false;
+  }
+  return true;
+}
+
+/** Whether a criterion has a ceiling of any kind to check, beside what `meets` checks. */
+const hasCeiling = ({ capMasks, spill }: HallCriterion): boolean =>
+  capMasks.length > 0 || spill !== undefined;
 
 /** The criteria a matcher judges by: all of them, or the one asked for. */
 function chosen(problem: Problem, opts: MatcherOptions): CompiledCriterion[] {
@@ -361,7 +515,7 @@ export function compileMatcher(problem: Problem, opts: MatcherOptions = {}): Mat
     'a matcher reads a hand as one window — score it through `compileValuer`, which judges the cards opened on and the card drawn apart',
   );
   const criteria = picked.map(compileCriterion);
-  if (criteria.every(({ capMasks }) => capMasks.length === 0))
+  if (!criteria.some(hasCeiling))
     return (h, H) => {
       for (const criterion of criteria) if (meets(criterion, h, H)) return true;
       return false;
@@ -397,7 +551,7 @@ export function compileWeigher(problem: Problem, opts: MatcherOptions = {}): Wei
   const ordered = [...picked].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
   const weights = ordered.map(({ weight }) => weight ?? 1);
   const criteria = ordered.map(compileCriterion);
-  if (criteria.every(({ capMasks }) => capMasks.length === 0))
+  if (!criteria.some(hasCeiling))
     return (h, H) => {
       for (let at = 0; at < criteria.length; at++)
         if (meets(criteria[at]!, h, H)) return weights[at]!;

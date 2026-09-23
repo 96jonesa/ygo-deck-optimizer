@@ -35,6 +35,11 @@ export interface GenExprOptions {
    * default, and for the same reason: the draw is not taken where it is 0.
    */
   uniqueChance?: number;
+  /**
+   * How often a RANGE requirement is `unique` — `a-b× unique`, a ceiling on
+   * different cards. 0 by default, for the same reason.
+   */
+  uniqueRangeChance?: number;
 }
 
 /**
@@ -75,7 +80,11 @@ function genLeaf(rng: Rng, options: GenExprOptions): Expr {
     // `0-b` as often as anything: its lower bound asks for nothing, and only
     // its ceiling and the leftovers it forbids decide.
     const n = rng.pick([0, 0, 1, 1, 1, 2]);
-    return { op: 'req', n, max: n + rng.pick([0, 0, 1, 1, 2]), desc };
+    const max = n + rng.pick([0, 0, 1, 1, 2]);
+    const uniqueRangeChance = options.uniqueRangeChance ?? 0;
+    if (uniqueRangeChance > 0 && rng.chance(uniqueRangeChance))
+      return { op: 'req', n, max, unique: true, desc };
+    return { op: 'req', n, max, desc };
   }
   const n = rng.pick([1, 1, 1, 1, 1, 1, 2, 2, 3]);
   const uniqueChance = options.uniqueChance ?? 0;

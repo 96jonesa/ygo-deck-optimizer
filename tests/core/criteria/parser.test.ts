@@ -404,17 +404,37 @@ describe('parseCriterion', () => {
       );
     });
 
-    it('is a floor only: every ceiling beside it is refused with the span of the count and the word', () => {
-      expect(errorOf('exactly 3 unique [C]')).toMatchObject({
-        message: expect.stringContaining('takes no ceiling: write `3x unique …`'),
-        at: 'exactly 3 unique',
+    it('takes a ceiling as any requirement does: `exactly n unique`, `a-b unique`, `0-b unique`', () => {
+      const ranged = (n: number, max: number, desc: Description): Expr => ({
+        op: 'req',
+        n,
+        max,
+        unique: true,
+        desc,
       });
-      expect(errorOf('1x [D], exactly 2x unique [C]')).toMatchObject({ at: 'exactly 2x unique' });
-      expect(errorOf('1-3 unique [C]')).toMatchObject({
-        message: expect.stringContaining('takes no ceiling: write `1x unique …`'),
-        at: '1-3 unique',
+      for (const count of ['2', '2x', '2 x'])
+        expectExpr(`exactly ${count} unique [C]`, ranged(2, 2, C));
+      for (const count of ['2-3', '2-3x', '2-3×'])
+        expectExpr(`${count} unique [C]`, ranged(2, 3, C));
+      expectExpr('0-1 unique [C]', ranged(0, 1, C));
+      expectExpr('exactly 2 unique [C], 1x [C]', and(ranged(2, 2, C), req(1, C)));
+      // `exactly n` is the range `[n, n]` here as everywhere: one node for both.
+      expect(parseCriterion('exactly 2 unique [C]', ctx)).toEqual(
+        parseCriterion('2-2x unique [C]', ctx),
+      );
+      expect(JSON.stringify(parseCriterion('2-3x unique [C]', ctx))).toBe(
+        `{"ok":true,"expr":{"op":"req","n":2,"max":3,"unique":true,"desc":${JSON.stringify(C)}}}`,
+      );
+    });
+
+    it('refuses a range that runs high to low, as for any requirement', () => {
+      expect(errorOf('3-2 unique [C]')).toMatchObject({
+        message: expect.stringContaining('a range runs low to high'),
+        at: '3-2',
       });
-      expect(errorOf('1-3x unique [C]')).toMatchObject({ at: '1-3x unique' });
+    });
+
+    it('is refused on a limit, with the span of the count and the word', () => {
       expect(errorOf('at most 2 unique [C]')).toMatchObject({
         message: expect.stringContaining('a limit counts copies and takes no `unique`'),
         at: 'at most 2 unique',
