@@ -232,6 +232,8 @@ export function TemplateView() {
   const setLineText = useApp((state) => state.setLineText);
   const setLineRange = useApp((state) => state.setLineRange);
   const setLineDraw = useApp((state) => state.setLineDraw);
+  const addGroupCard = useApp((state) => state.addGroupCard);
+  const dropGroupCard = useApp((state) => state.dropGroupCard);
   const moveLine = useApp((state) => state.moveLine);
   const setTemplate = useApp((state) => state.setTemplate);
   useResolveNamedCards();
@@ -265,12 +267,16 @@ export function TemplateView() {
             found={lineAnalysisOf(analysis, line.id)}
             known={('card' in line ? known[line.card.passcode] : undefined) ?? null}
             cardState={cardState}
+            groups={template.groups}
             deckSize={template.deckSize}
             first={at === 0}
             last={at === lines.length - 1}
             onText={(text) => setLineText(line.id, text)}
             onRange={(range) => setLineRange(line.id, range)}
             onDraw={(draw) => setLineDraw(line.id, draw)}
+            onGroup={(groupId, card, member) =>
+              member ? addGroupCard(groupId, card) : dropGroupCard(groupId, card.passcode)
+            }
             onMove={(by) => moveLine(line.id, by)}
             onRemove={() => dropLine(line.id)}
           />
