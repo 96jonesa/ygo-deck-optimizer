@@ -24,10 +24,17 @@ Releases live on this repository, which is private — so you can download them 
 
 **Both platforms warn once, because the app is unsigned.** That is the single cost of not buying a signing certificate, and it goes away the day one is bought.
 
-#### macOS: the first launch needs a right-click A DMG downloaded through a browser carries macOS's quarantine flag, and the app is unsigned, so double-clicking it produces *"cannot be opened because the developer cannot be verified"*. Right-click the app → **Open** → **Open**. macOS remembers the choice; every later launch is an ordinary double-click. If you would rather do it from a terminal:
+#### macOS: the first launch needs one approval
+
+The app is ad-hoc signed but not notarized by Apple, so a DMG downloaded through a browser is blocked on its first launch with *"Apple could not verify "YGO Deck Optimizer" is free of malware"* (wording varies by macOS version). Approve it once:
+
+1. Drag the app to **Applications** and double-click it. Dismiss the warning with **Done**.
+2. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Open Anyway** beside the message about YGO Deck Optimizer. Confirm with your password.
+
+macOS remembers the choice; every later launch is an ordinary double-click. On **macOS 15 and later** this is the only way through the dialog — the older right-click → **Open** shortcut no longer approves an app. Or skip the dialog entirely from a terminal:
 
 ```sh
-xattr -d com.apple.quarantine "/Applications/YGO Deck Optimizer.app"
+xattr -dr com.apple.quarantine "/Applications/YGO Deck Optimizer.app"
 ```
 
 #### Windows: SmartScreen needs one click
@@ -70,7 +77,13 @@ To start over, quit the app and delete that `settings.json`; the next launch re-
 
 ## If something is wrong
 
-- **"cannot be opened because the developer cannot be verified"** (macOS) — the quarantine flag; see above.
+- **"could not verify … is free of malware"** or **"cannot be opened because the developer cannot be verified"** (macOS) — the quarantine flag; approve it once as above.
+- **"is damaged and can't be opened"** (macOS) — **v0.5.0 and earlier only.** Those builds shipped with a broken signature (the packager skipped signing), which macOS reports as damage and no dialog can approve. Install **v0.5.1 or later**; or, for an older copy already in Applications, re-sign it and clear the flag:
+
+  ```sh
+  codesign --force --deep --sign - "/Applications/YGO Deck Optimizer.app"
+  xattr -dr com.apple.quarantine "/Applications/YGO Deck Optimizer.app"
+  ```
 - **"Windows protected your PC"** — SmartScreen on an unsigned installer; **More info** → **Run anyway**.
 - **The Mac app will not open at all** — check you are on Apple Silicon. There is no Intel build.
 - **The app opens but finds no cards** — point it at your EDOPro folder with *Choose EDOPro folder…*. The folder is the one containing `cards.cdb` and/or `expansions/` and `repositories/`.

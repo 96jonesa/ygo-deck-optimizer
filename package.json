@@ -1,6 +1,6 @@
 {
   "name": "ygo-deck-optimizer",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Concept-aware hypergeometric deck-ratio optimizer for Yu-Gi-Oh! (macOS/Windows)",
   "private": true,
   "type": "module",

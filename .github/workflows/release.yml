@@ -42,7 +42,7 @@ jobs:
             --notes "$(cat <<'NOTES'
           Unsigned local builds — both platforms warn on first launch, once.
 
-          - **macOS (Apple Silicon)** — `.dmg`. Right-click the app → **Open** → **Open**. It will not run on an Intel Mac.
+          - **macOS (Apple Silicon)** — `.dmg`. First launch: open it once, then **System Settings → Privacy & Security → Open Anyway** (right-click → Open no longer works on macOS 15+). It will not run on an Intel Mac.
           - **Windows (x64)** — `.exe`. SmartScreen says "Windows protected your PC": **More info** → **Run anyway**.
 
           [EDOPro](https://projectignis.github.io/) must be installed; the app reads its card data and never uploads anything. See `docs/INSTALL.md`.
@@ -76,6 +76,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run ${{ matrix.script }}
+
+      # A macOS app whose signature does not cover its bundle is reported as
+      # "damaged and can't be opened" on every downloaded copy, with no way
+      # past it — which is how v0.2.0 through v0.5.0 shipped, because
+      # `identity: null` skips signing and nothing checked. Fail the build
+      # rather than publish that again.
+      - name: Verify the macOS app's signature
+        if: runner.os == 'macOS'
+        run: |
+          app=$(ls -d dist/mac-arm64/*.app)
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv "$app" 2>&1 | grep -q 'Identifier=io.github.96jonesa.ygo-deck-optimizer' \
+            || { echo "the app is not signed as itself (still the stock Electron signature?)" >&2; exit 1; }
 
       - name: Upload as a workflow artifact (dry run)
         if: "!startsWith(github.ref, 'refs/tags/v')"
