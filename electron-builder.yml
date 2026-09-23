@@ -26,11 +26,22 @@ mac:
     - target: dmg
       arch: [arm64]
   category: public.app-category.utilities
-  # Unsigned: electron-builder applies an ad-hoc signature, which is all an
-  # arm64 Mac needs to run an app locally. A DMG *copied* to another machine
-  # picks up the quarantine flag and needs a right-click → Open the first time
-  # (docs/INSTALL.md). A Developer ID would remove that, and is deferred.
-  identity: null
+  # AD-HOC signed: `"-"` signs the whole bundle with no identity. It is NOT the
+  # same as `null`, which skips signing entirely — and that is what shipped from
+  # v0.2.0 to v0.5.0: the bundle kept the stock Electron binary's own signature,
+  # which no longer covered the renamed, repacked app, so an arm64 Mac reported
+  # every downloaded copy as "damaged and can't be opened". The release workflow
+  # now runs `codesign --verify --deep --strict` on the built app and fails if
+  # it does not hold, so this cannot ship broken again unnoticed.
+  #
+  # Ad-hoc is not a Developer ID: a downloaded copy still carries the quarantine
+  # flag and needs one approval on first launch (docs/INSTALL.md). A Developer
+  # ID with notarization would remove that, and is deferred.
+  identity: "-"
+  # Off because nothing here is notarized, which is the only thing the hardened
+  # runtime is for — and with an ad-hoc signature it is what electron-builder
+  # warns can make library validation refuse Electron's own framework at launch.
+  hardenedRuntime: false
 
 win:
   target:
