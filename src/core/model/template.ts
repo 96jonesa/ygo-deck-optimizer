@@ -11,8 +11,6 @@ export const DECK_SIZE_MIN = 40;
 export const DECK_SIZE_MAX = 60;
 /** Going first, going second (PRD §5.5). */
 export const HAND_SIZES = [5, 6] as const;
-/** The game's copy limit, which a line that names one card cannot exceed (PRD §5.1). */
-export const NAMED_CARD_MAX = 3;
 
 /**
  * The most cards one draw card may draw (PRD §5.7). The engine's own bounds are
@@ -420,10 +418,6 @@ class Validator {
     }
     if (hasCard) {
       const card = this.card(where, value.card, 'card');
-      if (max !== undefined && max > NAMED_CARD_MAX)
-        this.fail(
-          `${where}: \`max\` is ${max}, but a deck holds at most ${NAMED_CARD_MAX} copies of one card`,
-        );
       if (id === undefined || min === undefined || max === undefined || card === undefined)
         return undefined;
       return { id, min, max, ...drawn, card };

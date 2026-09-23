@@ -161,12 +161,10 @@ describe('templateFromDeck', () => {
     ]);
   });
 
-  it('holds a line at three copies when the deck lists more, and says which card', () => {
+  it('keeps every copy a deck lists past three, without a warning (PRD §5.1)', () => {
     const imported = templateFromDeck(padded([...Array(4).fill(CODE.harpy)]), cards);
-    expect(imported.template.lines[0]).toMatchObject({ min: 3, max: 3 });
-    expect(imported.warnings).toEqual([
-      'the deck holds 4 copies of Synthetic Harpy; a deck holds at most 3 copies of one card, so its line is 3',
-    ]);
+    expect(imported.template.lines[0]).toMatchObject({ min: 4, max: 4 });
+    expect(imported.warnings).toEqual([]);
   });
 
   it('raises a main deck under the minimum to the minimum, and says so', () => {

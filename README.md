@@ -507,8 +507,8 @@ you have; widen the copies you want to tune and run. A passcode is resolved thro
 index before counting, so an alternate-art printing lands on the card it is a reprint of and
 merges with it rather than reading as "no such card" — two of the five decks on the machine this
 was built against carry one. Anything a deck can say that a template cannot — a passcode no
-database holds, more than three copies, a main deck outside 40–60 — is kept usable and named in
-a warning.
+database holds, a main deck outside 40–60 — is kept usable and named in a warning. A card listed
+more than three times imports at the count the deck holds: no copy limit is enforced.
 
 **Exporting a run** writes the ranked table as CSV (one row per class vector, a column per line)
 or the whole result as JSON. Both carry **exact fractions, never percentages**: a spreadsheet
@@ -549,7 +549,7 @@ EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- analyze examples/mo
 | Totals | Read-only totals by kind, from the lines that *imply* the kind: `Known monsters 7–14`, `Known spells 0–13`, and `Unspecified 13–33` — what the lines leave of the deck |
 | Classes | What `compileProblem` hands the engine: lines the criteria cannot tell apart are merged into one class whose range is the sum of theirs, and lines that match nothing form the blank class. The example's seven lines and remainder are five classes |
 | Work | Raw ratios (4,096), class vectors an exhaustive run would score (128), products summed per score, and the time that comes to |
-| Errors, Warnings, Notices | Each named by the line, group or criterion it belongs to: a description that matches no card, a named card over three copies, lines that share a copy limit (Harpie Lady and Harpie Lady 1) and together exceed it, ranges that cannot sum to the deck size; a requirement no line fills, a criterion that can never be met or names a card the template lacks; a criterion another already covers, a limit that ignores under-specified cards |
+| Errors, Warnings, Notices | Each named by the line, group or criterion it belongs to: a description that matches no card, two lines naming the same card, ranges that cannot sum to the deck size; a requirement no line fills, a criterion that can never be met or names a card the template lacks; a criterion another already covers, a limit that ignores under-specified cards |
 
 `estimate` loads the install's card databases and `strings.conf` layers, resolves a template
 file ([TDD §14](docs/TDD.md)), and estimates the odds of a successful opening hand **at one

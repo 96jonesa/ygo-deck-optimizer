@@ -139,13 +139,14 @@ describe('DeckService', () => {
     });
 
     it('carries the import warnings, each naming its card', async () => {
+      // Four of one card is NOT among them: no copy limit is enforced (PRD §5.1).
       const { service } = await services({
-        Illegal: deckOf([CODE.harpy, CODE.harpy, CODE.harpy, CODE.harpy]),
+        Odd: deckOf([CODE.harpy, CODE.harpy, CODE.harpy, CODE.harpy, 99999999]),
       });
-      const imported = await service.import({ name: 'Illegal' });
+      const imported = await service.import({ name: 'Odd' });
       if (!imported.ok) throw new Error('expected an import');
       expect(imported.warnings).toEqual([
-        'the deck holds 4 copies of Synthetic Harpy; a deck holds at most 3 copies of one card, so its line is 3',
+        '#99999999 is not in the card database; its line is named after the passcode and fills only a requirement that names it',
       ]);
     });
 

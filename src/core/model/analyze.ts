@@ -49,7 +49,6 @@ import {
   HAND_SIZES,
   handSizeForMode,
   modeOf,
-  NAMED_CARD_MAX,
   type Part,
   partsOfMode,
   type RunMode,
@@ -74,9 +73,7 @@ export type IssueCode =
   | 'parse'
   | 'no-match'
   | 'card-missing'
-  | 'named-max'
   | 'min-over-max'
-  | 'shared-limit'
   | 'stale-text'
   | 'duplicate-card'
   | 'unsatisfiable'
@@ -705,16 +702,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
       ({ count, samples } = summarize(desc, members, ctx));
 
       const [only] = desc.anyOf;
-      if (desc.anyOf.length === 1 && only?.t === 'card') {
-        namedCard.set(at, only.passcode);
-        if (line.max > NAMED_CARD_MAX)
-          found.push(
-            error(
-              'named-max',
-              `\`max\` is ${line.max}, but a deck holds at most ${NAMED_CARD_MAX} copies of one card`,
-            ),
-          );
-      }
+      if (desc.anyOf.length === 1 && only?.t === 'card') namedCard.set(at, only.passcode);
       if (!intersects(desc, UNIVERSE, impliesCtx)) {
         const empty = desc.anyOf.flatMap((alt) =>
           alt.t === 'group' && (members.get(alt.groupId)?.size ?? 0) === 0
@@ -760,27 +748,12 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     };
   });
 
-  // Lines that name one card each share a copy limit when the cards do (TDD §4.3):
-  // `limitCode` is the alias target of an "always treated as" card.
-  const byLimit = new Map<number, number[]>();
+  // No copy limit is enforced (PRD §5.1): a line may hold as many copies of one
+  // card as the deck has room for. Two lines naming the SAME passcode are still
+  // worth a word, since one line would do.
   const byPasscode = new Map<number, number[]>();
-  for (const [at, passcode] of namedCard) {
-    const limitCode = ctx.cards.get(passcode)?.limitCode ?? passcode;
-    byLimit.set(limitCode, [...(byLimit.get(limitCode) ?? []), at]);
+  for (const [at, passcode] of namedCard)
     byPasscode.set(passcode, [...(byPasscode.get(passcode) ?? []), at]);
-  }
-  for (const sharing of byLimit.values()) {
-    const most = sharing.reduce((sum, at) => sum + template.lines[at]!.max, 0);
-    if (sharing.length < 2 || most <= NAMED_CARD_MAX) continue;
-    const ids = quoted(sharing.map((at) => lines[at]!.id));
-    for (const at of sharing)
-      lines[at]!.issues.unshift(
-        error(
-          'shared-limit',
-          `lines ${ids} count as the same card for the copy limit and together allow up to ${most} copies; a deck holds at most ${NAMED_CARD_MAX}`,
-        ),
-      );
-  }
   for (const [passcode, same] of byPasscode) {
     if (same.length < 2) continue;
     const ids = quoted(same.map((at) => lines[at]!.id));

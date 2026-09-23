@@ -27,8 +27,6 @@ export interface CopyRangeFieldProps {
   cap: number;
   /** What the two fields are the range OF, for the screen reader: `line level4`. */
   label: string;
-  /** A hint of the sensible ceiling — 3 for a named card — which typing may still exceed. */
-  soft?: number;
   disabled?: boolean;
 }
 
@@ -43,7 +41,6 @@ export function CopyRangeField({
   onChange,
   cap,
   label,
-  soft,
   disabled = false,
 }: CopyRangeFieldProps) {
   const [min, setMin] = useField(String(range.min));
@@ -71,7 +68,7 @@ export function CopyRangeField({
       className="count"
       inputMode="numeric"
       min={0}
-      max={soft ?? cap}
+      max={cap}
       step={1}
       value={draft}
       disabled={disabled}

@@ -255,7 +255,7 @@ describe('analyze', () => {
       expect(a.ok).toBe(true);
     });
 
-    it('caps a line that names one card at three copies, however it is written', () => {
+    it('lets a line that names one card hold more than three copies, however it is written', () => {
       const a = analyze(
         templateOf(
           [
@@ -268,11 +268,10 @@ describe('analyze', () => {
         ),
         ctx,
       );
-      expect(codes(lineOf(a, 'picked').issues)).toContain('!named-max');
-      expect(codes(lineOf(a, 'typed').issues)).toContain('!named-max');
-      expect(lineOf(a, 'typed').issues[0]!.message).toMatch(/`max` is 4.*at most 3 copies/);
-      expect(codes(lineOf(a, 'choice').issues)).not.toContain('!named-max');
-      expect(lineOf(a, 'fine').issues).toEqual([]);
+      // No copy limit is enforced (PRD §5.1): picked, typed or a choice, four is fine.
+      for (const id of ['picked', 'typed', 'choice', 'fine'])
+        expect(lineOf(a, id).issues, id).toEqual([]);
+      expect(a.ok).toBe(true);
     });
 
     it('rejects min > max, and counts no ratio through it', () => {
@@ -283,23 +282,22 @@ describe('analyze', () => {
       expect(a.classes).toBeNull();
     });
 
-    it('rejects lines that share a copy limit and together exceed it, naming them (TDD §4.3)', () => {
-      // "Synthetic Cyber Harpy" is always treated as "Synthetic Harpy": one limit of three.
-      const lines = (harpyMax: number, cyberMax: number) => [
-        card('harpy', CODE.harpy, 0, harpyMax),
-        line('cyber', '[Synthetic Cyber Harpy]', 0, cyberMax),
-        card('other', CODE.tunerFairy, 0, 3),
-      ];
-      const over = analyze(templateOf(lines(3, 2), ['1x monster']), ctx);
-      expect(codes(lineOf(over, 'harpy').issues)).toEqual(['!shared-limit']);
-      expect(codes(lineOf(over, 'cyber').issues)).toEqual(['!shared-limit']);
-      expect(lineOf(over, 'harpy').issues[0]!.message).toMatch(
-        /"harpy", "cyber".*up to 5 copies.*at most 3/,
+    it('lets lines that would share a copy limit in the game hold more than three between them (TDD §4.3)', () => {
+      // "Synthetic Cyber Harpy" is always treated as "Synthetic Harpy", which EDOPro
+      // counts as one card for its limit. No limit is enforced here, so five between
+      // them is as fine as three.
+      const over = analyze(
+        templateOf(
+          [
+            card('harpy', CODE.harpy, 0, 3),
+            line('cyber', '[Synthetic Cyber Harpy]', 0, 2),
+            card('other', CODE.tunerFairy, 0, 3),
+          ],
+          ['1x monster'],
+        ),
+        ctx,
       );
-      expect(lineOf(over, 'other').issues).toEqual([]);
-      // Exactly three between them is legal.
-      const atLimit = analyze(templateOf(lines(2, 1), ['1x monster']), ctx);
-      expect(allIssues(atLimit)).toEqual([]);
+      expect(allIssues(over)).toEqual([]);
     });
 
     it('warns about the same card on two lines', () => {
@@ -314,12 +312,13 @@ describe('analyze', () => {
       expect(codes(lineOf(a, 'two').issues)).toEqual(['duplicate-card']);
       expect(lineOf(a, 'one').issues[0]!.message).toMatch(/"one", "two"/);
       expect(a.ok).toBe(true);
-      // Two and two is one card too many as well.
+      // Two and two is four copies of one card: still only the duplicate is worth a word.
       const over = analyze(
         templateOf([card('one', STRATOS, 0, 2), card('two', STRATOS, 0, 2)], ['1x monster']),
         ctx,
       );
-      expect(codes(lineOf(over, 'one').issues)).toEqual(['!shared-limit', 'duplicate-card']);
+      expect(codes(lineOf(over, 'one').issues)).toEqual(['duplicate-card']);
+      expect(over.ok).toBe(true);
     });
 
     it('rejects a line that can hold no card: an empty group, a contradiction', () => {

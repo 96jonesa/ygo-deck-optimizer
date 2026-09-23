@@ -1,23 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { NAMED_CARD_MAX as CORE_NAMED_CARD_MAX } from '../../../../src/core/model/template';
 import {
   type CopyRange,
   commitRange,
-  NAMED_CARD_MAX,
   parseCount,
   rangeLabel,
   stepRange,
 } from '../../../../src/renderer/src/model/copy-range';
 
 const range = (min: number, max: number): CopyRange => ({ min, max });
-
-describe('NAMED_CARD_MAX', () => {
-  // The renderer cannot import `core` (TDD §3), so the copy limit is written
-  // out here; this test is what keeps the two from drifting apart.
-  it('is the copy limit `core` enforces', () => {
-    expect(NAMED_CARD_MAX).toBe(CORE_NAMED_CARD_MAX);
-  });
-});
 
 describe('rangeLabel', () => {
   it('is the two ends around an en dash, as the user reads them', () => {

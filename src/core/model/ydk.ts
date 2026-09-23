@@ -2,7 +2,6 @@ import type { CardRecord } from '../cards/record';
 import {
   DECK_SIZE_MAX,
   DECK_SIZE_MIN,
-  NAMED_CARD_MAX,
   TEMPLATE_VERSION,
   type Template,
   type TemplateLine,
@@ -92,12 +91,13 @@ function clamp(value: number, min: number, max: number): number {
  * single line of their combined count, which is why the counting happens after
  * resolution and not before.
  *
- * Four things a deck can say that a template cannot, each kept usable and
+ * Three things a deck can say that a template cannot, each kept usable and
  * warned about rather than refused — none occurs in a legal deck:
  * a passcode no database holds (the line stays, named after the passcode, and
- * `analyze` repeats the warning), more than three copies of one card (held at
- * three), a main deck outside 40–60 (the deck size is clamped and the rest
- * becomes unspecified cards), and the passcode 0, which names no card.
+ * `analyze` repeats the warning), a main deck outside 40–60 (the deck size is
+ * clamped and the rest becomes unspecified cards), and the passcode 0, which
+ * names no card. A card listed more than three times is NOT one of them: no
+ * copy limit is enforced (PRD §5.1), so its line holds the count the deck does.
  */
 export function templateFromDeck(main: readonly number[], cards: DeckCardLookup): ImportedDeck {
   const warnings: string[] = [];
@@ -135,16 +135,11 @@ export function templateFromDeck(main: readonly number[], cards: DeckCardLookup)
       warnings.push(
         `#${passcode} is not in the card database; its line is named after the passcode and fills only a requirement that names it`,
       );
-    if (count > NAMED_CARD_MAX)
-      warnings.push(
-        `the deck holds ${count} copies of ${name}; a deck holds at most ${NAMED_CARD_MAX} copies of one card, so its line is ${NAMED_CARD_MAX}`,
-      );
-    const copies = Math.min(count, NAMED_CARD_MAX);
     lines.push({
       id: `card${lines.length + 1}`,
       card: { passcode, name },
-      min: copies,
-      max: copies,
+      min: count,
+      max: count,
     });
   }
 

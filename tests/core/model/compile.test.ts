@@ -277,13 +277,35 @@ describe('resolveTemplate', () => {
       );
     });
 
-    it('caps a text line that names one card at three copies, but not a choice of cards', () => {
-      expect(errorsOf(templateOf([line('A', `#${STRATOS}`, 0, 4)], ['1x monster']))).toEqual([
-        'line "A": `max` is 4, but a deck holds at most 3 copies of one card',
-      ]);
+    it('lets a line that names one card hold more than three copies (PRD §5.1)', () => {
+      expect(errorsOf(templateOf([line('A', `#${STRATOS}`, 0, 4)], ['1x monster']))).toEqual([]);
       expect(
         errorsOf(templateOf([line('AB', `#${STRATOS} or #${ROTA}`, 0, 6)], ['1x monster'])),
       ).toEqual([]);
+    });
+
+    /**
+     * Accepted is not the same as SEARCHED. A cap left anywhere between the template
+     * and the optimizer would narrow the class's RANGE, and the optimizer would then
+     * never try a fourth copy — while the scorer, which scores whatever vector it is
+     * handed, would go on answering correctly for four. So the range is the thing
+     * pinned here; the score only confirms what four copies are worth:
+     * `1 − C(36,5)/C(40,5)` = 281,016 / 658,008, where three would be 222,111.
+     */
+    it('carries a named card past three copies into the class range the optimizer searches', () => {
+      const c = compiled(
+        resolved(templateOf([line('A', `#${STRATOS}`, 4, 4)], [`1x #${STRATOS}`])),
+      );
+      expect(membersOf(c)).toEqual([[REMAINDER_ID], ['A']]);
+      expect(rangesOf(c)).toEqual([
+        [0, 40],
+        [4, 4],
+      ]);
+      expect(createScorer(c.problem, 5).score([36, 4])).toEqual({
+        num: 281016,
+        den: 658008,
+        successNum: 281016,
+      });
     });
 
     it("carries the ranges through, the remainder's included", () => {

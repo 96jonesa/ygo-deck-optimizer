@@ -71,8 +71,8 @@ export function genSmallTemplate(rng: Rng): Template {
   const lines = Array.from({ length: rng.int(2, 6) }, (_, i): TemplateLine => {
     const min = rng.int(0, 2);
     const text = rng.pick(LINE_TEXTS);
-    // A line that names a card holds at most three copies.
-    const max = Math.min(min + rng.int(0, 3), text.startsWith('[') ? 3 : 5);
+    // A line that names a card ranges as far as a description does: no copy limit (PRD §5.1).
+    const max = Math.min(min + rng.int(0, 3), 5);
     return { id: `l${i + 1}`, text, min, max };
   });
   const least = lines.reduce((sum, line) => sum + line.min, 0);
