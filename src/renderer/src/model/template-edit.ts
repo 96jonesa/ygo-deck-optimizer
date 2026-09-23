@@ -541,3 +541,25 @@ export function withoutGroupCard(template: Template, id: string, passcode: numbe
     return cards.length === group.cards.length ? group : { ...group, cards };
   });
 }
+
+/** One group's checkbox under a line that names a card. */
+export interface GroupBox {
+  id: string;
+  name: string;
+  checked: boolean;
+}
+
+/**
+ * The group checkboxes under a line naming card `passcode`: one per group,
+ * ticked iff the group holds it. A box has no state of its own — the group's
+ * card list is the one record of membership — so a card typed into a group,
+ * a rename, or a line removed and added back all show here without an edit of
+ * their own. Ticking and unticking are `withGroupCard` and `withoutGroupCard`.
+ */
+export function groupBoxes(groups: readonly TemplateGroup[], passcode: number): GroupBox[] {
+  return groups.map((group) => ({
+    id: group.id,
+    name: group.name,
+    checked: group.cards.some((member) => member.passcode === passcode),
+  }));
+}

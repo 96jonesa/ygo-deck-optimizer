@@ -112,7 +112,8 @@ export function GroupsEditor() {
       <p className="hint flush">
         A group is a set of cards under a name of your own — <code>starter</code>,{' '}
         <code>brick</code> — usable in any description as <code>{'{starter}'}</code>. It is the one
-        thing the card database cannot tell you.
+        thing the card database cannot tell you. Each line that names a card also carries a checkbox
+        per group, to put it in or take it out.
       </p>
       {groups.length > 0 && (
         <ul className="groups" data-testid="groups">

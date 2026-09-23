@@ -6,6 +6,7 @@ import { EXAMPLE_TEMPLATE } from '../../../../src/renderer/src/model/example-tem
 import {
   cardLines,
   EMPTY_TEMPLATE,
+  groupBoxes,
   nextCriterionId,
   nextGroupId,
   nextLineId,
@@ -604,6 +605,87 @@ describe('withoutGroupCard', () => {
   it('leaves the template alone when the card is not in the group', () => {
     const one = withGroupCard(withGroup(EMPTY_TEMPLATE, 'starter'), 'g1', ASH);
     expect(withoutGroupCard(one, 'g1', MAXX.passcode)).toBe(one);
+  });
+});
+
+describe('groupBoxes', () => {
+  it('gives one box per group, in order, named after it', () => {
+    const two = withGroup(withGroup(EMPTY_TEMPLATE, 'starter'), 'brick');
+    expect(groupBoxes(two.groups, ASH.passcode)).toEqual([
+      { id: 'g1', name: 'starter', checked: false },
+      { id: 'g2', name: 'brick', checked: false },
+    ]);
+  });
+
+  it('ticks exactly the groups that hold the card', () => {
+    const two = withGroup(withGroup(EMPTY_TEMPLATE, 'starter'), 'brick');
+    const held = withGroupCard(withGroupCard(two, 'g2', ASH), 'g1', MAXX);
+    expect(groupBoxes(held.groups, ASH.passcode).map((box) => box.checked)).toEqual([false, true]);
+    expect(groupBoxes(held.groups, MAXX.passcode).map((box) => box.checked)).toEqual([true, false]);
+  });
+
+  it('follows a rename, since the label is read off the group', () => {
+    const renamed = withRenamedGroup(withGroup(EMPTY_TEMPLATE, 'starter'), 'g1', 'Starter');
+    expect(groupBoxes(renamed.groups, ASH.passcode)[0]?.name).toBe('Starter');
+  });
+
+  it('gives no boxes when there are no groups', () => {
+    expect(groupBoxes(EMPTY_TEMPLATE.groups, ASH.passcode)).toEqual([]);
+  });
+});
+
+/**
+ * Andy's sequence (2026-09-22) for the checkboxes under a card line, which
+ * hold no state: each step is a template edit, and the box is re-derived.
+ */
+describe('a group checkbox under a card line', () => {
+  function withAshAndGroups(): Template {
+    return withCardLine(withGroup(withGroup(EMPTY_TEMPLATE, 'starter'), 'brick'), ASH);
+  }
+  function ticked(template: Template): boolean[] {
+    return groupBoxes(template.groups, ASH.passcode).map((box) => box.checked);
+  }
+
+  it('ticks when the card is typed into the group in the groups editor', () => {
+    expect(ticked(withGroupCard(withAshAndGroups(), 'g1', ASH))).toEqual([true, false]);
+  });
+
+  it('ticking changes only that group’s cards', () => {
+    const before = withAshAndGroups();
+    const after = withGroupCard(before, 'g1', ASH);
+    expect(after).toEqual({
+      ...before,
+      groups: [
+        { ...before.groups[0]!, cards: [{ passcode: ASH.passcode, name: ASH.name }] },
+        before.groups[1],
+      ],
+    });
+    expect(after.groups[1]).toBe(before.groups[1]);
+    expect(after.lines).toBe(before.lines);
+  });
+
+  it('unticking changes only that group’s cards', () => {
+    const before = withGroupCard(withGroupCard(withAshAndGroups(), 'g1', ASH), 'g1', MAXX);
+    const after = withoutGroupCard(before, 'g1', ASH.passcode);
+    expect(ticked(after)).toEqual([false, false]);
+    expect(after).toEqual({
+      ...before,
+      groups: [
+        { ...before.groups[0]!, cards: [{ passcode: MAXX.passcode, name: MAXX.name }] },
+        before.groups[1],
+      ],
+    });
+    expect(after.lines).toBe(before.lines);
+  });
+
+  it('survives the line being removed, and shows ticked when it is added back', () => {
+    const inGroup = withGroupCard(withAshAndGroups(), 'g1', ASH);
+    const removed = withoutLine(inGroup, 'card1');
+    expect(removed.lines).toEqual([]);
+    expect(removed.groups).toBe(inGroup.groups);
+    const back = withCardLine(removed, ASH);
+    expect(back.groups).toBe(inGroup.groups);
+    expect(ticked(back)).toEqual([true, false]);
   });
 });
 
