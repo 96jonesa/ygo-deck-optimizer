@@ -297,7 +297,9 @@ function alternativesOf(expr: Expr): Draft[] {
       const asks = expr.n > 0 || expr.max !== undefined;
       const leaf: CountedRange =
         expr.unique === true
-          ? { n: expr.n, unique: true, desc: expr.desc }
+          ? expr.max === undefined
+            ? { n: expr.n, unique: true, desc: expr.desc }
+            : { n: expr.n, max: expr.max, unique: true, desc: expr.desc }
           : expr.max === undefined
             ? { n: expr.n, desc: expr.desc }
             : { n: expr.n, max: expr.max, desc: expr.desc };

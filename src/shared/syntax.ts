@@ -256,13 +256,27 @@ export const CRITERION_SYNTAX: ExampleSection = {
             'four cards in all: a starter that is also an extender can be one or the other, never both',
         },
         {
-          syntax: 'exactly 3 unique {starter}',
-          means: 'an error — `unique` is a floor, at least that many different cards',
-          fails: 'takes no ceiling',
+          syntax: 'exactly 2 unique {starter}',
+          means:
+            'exactly two different starters: A A B is fine — a second copy of A is no new card — and A B C is not',
+        },
+        {
+          syntax: '2-3 unique {starter}',
+          means: 'two or three different starters, as many copies of them as you like',
+        },
+        {
+          syntax: 'exactly 2 unique {starter}, 1x {starter}',
+          means: 'A B C passes: the `1x` takes one of them, so only two count as different',
         },
         {
           syntax: 'at most 2 unique {starter}',
-          means: 'an error — a limit counts copies; the message says what to write instead',
+          means:
+            'an error — a limit counts copies; write `0-2 unique` to cap different cards, and the message says so',
+          fails: 'a limit counts copies and takes no `unique`',
+        },
+        {
+          syntax: 'no unique {starter}',
+          means: 'an error, for the same reason — `no {starter}` rules them out',
           fails: 'a limit counts copies and takes no `unique`',
         },
       ],

@@ -295,6 +295,21 @@ describe('classesSection', () => {
     );
     expect(classesSection(BROKEN)).toMatch(/^ {2}\(not available until every error is fixed\)$/m);
   });
+
+  it('names a ceiling left out as plain or `unique`, as it was written', () => {
+    const lines = [
+      { id: 'a', card: { passcode: CODE.vanillaDragon, name: 'a' }, min: 0, max: 3 },
+      { id: 'b', card: { passcode: CODE.tunerFairy, name: 'b' }, min: 0, max: 3 },
+    ];
+    const text = `#${CODE.vanillaDragon} or #${CODE.tunerFairy}`;
+    const report = classesSection(
+      analyze(templateOf(lines, [`1-5 unique ${text}`, `1-5x ${text}`]), ctx),
+    );
+    expect(report).toMatch(
+      /^ {2}the ceiling of `1-5x unique #\d+ or #\d+` can never be exceeded and is left out, leaving `1x unique #\d+ or #\d+`: no hand holds more cards$/m,
+    );
+    expect(report).toMatch(/^ {2}the ceiling of `1-5x #\d+ or #\d+` can never be exceeded/m);
+  });
 });
 
 describe('workSection', () => {

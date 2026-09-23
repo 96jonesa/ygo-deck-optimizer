@@ -2253,6 +2253,8 @@ describe('unique requirements through resolve and compile', () => {
     { id: 'g-starter', name: 'Starter', cards: [A, B, C].map(cardOf) },
     { id: 'g-extender', name: 'Extender', cards: [C, E].map(cardOf) },
     { id: 'g-harpies', name: 'Harpies', cards: [CODE.harpy, CODE.treatedAsHarpy].map(cardOf) },
+    // Four different starters, for a ceiling on `unique`: A, B, C and E.
+    { id: 'g-four', name: 'Four', cards: [A, B, C, E].map(cardOf) },
   ];
   /** A line of exactly `copies` copies of the card with this passcode. */
   const named = (id: string, passcode: number, copies: number): TemplateLine => ({
@@ -2330,6 +2332,59 @@ describe('unique requirements through resolve and compile', () => {
 
     it('reads 15,174 as the inclusion–exclusion it is', () => {
       expect(choose(40, 5) - 3 * choose(37, 5) + 3 * choose(34, 5) - choose(31, 5)).toBe(15_174);
+    });
+  });
+
+  /**
+   * A ceiling on `unique` counts DIFFERENT cards (Andy, 2026-09-22). Targets from
+   * the lead's independent judge — an exhaustive search over assignments of
+   * concrete cards written straight from the rule, no formula — for four
+   * starters at three copies each in a deck of 40, hands of five.
+   */
+  describe('a ceiling on unique: the exact targets', () => {
+    const four = [named('a', A, 3), named('b', B, 3), named('c', C, 3), named('e', E, 3)];
+
+    it.each([
+      ['exactly 2 unique {Four}', 220_284],
+      ['2-3 unique {Four}', 270_612],
+      ['0-1 unique {Four}', 384_804],
+      ['exactly 4 unique {Four}', 2592],
+      ['exactly 2 unique {Four}, 1x {Four}', 96_300],
+      ['2 unique {Four}', 273_204],
+    ] as const)('scores `%s` at exactly the target', (text, target) => {
+      const template = uniqueTemplate([...four], [text]);
+      expect(numeratorOf(template)).toEqual({ num: target, den: 658_008 });
+      expect(oracleNumerator(template, [A, B, C, E])).toBe(target);
+    });
+
+    it('reads `exactly 4 unique` as the inclusion–exclusion it is: all four present', () => {
+      let sum = 0;
+      for (let k = 0; k <= 4; k++) sum += (-1) ** k * choose(4, k) * choose(40 - 3 * k, 5);
+      expect(sum).toBe(2592);
+    });
+
+    it('makes `[a, b]` the hands meeting `a` less those meeting `b + 1`', () => {
+      const at = (text: string) => numeratorOf(uniqueTemplate([...four], [text])).num;
+      expect(at('2-3 unique {Four}')).toBe(at('2 unique {Four}') - at('4 unique {Four}'));
+      expect(at('exactly 2 unique {Four}')).toBe(at('2 unique {Four}') - at('3 unique {Four}'));
+      expect(at('0-1 unique {Four}')).toBe(658_008 - at('2 unique {Four}'));
+    });
+
+    it('compiles the ceiling onto the unique requirement, and drops one no hand reaches', () => {
+      const c = compiledOf(uniqueTemplate([...four], ['2-3 unique {Four}']));
+      expect(c.problem.criteria).toEqual([
+        { slots: [], limits: [], uniques: [{ mask: 0b11110, n: 2, max: 3 }] },
+      ]);
+      const wide = compiledOf(uniqueTemplate([...four], ['2-5 unique {Four}']));
+      expect(wide.problem.criteria).toEqual([
+        { slots: [], limits: [], uniques: [{ mask: 0b11110, n: 2 }] },
+      ]);
+      expect(wide.droppedCeilings).toEqual([
+        { criterion: 0, desc: 0, n: 2, max: 5, reason: 'never-binds', unique: true },
+      ]);
+      // `0-5 unique` asks nothing once its ceiling goes, and is left out whole.
+      const nothing = compiledOf(uniqueTemplate([...four], ['0-5 unique {Four}, 1x {Four}']));
+      expect(nothing.problem.criteria[0]).not.toHaveProperty('uniques');
     });
   });
 
@@ -2495,6 +2550,11 @@ describe('unique requirements through resolve and compile', () => {
       '2 unique {Starter} then 1x {Starter}',
       '1x {Starter} finally 2 unique {Starter} and at most 2x {Starter}',
       '2 unique {Starter} finally 3 unique {Starter}',
+      // A ceiling on different cards, in each window.
+      'exactly 2 unique {Starter} then 1x {Starter}',
+      '1x {Starter} finally exactly 2 unique {Starter}',
+      '0-1 unique {Starter} finally 2-3 unique {Starter}',
+      'exactly 1 unique {Starter} then 1x card finally exactly 2 unique {Starter}, 1-2x {Starter}',
     ]) {
       const template: Template = {
         ...uniqueTemplate(lines, [text], 10),
@@ -2575,6 +2635,56 @@ describe('unique requirements through resolve and compile', () => {
     }
     expect(unique).toBeGreaterThan(100);
     expect(nonzero).toBeGreaterThan(75);
+  });
+
+  /**
+   * O1 again, with ceilings on both kinds of requirement in a large share: a
+   * ceiling on `unique` counts different cards, and the card-level oracle
+   * judges each hand's leftovers by the cards each requirement actually took.
+   */
+  it('agrees with the card-level oracle on every hand of 150 generated criteria with ceilings on unique', () => {
+    const lines: TemplateLine[] = [
+      named('a1', A, 2),
+      named('a2', A, 1),
+      named('b', B, 2),
+      named('c', C, 1),
+      named('e', E, 1),
+      named('harpy', CODE.harpy, 1),
+      named('cyber', CODE.treatedAsHarpy, 1),
+      { id: 'mon', text: 'monster', min: 2, max: 2 },
+    ];
+    const identities = [A, A, B, C, E, CODE.harpy, CODE.treatedAsHarpy, 'mon'];
+    const uniquePool = ['{Starter}', '{Four}', '{Extender}', '{Harpies}', `#${A} or #${B}`].map(
+      (text) => descOfText(text),
+    );
+    const plainPool = [...uniquePool, descOfText('monster')];
+    const rng = seededRng(0x0e1d02a);
+    let cappedUnique = 0;
+    let cappedPlain = 0;
+    let nonzero = 0;
+    for (let i = 0; i < 150; i++) {
+      const raw = genExpr(rng, {
+        desc: (r) => r.pick(plainPool),
+        maxDepth: 2,
+        maxArgs: 3,
+        limitChance: 0.15,
+        rangeChance: 0.5,
+        uniqueChance: 0.3,
+        uniqueRangeChance: 0.6,
+      });
+      const expr = withUniquePool(raw, () => rng.pick(uniquePool));
+      const json = JSON.stringify(expr);
+      if (/"max":\d+,"unique":true/.test(json)) cappedUnique++;
+      if (/"max":\d+,"desc"/.test(json)) cappedPlain++;
+      const text = printCriterion(expr, descCtx);
+      const template = uniqueTemplate(lines, [text], 14);
+      const engine = numeratorOf(template).num;
+      same(engine, oracleNumerator(template, identities), () => text);
+      if (engine > 0) nonzero++;
+    }
+    expect(cappedUnique).toBeGreaterThan(75);
+    expect(cappedPlain).toBeGreaterThan(40);
+    expect(nonzero).toBeGreaterThan(60);
   });
 
   const descCtx = {

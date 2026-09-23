@@ -351,6 +351,8 @@ export interface ClassesAnalysis {
     n: number;
     max: number;
     reason: DroppedReason;
+    /** A `unique` requirement's ceiling, on different cards. */
+    unique?: true;
   }[];
 }
 
@@ -1043,7 +1045,7 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
     const fills = columns.flatMap((col) => {
       const unique = col.required.find((appearance) => appearance.unique === true);
       return col.fills[i] && unique !== undefined
-        ? [`${countPrefix(unique.n, undefined, true)} ${col.text}`]
+        ? [`${countPrefix(unique.n, unique.max, true)} ${col.text}`]
         : [];
     });
     if (fills.length === 0) return;
@@ -1309,13 +1311,16 @@ function analyzeUnguarded(template: Template, ctx: AnalyzeContext, cost: CostMod
             n,
             reason,
           })),
-          droppedCeilings: compiled.droppedCeilings.map(({ criterion, desc, n, max, reason }) => ({
-            criterion,
-            text: columns[desc]!.text,
-            n,
-            max,
-            reason,
-          })),
+          droppedCeilings: compiled.droppedCeilings.map(
+            ({ criterion, desc, n, max, reason, unique }) => ({
+              criterion,
+              text: columns[desc]!.text,
+              n,
+              max,
+              reason,
+              ...(unique === true ? { unique } : {}),
+            }),
+          ),
         };
         const draws = compiled.problem.classes.some(({ draw }) => draw !== undefined);
         // DRAWING CAN MAKE A HAND FAIL, and that has to be visible rather than

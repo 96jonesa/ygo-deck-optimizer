@@ -301,6 +301,31 @@ describe('expand', () => {
       expect(flatOf(and(unique(3, A), req(3, B)))).toHaveLength(1);
     });
 
+    it('carries a ceiling on `unique`, the keys in canonical order, and merges it with nothing', () => {
+      const ranged: Expr = { op: 'req', n: 2, max: 3, unique: true, desc: A };
+      expect(JSON.stringify(flatOf(ranged)[0])).toBe(
+        JSON.stringify({ reqs: [{ n: 2, max: 3, unique: true, desc: A }], limits: [] }),
+      );
+      expect(flatOf(and(ranged, req(1, A), { ...ranged, n: 0, max: 1 }))[0]!.reqs).toEqual([
+        { n: 2, max: 3, unique: true, desc: A },
+        { n: 1, desc: A },
+        { n: 0, max: 1, unique: true, desc: A },
+      ]);
+      // `exactly 2x unique A` and `2x unique A` ask different things.
+      expect(flatOf(or(unique(2, A), { ...ranged, max: 2 }))).toHaveLength(2);
+    });
+
+    it('counts a ceiling on `unique` toward the ranges the engine judges', () => {
+      const ranges = Array.from(
+        { length: MAX_RANGES + 1 },
+        (): Expr => ({ op: 'req', n: 0, max: 1, unique: true, desc: A }),
+      );
+      expect(expand(and(...ranges), { maxHandSize: 6 })).toMatchObject({
+        ok: false,
+        reason: 'ranges',
+      });
+    });
+
     it('is one alternative however its unique requirements were ordered, and two when they differ', () => {
       expect(
         flatOf(or(and(unique(1, A), unique(2, A)), and(unique(2, A), unique(1, A)))),
@@ -920,7 +945,13 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
   }
 
   /** A random table of which card type fills which description, and a hand drawn from the types. */
-  function genCase(rng: Rng, rangeChance = 0, splitChance = 0, uniqueChance = 0): Case {
+  function genCase(
+    rng: Rng,
+    rangeChance = 0,
+    splitChance = 0,
+    uniqueChance = 0,
+    uniqueRangeChance = 0,
+  ): Case {
     const density = rng.pick([0.25, 0.4, 0.6]);
     const table = Array.from({ length: CARD_TYPES }, () =>
       DESCRIPTIONS.map(() => rng.chance(density)),
@@ -933,6 +964,7 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
       rangeChance,
       splitChance,
       uniqueChance,
+      uniqueRangeChance,
     });
     const hand = Array.from({ length: rng.int(0, 6) }, () => rng.int(0, CARD_TYPES - 1));
     return {
@@ -1112,6 +1144,33 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
     expect(compared).toBeGreaterThan(5500);
     expect(uniques).toBeGreaterThan(2500);
     expect(beside).toBeGreaterThan(1000);
+    expect(satisfied / compared).toBeGreaterThan(0.1);
+    expect(satisfied / compared).toBeLessThan(0.7);
+  });
+
+  /**
+   * A ceiling on `unique` counts different cards: a card left over that such a
+   * requirement matches must be a copy of one it took. The tree evaluator reads
+   * that off the cards each outcome took, the flat one once every card is placed.
+   */
+  it('agrees on 6,000 generated criteria and hands WITH ceilings on unique', () => {
+    const rng = seededRng(0xe1e1d02a);
+    let compared = 0;
+    let satisfied = 0;
+    let ranged = 0;
+    for (let i = 0; i < 6000; i++) {
+      const { expr, hand, fills } = genCase(rng, 0.5, 0.2, 0.3, 0.6);
+      const direct = satisfiesTree(expr, hand, fills);
+      const exact = expand(expr, { maxHandSize: Math.max(hand.length, 1) });
+      if (!exact.ok) continue;
+      compared++;
+      if (direct) satisfied++;
+      if (exact.flat.some((f) => f.reqs.some((r) => r.unique === true && r.max !== undefined)))
+        ranged++;
+      same(satisfiesAnyFlat(exact.flat, hand, fills), direct, () => ({ expr, hand }));
+    }
+    expect(compared).toBeGreaterThan(5500);
+    expect(ranged).toBeGreaterThan(2000);
     expect(satisfied / compared).toBeGreaterThan(0.1);
     expect(satisfied / compared).toBeLessThan(0.7);
   });

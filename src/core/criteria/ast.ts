@@ -56,8 +56,9 @@ export interface Counted {
  * `unique` is `n× unique D`: the `n` cards it takes must be `n` DIFFERENT cards
  * (Andy, 2026-09-22). It is `n× D` plus that one rule and nothing else — it
  * takes cards exactly as a plain requirement does, so a card given to it is
- * given to nothing else — and it never has a ceiling. Absent is false, and is
- * every requirement written before it.
+ * given to nothing else. Its ceiling, where it has one (`exactly 2x unique`,
+ * `2-3x unique`), is on DIFFERENT cards: see `FlatCriterion`, rule 3. Absent is
+ * false, and is every requirement written before it.
  */
 export interface CountedRange extends Counted {
   max?: number;
@@ -71,7 +72,8 @@ export interface CountedRange extends Counted {
  *   requirement with a ceiling also binds the cards NOT assigned to it: see
  *   `FlatCriterion`. With `unique` the cards assigned to it must moreover be
  *   different CARDS, not merely different copies: `3x unique {Starter}` is three
- *   starters no two of which are the same card. It never has a `max`;
+ *   starters no two of which are the same card, and its `max` counts different
+ *   cards;
  * - `atMost`: a count over the WHOLE hand, not an assignment (`n >= 0`);
  *   `no X` is `atMost 0`.
  *
@@ -161,7 +163,10 @@ export function slotsOf(expr: Expr): number {
  *    description it matches;
  * 2. every requirement `i` receives a count within `[n_i, max_i]`, and a
  *    `unique` one receives cards no two of which are the same card;
- * 3. every card left UNASSIGNED matches no requirement that has a ceiling;
+ * 3. every card left UNASSIGNED matches no requirement that has a ceiling —
+ *    except a `unique` one that took a copy of that very card: another copy of
+ *    a card it already counts is no new different card, so it breaks no ceiling
+ *    on different cards (Andy, 2026-09-22);
  * 4. every limit holds as a census over the whole hand.
  *
  * Rule 3 is what makes a ceiling bind: without it the surplus would simply go

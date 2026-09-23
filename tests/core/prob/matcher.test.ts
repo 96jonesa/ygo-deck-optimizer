@@ -512,6 +512,118 @@ describe('unique requirements against brute-force assignment', () => {
 });
 
 /**
+ * A ceiling on `unique` (TDD §10.1): `exactly 2x unique D`, `2-3x unique D`. It
+ * counts DIFFERENT cards, so a further copy of a card it took breaks nothing,
+ * while a new different card it could take and did not does. The engine decides
+ * it by condition (B*); the oracle hands the cards out one at a time and judges
+ * what was left over once it knows what each requirement took.
+ */
+describe('capped unique requirements against brute-force assignment', () => {
+  // Classes: 0 blank, 1 A, 2 B, 3 C, 4 D — four different starters.
+  const STARTERS = 0b11110;
+  const ranged = (n: number, max: number, extra: Partial<CompiledCriterion> = {}) =>
+    compileMatcher({
+      ...problemOf([{ slots: [], limits: [], uniques: [{ mask: STARTERS, n, max }], ...extra }], 5),
+      handSizes: [{ H: 5, weight: 1 }],
+    });
+  const hand = (...held: number[]) => {
+    const h = [0, 0, 0, 0, 0];
+    for (const cls of held) h[cls]!++;
+    return h;
+  };
+
+  it('counts different cards: another copy of a counted card breaks no ceiling', () => {
+    const exactlyTwo = ranged(2, 2);
+    expect(exactlyTwo(hand(1, 1, 2), 3)).toBe(true);
+    expect(exactlyTwo(hand(1, 1, 2, 2), 4)).toBe(true);
+    expect(exactlyTwo(hand(1, 2, 3), 3)).toBe(false);
+    expect(exactlyTwo(hand(1, 1, 1), 3)).toBe(false);
+    expect(ranged(2, 3)(hand(1, 2, 3, 4), 4)).toBe(false);
+    expect(ranged(2, 3)(hand(1, 2, 3, 3, 0), 5)).toBe(true);
+    expect(ranged(0, 1)(hand(1, 1, 1, 0), 4)).toBe(true);
+    expect(ranged(0, 1)(hand(1, 2, 0), 3)).toBe(false);
+  });
+
+  it('lets another requirement take the card that would be one too many', () => {
+    // `exactly 2 unique {S}, 1x {S}`: the `1x` has no ceiling and takes the rest.
+    const withOne = ranged(2, 2, { slots: [STARTERS] });
+    expect(withOne(hand(1, 2, 3), 3)).toBe(true);
+    expect(withOne(hand(1, 2, 3, 4), 4)).toBe(true);
+    // `exactly 2 unique {S}, exactly 1x {S}`: now the fourth has nowhere to go —
+    // and a spare copy of A, which the unique one could shrug off, the plain
+    // ceiling cannot.
+    const withExactlyOne = ranged(2, 2, {
+      slots: [STARTERS],
+      reqs: [{ mask: STARTERS, min: 1, max: 1 }],
+    });
+    expect(withExactlyOne(hand(1, 2, 3), 3)).toBe(true);
+    expect(withExactlyOne(hand(1, 2, 3, 4), 4)).toBe(false);
+    expect(withExactlyOne(hand(1, 1, 2, 3), 4)).toBe(false);
+  });
+
+  it('agrees with brute force on every composition of 4,000 generated criteria', () => {
+    let compared = 0;
+    let feasible = 0;
+    let bothKinds = 0;
+    for (let seed = 0; seed < 4000; seed++) {
+      const rng = seededRng(73_000 + seed);
+      const classCount = rng.int(2, 6);
+      const H = rng.int(1, 6);
+      const mask = () => {
+        let out = 0;
+        for (let cls = 1; cls < classCount; cls++) if (rng.chance(0.5)) out |= 1 << cls;
+        return out;
+      };
+      const reqs = Array.from({ length: rng.int(0, 3) }, () => {
+        const reqMask = mask();
+        const min = rng.int(0, 2);
+        const max = rng.chance(0.5) && reqMask !== 0 ? min + rng.int(0, 2) : null;
+        return { mask: reqMask, min: max === null ? Math.max(min, 1) : min, max };
+      });
+      const uniques = Array.from({ length: rng.int(1, 3) }, () => {
+        const uniqueMask = mask();
+        const n = rng.int(0, 2);
+        // A ceiling no class reaches is dropped by `compileCriterion`, so none is made here.
+        if (uniqueMask !== 0 && rng.chance(0.6))
+          return { mask: uniqueMask, n, max: n + rng.int(0, 2) };
+        return { mask: uniqueMask, n: Math.max(n, 1) };
+      });
+      if (!uniques.some(({ max }) => max !== undefined)) {
+        const at = uniques.findIndex(({ mask }) => mask !== 0);
+        if (at < 0) continue;
+        uniques[at] = { ...uniques[at]!, max: uniques[at]!.n + rng.int(0, 1) };
+      }
+      const criterion: CompiledCriterion = {
+        slots: reqs.flatMap(({ mask, min }) => new Array<number>(min).fill(mask)),
+        limits: rng.chance(0.15) ? [{ mask: mask(), n: rng.int(0, 2) }] : [],
+        uniques,
+      };
+      if (reqs.some(({ max }) => max !== null)) {
+        criterion.reqs = reqs;
+        bothKinds++;
+      }
+      const problem: Problem = {
+        ...problemOf([criterion], classCount),
+        handSizes: [{ H, weight: 1 }],
+      };
+      const matches = compileMatcher(problem);
+      for (const h of compositions(classCount, H)) {
+        const expected = bruteForceMeets(criterion, h);
+        same(matches(h, H), expected, () => ({ seed, h, H, criterion }));
+        compared++;
+        if (expected) feasible++;
+      }
+    }
+    // Pinned so the size of the check is on record; it moves only if the generator does.
+    expect({ compared, feasible, bothKinds }).toEqual({
+      compared: 218_330,
+      feasible: 37_873,
+      bothKinds: 1663,
+    });
+  });
+});
+
+/**
  * Weighted criteria (PRD §5.6): what a hand is WORTH, rather than whether it
  * succeeds. The engine sorts the criteria by weight and stops at the first one
  * met; the oracle asks every criterion and takes the maximum, so the sort is

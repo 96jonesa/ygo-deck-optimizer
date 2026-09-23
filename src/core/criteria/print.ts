@@ -21,13 +21,12 @@ function printCounted(prefix: string, { desc }: Counted, ctx: PrintContext): str
  * which it is in words, which is the point of the shorthand: this text is what
  * every readout, every CLI report and every saved template shows.
  *
- * A `unique` requirement reads `3x unique`: the word after the count, where it
- * was typed, and never beside a ceiling, which it cannot have.
+ * A `unique` requirement reads `3x unique`, `exactly 2x unique` or `2-3x
+ * unique`: the word after the count, where it was typed.
  */
 export function countPrefix(n: number, max: number | undefined, unique?: boolean): string {
-  if (unique === true) return `${n}x unique`;
-  if (max === undefined) return `${n}x`;
-  return max === n ? `exactly ${n}x` : `${n}-${max}x`;
+  const count = max === undefined ? `${n}x` : max === n ? `exactly ${n}x` : `${n}-${max}x`;
+  return unique === true ? `${count} unique` : count;
 }
 
 function printExpr(expr: Expr, ctx: PrintContext): string {

@@ -29,8 +29,12 @@ function classesOf(mask: number, classCount: number): number[] {
  *
  * A `unique` requirement takes at most ONE card of each class — a class in its
  * mask is one card, however many copies (`compileProblem` makes it so) — and is
- * met by holding cards of `n` different classes. It is no ceiling: a card it
- * could take is free to go unassigned.
+ * met by holding cards of `n` different classes. Without a `max` it is no
+ * ceiling: a card it could take is free to go unassigned. WITH one it holds at
+ * most `max` classes, and a card left unassigned that it could take must be of
+ * a class it DOES hold — another copy of a card already counted, and not a new
+ * different card. That is a question about where the search ENDS, not where it
+ * is, so it is asked once every card is placed.
  *
  * It owes nothing to the matcher, which answers the same question by counting
  * classes against precomputed subset conditions and never searches.
@@ -56,12 +60,20 @@ export function bruteForceMeets(criterion: CompiledCriterion, h: ArrayLike<numbe
   /** A card of this class must go somewhere: some capped requirement would otherwise count it. */
   const trapped = (cls: number) =>
     reqs.some(({ mask, max }) => max !== null && (mask & (1 << cls)) !== 0);
+  /** The cards given to nothing so far, for the capped `unique` requirements to judge at the end. */
+  const left: number[] = [];
 
   const place = (at: number): boolean => {
     if (at === cards.length)
       return (
         reqs.every(({ min }, req) => taken[req]! >= min) &&
-        uniques.every(({ n }, req) => holding[req]!.size >= n)
+        uniques.every(({ n }, req) => holding[req]!.size >= n) &&
+        left.every((cls) =>
+          uniques.every(
+            ({ mask, max }, req) =>
+              max === undefined || (mask & (1 << cls)) === 0 || holding[req]!.has(cls),
+          ),
+        )
       );
     const cls = cards[at]!;
     for (let req = 0; req < reqs.length; req++) {
@@ -73,13 +85,19 @@ export function bruteForceMeets(criterion: CompiledCriterion, h: ArrayLike<numbe
       if (done) return true;
     }
     for (let req = 0; req < uniques.length; req++) {
-      if ((uniques[req]!.mask & (1 << cls)) === 0 || holding[req]!.has(cls)) continue;
+      const { mask, max } = uniques[req]!;
+      if ((mask & (1 << cls)) === 0 || holding[req]!.has(cls)) continue;
+      if (max !== undefined && holding[req]!.size >= max) continue;
       holding[req]!.add(cls);
       const done = place(at + 1);
       holding[req]!.delete(cls);
       if (done) return true;
     }
-    return !trapped(cls) && place(at + 1);
+    if (trapped(cls)) return false;
+    left.push(cls);
+    const done = place(at + 1);
+    left.pop();
+    return done;
   };
   return place(0);
 }

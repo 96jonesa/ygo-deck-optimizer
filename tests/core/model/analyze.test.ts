@@ -1732,10 +1732,19 @@ describe('analyze of a unique requirement', () => {
     expect(a.ok).toBe(true);
   });
 
-  it('carries the parse errors of a ceiling beside it, with their spans', () => {
-    const a = analysed(named, ['exactly 3 unique {Starter}']);
+  it('carries the parse errors of a limit on different cards, with their spans', () => {
+    const a = analysed(named, ['at most 2 unique {Starter}']);
     expect(criterionOf(a, 'c1').parsed).toMatchObject({ ok: false, span: { start: 0, end: 16 } });
     expect(codes(criterionOf(a, 'c1').issues)).toEqual(['!parse']);
+  });
+
+  it('reads a ceiling on different cards, and names it in the line’s appearances', () => {
+    const a = analysed(named, ['exactly 2 unique {Starter}']);
+    expect(criterionOf(a, 'c1').issues).toEqual([]);
+    expect(a.ok).toBe(true);
+    expect(requirementOf(a, '{Starter}').appearsIn).toEqual([
+      { criterion: 'c1', alternative: 0, n: 2, max: 2, unique: true },
+    ]);
   });
 
   it('agrees with compiling the template, run or refuse', () => {

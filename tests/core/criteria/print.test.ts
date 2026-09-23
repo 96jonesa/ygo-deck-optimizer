@@ -236,6 +236,21 @@ describe('printCriterion', () => {
     ).toBe('1x #1 and 2x unique monster');
   });
 
+  it('prints a ceiling on `unique` as a plain range prints, the word after the count', () => {
+    const ranged = (n: number, max: number): Expr => ({
+      op: 'req',
+      n,
+      max,
+      unique: true,
+      desc: d('monster'),
+    });
+    expect(printCriterion(ranged(2, 2), ctx)).toBe('exactly 2x unique monster');
+    expect(printCriterion(ranged(2, 3), ctx)).toBe('2-3x unique monster');
+    expect(printCriterion(ranged(0, 1), ctx)).toBe('0-1x unique monster');
+    for (const expr of [ranged(2, 2), ranged(2, 3), ranged(0, 1)])
+      expect(parseCriterion(printCriterion(expr, ctx), ctx)).toEqual({ ok: true, expr });
+  });
+
   it('prints a limit as at most, and as no when nothing is allowed', () => {
     expect(printCriterion(atMost(2, 'trap'), ctx)).toBe('at most 2x trap');
     expect(printCriterion(atMost(1, '#2'), ctx)).toBe('at most 1x #2');
@@ -343,6 +358,30 @@ describe('parseCriterion/printCriterion round trip (E3)', () => {
       if (result.ok) expect(JSON.stringify(result.expr), text).toBe(JSON.stringify(expr));
     }
     expect(uniques).toBeGreaterThan(1500);
+  });
+
+  it('round-trips 3,000 generated criteria with ceilings on `unique`, key order and all', () => {
+    const rng = seededRng(0xe3e3a0a0);
+    let ranged = 0;
+    const counts = (expr: Expr): number => {
+      if (expr.op === 'and' || expr.op === 'or')
+        return expr.args.reduce((sum, arg) => sum + counts(arg), 0);
+      return expr.op === 'req' && expr.unique === true && expr.max !== undefined ? 1 : 0;
+    };
+    for (let i = 0; i < 3000; i++) {
+      const expr = genExpr(rng, {
+        ...options,
+        rangeChance: 0.4,
+        uniqueChance: 0.3,
+        uniqueRangeChance: 0.5,
+      });
+      ranged += counts(expr);
+      const text = printCriterion(expr, ctx);
+      const result = parseCriterion(text, ctx);
+      expect(result, `case ${i}: ${text}`).toEqual({ ok: true, expr });
+      if (result.ok) expect(JSON.stringify(result.expr), text).toBe(JSON.stringify(expr));
+    }
+    expect(ranged).toBeGreaterThan(1000);
   });
 
   it('parses the canonical text of 3,000 generated criteria back to the same AST', () => {

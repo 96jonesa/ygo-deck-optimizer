@@ -34,14 +34,23 @@ describe('validateExpr', () => {
       expect(Object.keys(result.expr)).toEqual(['op', 'n', 'unique', 'desc']);
     });
 
-    it('refuses `unique` that is not `true`, beside a ceiling, of no cards, or on a limit', () => {
+    it('accepts a ceiling, and a count of 0 beside one, with the keys in canonical order', () => {
+      for (const text of ['exactly 2 unique monster', '2-3x unique monster', '0-1 unique monster'])
+        expect(errors(ast(text)), text).toEqual([]);
+      const result = validateExpr(
+        { desc: REQ.desc, unique: true, max: 2, n: 0, op: 'req' },
+        'expr',
+      );
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      expect(Object.keys(result.expr)).toEqual(['op', 'n', 'max', 'unique', 'desc']);
+    });
+
+    it('refuses `unique` that is not `true`, of no cards and no ceiling, or on a limit', () => {
       expect(errors({ ...REQ, unique: false })).toEqual([
         'expr: `unique` is `true` or left out, not false',
       ]);
       expect(errors({ ...REQ, unique: 'yes' })[0]).toContain('not "yes"');
-      expect(errors({ ...REQ, max: 2, unique: true })).toEqual([
-        'expr: a `unique` requirement takes no `max`; it asks for at least `n` different cards',
-      ]);
+      expect(errors({ ...REQ, n: 3, max: 2, unique: true })[0]).toContain('counts up');
       expect(errors({ ...REQ, n: 0, unique: true })[0]).toContain('at least 1 card, not 0');
       expect(errors({ ...REQ, op: 'atMost', unique: true })).toEqual([
         'expr: a limit counts copies and has no `unique`',

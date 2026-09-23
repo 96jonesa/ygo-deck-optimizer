@@ -369,6 +369,72 @@ describe('createJudge', () => {
       // The exact answer, computed before any code: C(40,5) − 3C(37,5) + 3C(34,5) − C(31,5).
       expectWithinFiveSigma(hits, samples, 15_174 / 658_008, () => template);
     });
+
+    describe('with a ceiling, on different cards', () => {
+      // Lines: 0 and 1 both name card 7, 2 names card 8, 3 names card 9, 4 is the remainder.
+      const matrix = [[T], [T], [T], [T], [F]];
+      const cards = [{ card: 7 }, { card: 7 }, { card: 8 }, { card: 9 }, {}];
+      const exactlyTwo = { n: 2, max: 2, unique: true as const, desc: 0 };
+
+      it('lets a further copy of a counted card be left over, and never a new card', () => {
+        const judge = createJudge({
+          deckSize: 10,
+          matrix,
+          flat: [{ reqs: [exactlyTwo], limits: [] }],
+          lines: cards,
+        });
+        expect(judge([0, 1, 2])).toBe(true);
+        expect(judge([0, 0, 2, 4])).toBe(true);
+        expect(judge([0, 2, 3])).toBe(false);
+        expect(judge([0, 1, 4])).toBe(false);
+      });
+
+      it('lets another requirement take the card that would be one too many', () => {
+        const beside = (other: { n: number; max?: number; desc: number }) =>
+          createJudge({
+            deckSize: 10,
+            matrix,
+            flat: [{ reqs: [exactlyTwo, other], limits: [] }],
+            lines: cards,
+          });
+        expect(beside({ n: 1, desc: 0 })([0, 2, 3])).toBe(true);
+        // `exactly 1x` beside it: a spare copy of 7 now has nowhere to go.
+        expect(beside({ n: 1, max: 1, desc: 0 })([0, 2, 3])).toBe(true);
+        expect(beside({ n: 1, max: 1, desc: 0 })([0, 1, 2, 3])).toBe(false);
+      });
+    });
+
+    it('estimates `exactly 2 unique {Starter}` through a resolved template, at the lead’s target', async () => {
+      const starters = [STRATOS, 90000010, 90000020, 90000030];
+      const template: Template = {
+        version: 1,
+        deckSize: 40,
+        hand: { size: 5 },
+        groups: [
+          {
+            id: 'g',
+            name: 'Starter',
+            cards: starters.map((passcode) => ({ passcode, name: `#${passcode}` })),
+          },
+        ],
+        lines: starters.map((passcode, at) => ({
+          id: `s${at}`,
+          text: `#${passcode}`,
+          min: 3,
+          max: 3,
+        })),
+        remainder: { min: 0, max: null },
+        criteria: [{ id: 'c1', text: 'exactly 2 unique {Starter}' }],
+      };
+      const result = resolveTemplate(template, motivatingContext(await initSqlJs()));
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      const { hits, samples } = estimate(result.resolved, [3, 3, 3, 3], {
+        handSize: 5,
+        samples: 200_000,
+        seed: 0x0d1f,
+      });
+      expectWithinFiveSigma(hits, samples, 220_284 / 658_008, () => template);
+    });
   });
 
   /**
