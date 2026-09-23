@@ -9,6 +9,7 @@ import type {
   TemplateLine,
 } from '../../../shared/types';
 import type { CopyRange } from './copy-range';
+import type { CriterionField } from './criterion-fields';
 import { type CriterionWhen, handSizeForMode, type RunMode } from './deck-form';
 import type { DrawDraft } from './draw-view';
 
@@ -19,7 +20,7 @@ import type { DrawDraft } from './draw-view';
 // comparison keeps the screen still.
 
 export const EMPTY_TEMPLATE: Template = {
-  version: 1,
+  version: 2,
   deckSize: 40,
   hand: { size: 5 },
   groups: [],
@@ -319,12 +320,29 @@ function withoutExpr(criterion: TemplateCriterion): TemplateCriterion {
 }
 
 /**
- * The text of a criterion. Any AST stored beside it is dropped, since it is no
- * longer what the text says (TDD §14) — the same rule `withLineText` follows.
- * The tag and the weight stay: neither is text, and neither is what changed.
+ * The text of one of a criterion's fields (PRD §5.5): `text`, the whole hand
+ * and the one field every criterion has, or going second `opening` or `drawn`.
+ * Any AST stored beside it is dropped — whichever field changed, since the ONE
+ * stored expression covers all three and is no longer what they say (TDD §14),
+ * the rule `withLineText` follows. Everything else stays: the tag, the weight,
+ * the stop flag and the name are none of them text, and none of them is what
+ * changed.
+ *
+ * An opening-5 or drawn-cards field emptied is stored as no field at all, the
+ * one spelling of "anything" a saved file has.
  */
-export function withCriterionText(template: Template, id: string, text: string): Template {
-  return mapCriterion(template, id, (criterion) => ({ ...withoutExpr(criterion), text }));
+export function withCriterionField(
+  template: Template,
+  id: string,
+  field: CriterionField,
+  text: string,
+): Template {
+  return mapCriterion(template, id, (criterion) => {
+    const rest = withoutExpr(criterion);
+    if (field === 'text') return { ...rest, text };
+    const { [field]: _old, ...others } = rest;
+    return text.trim() === '' ? others : { ...others, [field]: text };
+  });
 }
 
 /**
@@ -345,7 +363,7 @@ export function withCriterionName(template: Template, id: string, name: string):
 /**
  * Which hand the criterion is judged for (PRD §5.5). The stored AST is KEPT:
  * the tag says when the criterion is asked, not what it asks, so the text and
- * its parsed form still agree — unlike `withCriterionText`, which drops it.
+ * its parsed form still agree — unlike `withCriterionField`, which drops it.
  */
 export function withCriterionWhen(template: Template, id: string, when: CriterionWhen): Template {
   return mapCriterion(template, id, (criterion) => {

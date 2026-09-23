@@ -79,11 +79,16 @@ describe('validateExpr', () => {
      * `expand` and over six by anything reading `sixth`. No text writes it, so a
      * file holding one is a file to refuse rather than to guess about.
      */
-    it('refuses a split that asks nothing of the cards drawn or of the whole hand', () => {
+    it('refuses a split that asks nothing at all', () => {
       expect(errors({ op: 'split' })).toEqual([
-        'expr: a `split` needs a `sixth` (what you drew) or a `whole` (the whole hand), or both — with neither it asks nothing',
+        'expr: a `split` needs a `five` (the opening five), a `sixth` (what you drew) or a `whole` (the whole hand) — with none it asks nothing',
       ]);
-      expect(errors({ op: 'split', five: REQ })[0]).toContain('needs a `sixth`');
+    });
+
+    it('accepts the opening five alone: the opening-5 field filled by itself', () => {
+      const result = validateExpr({ op: 'split', five: REQ }, 'expr');
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      expect(Object.keys(result.expr)).toEqual(['op', 'five']);
     });
 
     it('keeps the keys of a `finally` part in window order, canonical', () => {

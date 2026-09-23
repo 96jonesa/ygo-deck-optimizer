@@ -2,7 +2,6 @@ import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../../../../src/core/model/analyze';
 import {
-  canonicalText,
   criteriaIssues,
   criterionLabel,
   expansionPreview,
@@ -72,33 +71,6 @@ describe('criterionLabel', () => {
 
   it('gives back the id for a criterion the analysis does not have', () => {
     expect(criterionLabel(MOTIVATING, 'c9')).toBe('c9');
-  });
-});
-
-describe('canonicalText', () => {
-  it('is the printed form when it says the same thing another way', () => {
-    const c1 = MOTIVATING.criteria[0]!;
-    expect(c1.text).toBe('1x [Elemental HERO Stratos], 1x [Reinforcement of the Army], 1x monster');
-    expect(canonicalText(c1)).toBe('1x #40044918 and 1x #32807846 and 1x monster');
-  });
-
-  it('is nothing when the text IS the canonical form: repeating it says nothing', () => {
-    expect(
-      canonicalText(
-        criterionOf('c1', { text: '1x monster', parsed: { ok: true, canonical: '1x monster' } }),
-      ),
-    ).toBeNull();
-  });
-
-  it('is nothing for a criterion that did not parse', () => {
-    const broken = criterionOf('c1', {
-      parsed: { ok: false, message: 'no', span: { start: 0, end: 1 } },
-    });
-    expect(canonicalText(broken)).toBeNull();
-  });
-
-  it('is nothing while the analysis has not caught up with a new criterion', () => {
-    expect(canonicalText(null)).toBeNull();
   });
 });
 
@@ -519,14 +491,15 @@ describe('a count asked of the card you draw', () => {
         requirements: [
           requirementOf('trap', {
             appearsIn: [
-              { criterion: 'c1', alternative: 0, n: 1, sixth: true },
               { criterion: 'c1', alternative: 0, n: 1 },
+              { criterion: 'c1', alternative: 0, n: 1, sixth: true },
             ],
           }),
         ],
       }),
     );
-    expect(requirement?.heading).toBe('1x / 1x drawn trap');
+    // In the order the cards arrive: the drawn cards before the whole hand.
+    expect(requirement?.heading).toBe('1x drawn / 1x trap');
 
     const [limit] = limitRows(
       analysisOf({
@@ -539,11 +512,14 @@ describe('a count asked of the card you draw', () => {
   });
 
   /**
-   * The third window, and the same argument: `at most 1x trap` over the five you
-   * open on and `at most 1x trap` over all six are different statements — which
-   * is exactly why `finally` exists — so they never share a row either.
+   * Each of a criterion's fields (PRD §5.5) is its own window, and the same
+   * words over the five you open on and over all six are different statements —
+   * so the opening-5 field is marked, and never shares a row with the whole hand.
+   * The whole-hand field goes unmarked whether it stands alone or beside the
+   * others: it is one window either way, the one every criterion written before
+   * the fields was about.
    */
-  it('marks a count asked of the whole hand by a `finally` part, after the drawn one', () => {
+  it('marks a count asked of the opening five, first, and leaves the whole hand unmarked', () => {
     const [requirement] = requirementRows(
       analysisOf({
         requirements: [
@@ -551,22 +527,28 @@ describe('a count asked of the card you draw', () => {
             appearsIn: [
               { criterion: 'c1', alternative: 0, n: 2, whole: true },
               { criterion: 'c1', alternative: 0, n: 1, sixth: true },
-              { criterion: 'c1', alternative: 0, n: 1 },
+              { criterion: 'c1', alternative: 0, n: 1, opening: true },
             ],
           }),
         ],
       }),
     );
-    expect(requirement?.heading).toBe('1x / 1x drawn / 2x in the whole hand trap');
+    expect(requirement?.heading).toBe('1x in the opening 5 / 1x drawn / 2x trap');
 
+    // The whole-hand field beside the others, and a plain criterion: one row.
     const [limit] = limitRows(
       analysisOf({
         limits: [
-          limitOf('trap', { appearsIn: [{ criterion: 'c1', alternative: 0, n: 1, whole: true }] }),
+          limitOf('trap', {
+            appearsIn: [
+              { criterion: 'c1', alternative: 0, n: 1, whole: true },
+              { criterion: 'c2', alternative: 0, n: 1 },
+            ],
+          }),
         ],
       }),
     );
-    expect(limit?.heading).toBe('at most 1x in the whole hand trap');
+    expect(limit?.heading).toBe('at most 1x trap');
   });
 });
 

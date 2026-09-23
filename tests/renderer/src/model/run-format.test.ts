@@ -38,7 +38,7 @@ const RESULT = motivatingResult(SQL);
 /** A template whose only interesting fields are the three the sentence counts. */
 function templateOf(lines: number, criteria: number, deckSize = 40): Template {
   return {
-    version: 1,
+    version: 2,
     deckSize,
     hand: { size: 5 },
     groups: [],

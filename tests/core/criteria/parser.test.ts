@@ -558,7 +558,7 @@ describe('parseCriterion', () => {
     it('refuses more than one card of it by default, naming what asked', () => {
       expect(errorOf('1x [C] then 2x [D]')).toEqual({
         message:
-          'the card you draw is one card, and this asks 2 of it: after `then`, write one requirement — `1x …` — or limits alone, as in `no trap`. Mark a line as drawing cards and `then` becomes about everything you drew, which can be more than one',
+          'the card you draw is one card, and this asks 2 of it: in the drawn-cards field, write one requirement — `1x …` — or limits alone, as in `no trap`. Mark a line as drawing cards and the field becomes about everything you drew, which can be more than one',
         at: '2x [D]',
         start: 12,
       });
@@ -585,7 +585,7 @@ describe('parseCriterion', () => {
       it('still refuses what the drawn set cannot hold, and says how many it holds', () => {
         expect(errorOf('then 4x [D]', { maxDrawnSlots: 3 })).toEqual({
           message:
-            'you draw at most 3 cards here, and this asks 4 of them: after `then`, write at most 3 requirement slot(s), or limits alone, as in `no trap`',
+            'you draw at most 3 cards here, and this asks 4 of them: in the drawn-cards field, write at most 3 requirement slot(s), or limits alone, as in `no trap`',
           at: '4x [D]',
           start: 5,
         });

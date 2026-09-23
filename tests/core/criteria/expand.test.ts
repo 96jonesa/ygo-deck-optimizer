@@ -369,6 +369,26 @@ describe('expand', () => {
       ]);
     });
 
+    /**
+     * The opening-5 field filled by ITSELF (PRD §5.5). It keeps an empty
+     * whole-hand window, and must: an alternative with neither a drawn nor a
+     * whole-hand part is read as UNSPLIT downstream, and judged over the whole
+     * hand — the one reading the first field exists to deny.
+     */
+    it('keeps the opening five alone split, with an empty whole hand that asks nothing', () => {
+      const five: Expr = { op: 'split', five: or(req(1, A), req(1, B)) };
+      expect(flatOf(five)).toEqual([
+        { reqs: [{ n: 1, desc: A }], limits: [], whole: { reqs: [], limits: [] } },
+        { reqs: [{ n: 1, desc: B }], limits: [], whole: { reqs: [], limits: [] } },
+      ]);
+      // And it is judged over the cards opened on: six of them never fit in five.
+      expect(expand({ op: 'split', five: req(6, A) }, HAND)).toMatchObject({
+        ok: true,
+        flat: [],
+        dropped: 1,
+      });
+    });
+
     it('counts two alternatives as one only when BOTH sides agree', () => {
       const same5 = split(or(req(1, A), req(1, A)), req(1, B));
       expect(flatOf(same5)).toHaveLength(1);
@@ -396,7 +416,7 @@ describe('expand', () => {
         ok: false,
         reason: 'sixth-card',
         message:
-          'the card you draw is one card, and this asks 2 of it: after `then`, write one requirement — `1x …` — or limits alone, as in `no trap`. Mark a line as drawing cards and `then` becomes about everything you drew, which can be more than one',
+          'the card you draw is one card, and this asks 2 of it: in the drawn-cards field, write one requirement — `1x …` — or limits alone, as in `no trap`. Mark a line as drawing cards and the field becomes about everything you drew, which can be more than one',
       });
       // And merging is what can make it two: `1x A and 1x A` asks for two cards.
       expect(expandAll([{ op: 'split', sixth: and(req(1, A), req(1, A)) }], HAND)).toMatchObject({

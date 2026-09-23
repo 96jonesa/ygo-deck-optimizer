@@ -243,17 +243,23 @@ function* splitProducts(
  */
 function rootAlternativesOf(expr: Expr): Draft[] {
   if (expr.op !== 'split') return alternativesOf(expr);
-  // A split with neither dealt part nor a whole-hand part would flatten to an
-  // alternative nothing downstream could tell from an UNSPLIT one, and would
-  // then be judged over six cards here and over five there. The grammar and
-  // `validateExpr` both refuse it; reaching here is a bug, not bad input.
-  if (expr.sixth === undefined && expr.whole === undefined)
-    throw new RangeError(
-      'a `split` asks something of the cards you drew, of the whole hand, or both',
-    );
+  // A split of no part at all asks nothing. `validateExpr` refuses it and the
+  // editor never builds one; reaching here is a bug, not bad input.
+  if (expr.five === undefined && expr.sixth === undefined && expr.whole === undefined)
+    throw new RangeError('a `split` asks something of the five, the cards drawn or the whole hand');
   const five = expr.five === undefined ? [nothing()] : alternativesOf(expr.five);
   const sixth = expr.sixth === undefined ? null : alternativesOf(expr.sixth);
-  const whole = expr.whole === undefined ? null : alternativesOf(expr.whole);
+  // The opening five ALONE (the editor's first field, filled by itself) keeps
+  // an EMPTY whole-hand window rather than none. Without a second window the
+  // alternative could not be told from an UNSPLIT one downstream (`isSplit`),
+  // and would be judged over the whole hand — the one reading the first field
+  // exists to deny. An empty window holds of every hand, so it asks nothing more.
+  const whole =
+    expr.whole !== undefined
+      ? alternativesOf(expr.whole)
+      : expr.sixth === undefined
+        ? [nothing()]
+        : null;
   return distinct(splitProducts(five, sixth, whole));
 }
 

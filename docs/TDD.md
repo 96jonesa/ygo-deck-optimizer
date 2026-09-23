@@ -329,7 +329,30 @@ COUNT       := INT [ "-" INT ] [ "x" | "×" ]     -- 1x, 2×, 1-2x, 1-2
 ONE         := INT [ "x" | "×" ]                 -- a range here is an error carrying the rewrite
 ```
 
-`then` and `finally` are the two **window separators** (PRD §5.5), going-second only. `finally`
+**The editor writes a criterion in FIELDS, not with separators** (PRD §5.5, Andy 2026-09-23): up
+to three texts, one per window, each an `orExpr` with no separator in it
+(`src/core/criteria/fields.ts`). The fields *are* the windows below, so nothing downstream of the
+AST changed:
+
+| field (template file key) | label | AST part |
+| --- | --- | --- |
+| `opening` | Opening 5 | `five` |
+| `drawn` | Drawn cards (hint: the card drawn for turn, plus anything draw cards fetch) | `sixth` |
+| `text` | Whole hand | `whole` — or the **whole criterion, unsplit**, when it is the only field |
+
+`parseCriterionFields` parses each non-empty field on its own and assembles the node: the whole
+hand alone is the **plain** expression — never `split{ whole }`, which compiles to a different
+problem — and any other combination is a `split` of the fields filled. The opening 5 alone is
+`split{ five }`, which no separator text can write; `expand` gives it an **empty** `whole` window,
+so that it stays split downstream (`isSplit`) and is judged over the cards opened on. A field
+holding `then` or `finally` is refused with the keyword's span and the field to use instead, and a
+failure names its **field** (`CriterionMeaning.field`, `ParsedText.field`, `Issue.field`) so the
+editor marks the span in the right input. The drawn field is bounded by `largestDrawnSet` exactly as
+the part after `then` is; the other two are bounded as below, by dropping.
+
+`then` and `finally` stay in the grammar because a **version 1 template file** wrote the windows
+with them, and is converted on load (§14). They are the two **window separators**, going-second
+only. `finally`
 binds looser than `then`, which binds looser than `and` and `or` — so no part ever needs
 parentheses to read back as itself, a separator inside parentheses is refused with its own span,
 and a criterion holds at most one of each. Each names the window the part after it is judged over:
@@ -366,7 +389,7 @@ export type Expr =
   | { op: 'or'; args: Expr[] }        // two members, not 'and' | 'or': the merged form defeats narrowing
   | { op: 'req'; n: number; max?: number; unique?: true; desc: Description }   // `max` only from a range; `1-1x` and `exactly 1x` are one node; `unique` may stand beside `max`: a ceiling on different cards
   | { op: 'atMost'; n: number; desc: Description }   // "no X" = atMost 0
-  | { op: 'split'; five?: Expr; sixth?: Expr; whole?: Expr };   // the three windows; at least one of sixth / whole
+  | { op: 'split'; five?: Expr; sixth?: Expr; whole?: Expr };   // the three windows (the three fields); at least one part
 
 export interface FlatCriterion {
   reqs: { n: number; max?: number; unique?: true; desc: Description }[];
@@ -384,7 +407,9 @@ written in window order and absent rather than `undefined`, because `meaning.ts`
 AST is stale by **stringifying** both.
 
 **"Is this criterion split?" is `sixth !== undefined || whole !== undefined`**, never either alone:
-a criterion with a `finally` part and no `then` still reads its first window as the cards opened on.
+a criterion with a `finally` part and no `then` still reads its first window as the cards opened on
+— and the opening-5 field alone, `split{ five }`, is expanded with an empty `whole` so that it
+answers yes.
 `isSplit` in `problem.ts` is that question asked once, since a second copy of it that forgot `whole`
 would judge that window over all six cards and answer a different question in silence.
 
@@ -808,10 +833,10 @@ Plain JSON, `version`ed, written only by the main process (§12).
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "deckSize": 40,
-  "mode": "first",
-  "hand": { "size": 5 },
+  "mode": "second",
+  "hand": { "size": 6 },
   "groups": [
     { "id": "g1", "name": "starter", "cards": [{ "passcode": 14558127, "name": "Ash Blossom & Joyous Spring" }] }
   ],
@@ -830,22 +855,56 @@ Plain JSON, `version`ed, written only by the main process (§12).
     {
       "id": "c1",
       "name": "full combo",
-      "when": "both",
       "text": "1x [Ash Blossom & Joyous Spring]",
+      "when": "both",
       "expr": { "op": "req", "n": 1, "desc": { "anyOf": [{ "t": "card", "passcode": 14558127 }] } }
+    },
+    {
+      "id": "c2",
+      "name": "a four to open on, no trap drawn",
+      "opening": "1x level 4 monster",
+      "drawn": "no trap",
+      "text": "at most 1x {starter}",
+      "when": "second",
+      "expr": {
+        "op": "split",
+        "five": { "op": "req", "n": 1, "desc": { "anyOf": [{ "t": "clause", "clause": { "kinds": ["monster"], "level": [4] } }] } },
+        "sixth": { "op": "atMost", "n": 0, "desc": { "anyOf": [{ "t": "clause", "clause": { "kinds": ["trap"] } }] } },
+        "whole": { "op": "atMost", "n": 1, "desc": { "anyOf": [{ "t": "group", "groupId": "g1" }] } }
+      }
     }
   ],
   "cardSnapshot": { "14558127": { "type": 4129, "attribute": 4, "race": 16, "level": 3, "atk": 0, "def": 1800, "setcodes": [] } }
 }
 ```
 
-- **The AST is authoritative; text is kept for editing.** On load, if re-parsing `text` no longer yields `desc` (the grammar evolved), the file still means what it meant, and the editor flags the line. The two halves are a **pair**: the editor drops the stored AST on every text edit (`withLineText`, `withCriterionText`), which is what makes the authority safe — a present `desc` always came from that exact text. Without the drop, typing would change nothing that runs; without the authority, a file whose text no longer parses would lose its meaning.
+- **A criterion's fields are stored apart** (version 2, PRD §5.5): `opening` and `drawn` for the
+  going-second windows, written only when they say something, and `text` — the whole hand, and
+  the one field every criterion has, which is why a going-first or plain criterion is unchanged.
+  ONE `expr` covers them all: the plain expression when `text` is the only field, the `split`
+  otherwise. Editing any field drops it (`withCriterionField`) and keeps everything else.
+- **A version 1 file is converted on load, and saving writes version 2.** `validateTemplate`
+  reads versions 1 and 2 and hands back version 2: each version 1 criterion's text is cut at its
+  top-level `then` / `finally` (`v1Fields`, keeping the user's spelling) — before `then` is
+  `opening`, after it `drawn`, after `finally` `text`. **A text with neither goes into `text`**,
+  going first or going second: a plain version 1 criterion is about the whole hand, and `opening`
+  is about the first five, so putting it there would change what it means without a word. A text
+  that cannot be cut cleanly did not parse in version 1 either, and goes whole into `text`, where
+  it is still refused. The stored `expr` is kept exactly as it was, and stays the authority; a
+  version 1 `finally X`, whose `expr` is `split{ whole: X }`, converts to the whole-hand field
+  alone and reads as the plain `X` — which judges every hand alike (YGO-41), so `meaning.ts`
+  does not call it stale, and the stored split compiles to the problem it always did. Any other
+  version is refused by name; v0.5.1 refuses a version 2 file with *"this file has `version` 2;
+  this build reads version 1 templates"*, rather than misreading it.
+
+
+- **The AST is authoritative; text is kept for editing.** On load, if re-parsing `text` no longer yields `desc` (the grammar evolved), the file still means what it meant, and the editor flags the line. The two halves are a **pair**: the editor drops the stored AST on every text edit (`withLineText`, `withCriterionField`), which is what makes the authority safe — a present `desc` always came from that exact text. Without the drop, typing would change nothing that runs; without the authority, a file whose text no longer parses would lose its meaning.
 - **Authority requires validation, which is the subtle half.** The moment the AST is what `implies` judges, it arrives as `unknown` from a file or over IPC and must be checked like any other input: `src/core/desc/validate.ts` and `src/core/criteria/validate.ts`, called from `validateTemplate`, return the **canonical** form so a stored AST and a fresh parse are comparable by `JSON.stringify`. The example above is a real parse of its own `text`, generated rather than written — the version this section shipped with was neither, and was refused by these validators the day they existed (`"desc": { "anyOf": [] }` means "matches nothing" and `{ "op": "and", "args": [] }` means "a criterion of no terms").
 - **One meaning, one place.** `resolveTemplate` and `analyze` each used to parse the line text independently. With the AST authoritative that divergence would be silent and file-only — the readout describing one description while the run scored another — so both now call `src/core/model/meaning.ts` (`lineMeaning` / `criterionMeaning`). There were **three** `TODO(M2g)` markers, not the two §14 and §8 implied; `analyze.ts` carried the third. A second copy of a decision is how a range requirement's ceiling went missing between those two functions once already (the `indexFlat` comment in `compile.ts`).
 - **A disagreement is flagged, never swallowed.** `lineMeaning` parses the text too. If it parses to something else, or no longer parses at all, the stored AST is what runs and a `stale-text` **warning** — not an error, since the file means something and still runs — states both readings: *"this line means the saved description `trap`; the text beside it now reads as `monster`. Editing the text replaces the saved one."* `analyze` surfaces it per line and per criterion. The comparison is of **canonical ASTs, not strings**, so `LEVEL 4 monsters` beside the AST for `level 4 monster` is not stale. Saving writes what a line *means* rather than what its text now reads as, so a stale file that is re-saved stops being stale.
-- **An edit that changes what a stored AST could mean drops it**, the same rule in every case: `withLineText` and `withCriterionText` on a text edit, and `withoutGroup` on deleting a group whose id an AST names. Without the last one, deleting a group leaves the AST referencing an id that no longer exists — reported as a `stale-text` warning plus an `unsatisfiable` error, neither of which says *you deleted the group this line uses*. Dropping the AST falls the line back to its text, whose parse error says exactly that. Only the parsed form goes; the user's text is never rewritten, which would be the renderer deciding semantics (§3).
+- **An edit that changes what a stored AST could mean drops it**, the same rule in every case: `withLineText` and `withCriterionField` on a text edit, and `withoutGroup` on deleting a group whose id an AST names. Without the last one, deleting a group leaves the AST referencing an id that no longer exists — reported as a `stale-text` warning plus an `unsatisfiable` error, neither of which says *you deleted the group this line uses*. Dropping the AST falls the line back to its text, whose parse error says exactly that. Only the parsed form goes; the user's text is never rewritten, which would be the renderer deciding semantics (§3).
 
-  **The transforms must drop the parsed form and nothing else.** `withCriterionText`, `withCriterionName` and `withoutGroup` each rebuilt a criterion from `{ id, text, name }`, which silently discarded every other field — so typing in a going-second criterion reset its `when` to `both` and quietly changed which hand judged it. That shipped, and weighting would have lost its weight the same way. They now share one `withoutExpr` helper: drop the parsed form, keep everything else. The lesson is the general one — rebuilding an object to change one field loses every field added afterwards, and the loss is silent by construction.
+  **The transforms must drop the parsed form and nothing else.** `withCriterionText` (now `withCriterionField`), `withCriterionName` and `withoutGroup` each rebuilt a criterion from `{ id, text, name }`, which silently discarded every other field — so typing in a going-second criterion reset its `when` to `both` and quietly changed which hand judged it. That shipped, and weighting would have lost its weight the same way. They now share one `withoutExpr` helper: drop the parsed form, keep everything else. The lesson is the general one — rebuilding an object to change one field loses every field added afterwards, and the loss is silent by construction.
 
   A criterion's **`when` tag is not text and does not drop the AST.** It says *when* the criterion is asked, not what it asks, so `withCriterionWhen` keeps the stored `expr`. This is an extension of the rule as first written ("every transform that changes the text drops the AST"), and the test for it is what stops the extension being an accident.
 
@@ -860,6 +919,7 @@ Plain JSON, `version`ed, written only by the main process (§12).
 - **`cardSnapshot`** records the fields of every named card as they were when the file was saved. Results depend on the card database *only* through named cards, so this is what makes "a template file reproduces the same numbers on another machine" (PRD §14) checkable: on load, a named card that is missing from the local database or whose fields differ produces a notice, and the user chooses local data or the snapshot.
 - **`mode` is authoritative and `hand.size` must agree with it.** `mode` says which of the three runs the file is (PRD §5.5); `hand.size` stays required and must equal `handSizeForMode(mode)` — 5 for `first`, 6 for `second` and `average` — or `validateTemplate` refuses the file naming both, rather than silently preferring one. `templateToFile` writes both out in full, and writes every criterion's `when` even when it is `both`: a field left to a default means whatever the default means next year.
 - **`TEMPLATE_VERSION` is not bumped for modes.** `mode` and `when` are both optional on read, and a file written before they existed reads as the run it always was — hand 5 → `first`, an untagged criterion → `both`. A bump would refuse files that need no migration.
+- **It IS bumped for the criterion fields** (1 → 2). An older build reading `opening` and `drawn` would ignore them as unknown fields and run the whole-hand field alone — a different criterion, silently. A version it refuses by name is the only safe answer, and the conversion in the other direction is exact (above).
 - Unknown `version` → refuse with a clear message; older versions migrate forward in `src/core/model/migrate.ts`.
 - `groups` and `remainder` may be omitted in a hand-written file and default to none and `{ min: 0, max: null }`; a line may be given as `text` alone (`"[Elemental HERO Stratos]"`), in which case it is parsed on load. A **generic** line that matches no card is accepted with a `no-match` *notice* — a line states what its cards are known to be, not which cards exist (PRD §5.1); the motivating example's Level 7 FIRE Beast-Warrior line is exactly this case. A picker `card` line whose passcode the local database lacks is a *warning* (§6.2), and a `[Name]` the database cannot resolve is a parse error, since a named card has to be identified. Until M2g the harness reads the `text` path only.
 

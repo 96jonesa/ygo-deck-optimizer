@@ -166,7 +166,7 @@ export const STOP_LABEL = 'Stop here';
  * MOMENT. In whichever window the hand lands, every criterion is judged.
  */
 export const STOP_MOMENT_NOTE =
-  'It picks the MOMENT, not the criteria. Whichever way a hand stopped or drew, every criterion is judged on the hand it has — a hand that stopped on a criterion worth 1 is still worth the 9 it also holds, and a criterion you ticked is still judged after drawing when your opening did not stop you.';
+  'It picks the MOMENT, not the criteria. Whichever way a hand stopped or drew, every criterion is judged on the hand it has — a hand that stopped on a criterion worth 1 is still worth the 9 it also holds, and a criterion you ticked is still judged after drawing when your opening did not stop you. Going second, a hand that stopped drew only the card for turn: that one card is what the drawn-cards field is judged on, and the six cards are the whole hand.';
 
 /** What ticking the box, or leaving it, actually says — Andy's two sentences (PRD §5.7). */
 export function stopStateNote(stop: boolean): string {

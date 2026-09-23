@@ -110,7 +110,7 @@ describe('templateFromDeck', () => {
     expect(imported.template.criteria).toEqual([]);
     expect(imported.template.groups).toEqual([]);
     expect(imported.template.remainder).toEqual({ min: 0, max: null });
-    expect(imported.template.version).toBe(1);
+    expect(imported.template.version).toBe(2);
     expect(imported.template.hand).toEqual({ size: 5 });
   });
 

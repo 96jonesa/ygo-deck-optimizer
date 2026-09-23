@@ -13,6 +13,7 @@ import type { Template, TemplateLine } from '../../../src/core/model/template';
 import { createScorer } from '../../../src/core/prob/scorer';
 import { countToNumber } from '../../../src/core/util/count';
 import { same } from '../../helpers/assert';
+import { fieldsOf } from '../../helpers/fields';
 import { CODE } from '../../helpers/fixture-cards';
 import { rawRatiosOf } from '../../helpers/gen-ranged-problem';
 import {
@@ -1165,23 +1166,25 @@ describe('analyze of a split criterion', () => {
   const secondOf = (text: string, when: 'first' | 'second' | 'both' = 'second'): Template =>
     templateOf(
       [line('mon', 'monster', 0, 10), line('tr', 'trap', 0, 10)],
-      [{ id: 'c1', text, when }],
+      [{ id: 'c1', ...fieldsOf(text), when }],
       { hand: { size: 6 }, mode: 'second' },
     );
 
-  it('shows the expansion with `then` between the two parts', () => {
+  it('shows the expansion with each field named, in window order', () => {
     const a = analyze(secondOf('1x monster then no trap'), ctx);
     expect(a.ok).toBe(true);
-    expect(criterionOf(a, 'c1').alternatives).toEqual(['1x monster then no trap']);
+    expect(criterionOf(a, 'c1').alternatives).toEqual(['opening 5: 1x monster · drawn: no trap']);
     expect(criterionOf(a, 'c1').parsed).toMatchObject({
       ok: true,
-      canonical: '1x monster then no trap',
+      canonical: 'opening 5: 1x monster · drawn: no trap',
+      fields: { opening: '1x monster', drawn: 'no trap' },
     });
+    expect(criterionOf(a, 'c1')).toMatchObject({ opening: '1x monster', drawn: 'no trap' });
   });
 
-  it('leads with `then` where nothing is asked of the cards opened on', () => {
+  it('names only the drawn cards where nothing is asked of the cards opened on', () => {
     const a = analyze(secondOf('then 1x trap'), ctx);
-    expect(criterionOf(a, 'c1').alternatives).toEqual(['then 1x trap']);
+    expect(criterionOf(a, 'c1').alternatives).toEqual(['drawn: 1x trap']);
   });
 
   it("counts the sixth card's descriptions as requirements and limits like any others", () => {
@@ -1191,7 +1194,7 @@ describe('analyze of a split criterion', () => {
     // And each appearance says WHICH window asked, because `1x trap` of the card
     // you draw is a different statement from `1x trap` in six cards.
     expect(requirementOf(a, 'monster').appearsIn).toEqual([
-      { criterion: 'c1', alternative: 0, n: 1 },
+      { criterion: 'c1', alternative: 0, n: 1, opening: true },
     ]);
     expect(limitOf(a, 'trap').appearsIn).toEqual([
       { criterion: 'c1', alternative: 0, n: 0, sixth: true },
@@ -1201,7 +1204,7 @@ describe('analyze of a split criterion', () => {
   it('warns that no line fills a requirement the sixth card alone asks for', () => {
     const noSpell = templateOf(
       [line('mon', 'monster', 0, 10)],
-      [{ id: 'c1', text: '1x monster then 1x spell', when: 'second' }],
+      [{ id: 'c1', opening: '1x monster', drawn: '1x spell', text: '', when: 'second' }],
       {
         hand: { size: 6 },
         mode: 'second',
@@ -1230,7 +1233,10 @@ describe('analyze of a split criterion', () => {
     expect(codes(criterionOf(a, 'c1').issues)).toEqual(['!parse']);
     const [issue] = criterionOf(a, 'c1').issues;
     expect(issue!.message).toContain('the card you draw is one card, and this asks 2 of it');
-    expect('1x monster then 2x trap'.slice(issue!.span!.start, issue!.span!.end)).toBe('2x trap');
+    // The span is in the FIELD that asked too much, and says which field that is.
+    expect(issue!.field).toBe('drawn');
+    expect(criterionOf(a, 'c1').parsed).toMatchObject({ ok: false, field: 'drawn' });
+    expect('2x trap'.slice(issue!.span!.start, issue!.span!.end)).toBe('2x trap');
   });
 
   it('reports the work of a drawn hand: the same terms, one per composition', () => {
@@ -1245,17 +1251,22 @@ describe('analyze of a split criterion', () => {
       const a = analyze(secondOf('1x monster then no trap finally at most 1x trap'), ctx);
       expect(a.ok).toBe(true);
       expect(criterionOf(a, 'c1').alternatives).toEqual([
-        '1x monster then no trap finally at most 1x trap',
+        'opening 5: 1x monster · drawn: no trap · whole hand: at most 1x trap',
       ]);
       expect(criterionOf(a, 'c1').parsed).toMatchObject({
         ok: true,
-        canonical: '1x monster then no trap finally at most 1x trap',
+        canonical: 'opening 5: 1x monster · drawn: no trap · whole hand: at most 1x trap',
       });
     });
 
-    it('leads with `finally` where nothing is asked of the cards opened on', () => {
+    it('is a PLAIN criterion when the whole hand is the only field filled', () => {
+      // `finally 2x trap` in a version 1 file: the whole hand alone, which is
+      // what the same text going first means — no split, and no field named.
       const a = analyze(secondOf('finally 2x trap'), ctx);
-      expect(criterionOf(a, 'c1').alternatives).toEqual(['finally 2x trap']);
+      expect(criterionOf(a, 'c1').alternatives).toEqual(['2x trap']);
+      expect(requirementOf(a, 'trap').appearsIn).toEqual([
+        { criterion: 'c1', alternative: 0, n: 2 },
+      ]);
     });
 
     /**
@@ -1270,7 +1281,7 @@ describe('analyze of a split criterion', () => {
         { criterion: 'c1', alternative: 0, n: 1, whole: true },
       ]);
       expect(requirementOf(a, 'monster').appearsIn).toEqual([
-        { criterion: 'c1', alternative: 0, n: 1 },
+        { criterion: 'c1', alternative: 0, n: 1, opening: true },
       ]);
     });
 
@@ -1439,7 +1450,7 @@ describe('analyze with draw cards', () => {
           templateOf([potLine(), line('starter', 'monster'), line('brick', 'trap')], [], {
             hand: { size: 6 },
             mode: 'second',
-            criteria: [{ id: 'c1', text, when: 'second' }],
+            criteria: [{ id: 'c1', ...fieldsOf(text), when: 'second' }],
           }),
           ctx,
         );
@@ -1510,7 +1521,7 @@ describe('analyze with draw cards', () => {
         templateOf([potLine(), line('starter', 'monster')], [], {
           hand: { size: 6 },
           mode: 'second',
-          criteria: [{ id: 'c1', text: 'then 1x monster', when: 'second' }],
+          criteria: [{ id: 'c1', drawn: '1x monster', text: '', when: 'second' }],
         }),
         ctx,
       );
@@ -1529,7 +1540,7 @@ describe('analyze with draw cards', () => {
           templateOf([potLine(), line('starter', 'monster')], [], {
             hand: { size: 6 },
             mode: 'second',
-            criteria: [{ id: 'c1', text, when: 'second' }],
+            criteria: [{ id: 'c1', ...fieldsOf(text), when: 'second' }],
           }),
           ctx,
         );
@@ -1684,7 +1695,11 @@ describe('analyze of a unique requirement', () => {
       { criterion: 'c1', alternative: 0, n: 3, unique: true },
       { criterion: 'c2', alternative: 0, n: 1 },
     ]);
-    expect(criterionOf(a, 'c1').parsed).toEqual({ ok: true, canonical: '3x unique {Starter}' });
+    expect(criterionOf(a, 'c1').parsed).toEqual({
+      ok: true,
+      canonical: '3x unique {Starter}',
+      fields: { text: '3x unique {Starter}' },
+    });
     expect(criterionOf(a, 'c1').alternatives).toEqual(['3x unique {Starter}']);
     // Each starter is a class of its own: that is what telling cards apart takes.
     expect(a.classes!.classes.map(({ lines }) => lines)).toEqual([

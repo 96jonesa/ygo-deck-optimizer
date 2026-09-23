@@ -1011,6 +1011,45 @@ input.narrow-name {
   grid-row: 1;
 }
 
+/*
+ * A criterion's fields (PRD §5.5): one going first, three going second — the
+ * opening five, the cards drawn, the whole hand — stacked in the text's column,
+ * each with its label ABOVE it and its own error or echo beneath. Above and not
+ * beside: a criterion is long, and a label column would take a third of the
+ * width the text has always had.
+ */
+.line.criterion .criterion-fields {
+  display: flex;
+  flex-direction: column;
+  grid-column: 2 / span 2;
+  grid-row: 1;
+  gap: 4px;
+  min-width: 0;
+}
+
+.line.criterion .criterion-field {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.line.criterion .criterion-field-label {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.line.criterion .criterion-field-hint {
+  font-size: var(--fs-sm);
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+.line.criterion .criterion-field-echo,
+.line.criterion .criterion-field .line-error {
+  margin: 0;
+}
+
 .line.criterion .criterion-name {
   grid-column: 2;
   grid-row: 2;
@@ -1735,6 +1774,13 @@ ul.readout {
 
 .syntax-row > dd {
   margin: 0;
+  color: var(--text-dim);
+}
+
+/* The criterion field a row is typed into, set as the editor labels it. */
+.syntax-field {
+  display: block;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
 }
 

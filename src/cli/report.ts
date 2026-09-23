@@ -1,3 +1,4 @@
+import { labelledFields } from '../core/criteria/fields';
 import { countPrefix } from '../core/criteria/print';
 import type { Analysis, Appearance, Issue, Severity } from '../core/model/analyze';
 import { REMAINDER_ID } from '../core/model/compile';
@@ -82,7 +83,7 @@ export function criteriaSection(a: Analysis): string {
   for (const criterion of a.criteria) {
     const title =
       criterion.name === undefined ? criterion.id : `${criterion.id} (${criterion.name})`;
-    out.push(`  ${title}: ${criterion.text}`);
+    out.push(`  ${title}: ${labelledFields(criterion)}`);
     if (!criterion.parsed.ok) out.push('      (not understood)');
     criterion.alternatives.forEach((alternative, i) => {
       out.push(`      ${i + 1}. ${alternative}`);
@@ -97,16 +98,18 @@ export function criteriaSection(a: Analysis): string {
 }
 
 /**
- * Which WINDOW an appearance is about: the criterion's own (the whole hand, or
- * the cards opened on where it is split), the cards drawn, or the whole hand as
- * a `finally` part asks about it. It orders the counts and names them, and the
- * renderer's `criteria-readout.ts` says the same in the same order — a test on
- * either side holds the two to it.
+ * Which WINDOW — which of a criterion's fields (PRD §5.5) — an appearance is
+ * about, in the order the cards arrive: the opening five, the cards drawn, the
+ * whole hand. The whole-hand field is one window whether it stands alone or
+ * beside the others, so it is the one that goes unmarked, as every count of a
+ * criterion written before the fields always did. It orders the counts and names
+ * them, and the renderer's `criteria-readout.ts` says the same in the same order
+ * — a test on either side holds the two to it.
  */
-const windowOf = ({ sixth, whole }: Appearance): 0 | 1 | 2 =>
-  sixth === true ? 1 : whole === true ? 2 : 0;
+const windowOf = ({ opening, sixth }: Appearance): 0 | 1 | 2 =>
+  opening === true ? 0 : sixth === true ? 1 : 2;
 
-const WINDOW_SUFFIX = ['', ' drawn', ' in the whole hand'] as const;
+const WINDOW_SUFFIX = [' in the opening 5', ' drawn', ''] as const;
 
 /**
  * The counts a requirement or a limit appears under, as the criteria editor
@@ -115,11 +118,10 @@ const WINDOW_SUFFIX = ['', ' drawn', ' in the whole hand'] as const;
  * different criteria and must not print alike — and so is `3x unique monster`
  * kept apart from `3x monster`.
  *
- * An appearance asked of the SIXTH CARD, or of the WHOLE HAND by a `finally`
- * part, is kept apart from the same count asked of the criterion's own window,
- * and says so: `1x trap` of the card you draw is a different statement from `1x
- * trap` in six cards, and one row for all of them would be one row for three
- * questions.
+ * An appearance asked of the OPENING FIVE or of the CARDS DRAWN is kept apart
+ * from the same count asked of the whole hand, and says so: `1x trap` of the
+ * card you draw is a different statement from `1x trap` in six cards, and one
+ * row for all of them would be one row for three questions.
  */
 function countsOf(
   appearsIn: readonly Appearance[],

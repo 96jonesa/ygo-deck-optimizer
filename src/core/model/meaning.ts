@@ -1,6 +1,7 @@
 import { canonicalizeExpr, type Expr } from '../criteria/ast';
-import { type CriterionParseOptions, parseCriterion } from '../criteria/parser';
-import { printCriterion } from '../criteria/print';
+import { type CriterionField, parseCriterionFields } from '../criteria/fields';
+import type { CriterionParseOptions } from '../criteria/parser';
+import { printCriterionFields } from '../criteria/print';
 import { canonicalize, type Description } from '../desc/ast';
 import type { DescContext } from '../desc/context';
 import type { Span } from '../desc/lexer';
@@ -19,7 +20,7 @@ import type { TemplateCriterion, TemplateLine } from './template';
 //
 // The other half of that rule lives in the editor: every transform that
 // changes a line's or criterion's text drops the AST stored with it
-// (`withLineText`, `withCriterionText`). The two halves are a pair. Without
+// (`withLineText`, `withCriterionField`). The two halves are a pair. Without
 // the drop, typing would change the text and change nothing that runs; without
 // the authority here, a file whose text no longer parses would lose its
 // meaning. A test on either side pins the pair.
@@ -30,7 +31,10 @@ export type Meaning<T> =
   | { ok: false; message: string; span: Span };
 
 export type LineMeaning = Meaning<{ desc: Description }>;
-export type CriterionMeaning = Meaning<{ expr: Expr }>;
+/** A criterion's failure also says WHICH of its fields the span is in (PRD §5.5). */
+export type CriterionMeaning =
+  | ({ ok: true; stale: string | null } & { expr: Expr })
+  | { ok: false; message: string; span: Span; field: CriterionField };
 
 /** `a and b are the same value`, for two ASTs the printer puts in one fixed key order. */
 function same(a: unknown, b: unknown): boolean {
@@ -79,30 +83,56 @@ export function lineMeaning(line: TemplateLine, ctx: DescContext): LineMeaning {
 }
 
 /**
- * The expression a criterion states, by the same rule as `lineMeaning`.
+ * Whether the fields read as the stored AST. Structurally the same, or — the
+ * one case the fields cannot write the way a version 1 file did — a stored
+ * `finally X` with nothing before it, beside a whole-hand field reading `X`.
  *
- * `opts` carries what the TEMPLATE makes of `then`: how many cards the drawn
- * set can hold (`largestDrawnSet`), which is one where nothing draws. Both
- * callers work it out from the same lines, so the readout and the run cannot
- * come to disagree about whether `then 2x monster` is a question.
+ * A version 1 `finally X` is converted into the whole-hand field alone, which
+ * parses to the PLAIN `X`; its stored AST is the split `{ whole: X }`. The two
+ * judge every hand alike (`finally X` over the whole hand is `X`, proved exactly
+ * in YGO-41), so the fields are not stale: calling them so would flag every such
+ * criterion of every converted file. The stored AST stays the authority, and
+ * compiles to the problem it always did.
+ */
+function sameCriterion(parsed: Expr, stored: Expr): boolean {
+  if (same(parsed, stored)) return true;
+  return (
+    stored.op === 'split' &&
+    stored.five === undefined &&
+    stored.sixth === undefined &&
+    stored.whole !== undefined &&
+    same(parsed, stored.whole)
+  );
+}
+
+/**
+ * The expression a criterion states, by the same rule as `lineMeaning`: the
+ * one expression its FIELDS state together (`parseCriterionFields`), or the
+ * stored AST beside them — which is authoritative, and is flagged when the
+ * fields no longer read as it. Editing any field drops it (`withCriterionField`).
+ *
+ * `opts` carries what the TEMPLATE makes of the drawn-cards field: how many
+ * cards the drawn set can hold (`largestDrawnSet`), which is one where nothing
+ * draws. Both callers work it out from the same lines, so the readout and the
+ * run cannot come to disagree about whether `2x monster` there is a question.
  */
 export function criterionMeaning(
   criterion: TemplateCriterion,
   ctx: DescContext,
   opts: CriterionParseOptions = {},
 ): CriterionMeaning {
-  const parsed = parseCriterion(criterion.text, ctx, opts);
+  const parsed = parseCriterionFields(criterion, ctx, opts);
   if (criterion.expr === undefined) {
     return parsed.ok
       ? { ok: true, expr: canonicalizeExpr(parsed.expr), stale: null }
-      : { ok: false, message: parsed.message, span: parsed.span };
+      : { ok: false, message: parsed.message, span: parsed.span, field: parsed.field };
   }
 
   const expr = canonicalizeExpr(criterion.expr);
-  if (parsed.ok && same(canonicalizeExpr(parsed.expr), expr))
+  if (parsed.ok && sameCriterion(canonicalizeExpr(parsed.expr), expr))
     return { ok: true, expr, stale: null };
-  const reads = parsed.ok ? printCriterion(parsed.expr, ctx) : null;
-  const message = staleText('criterion', printCriterion(expr, ctx), reads);
+  const reads = parsed.ok ? printCriterionFields(parsed.expr, ctx) : null;
+  const message = staleText('criterion', printCriterionFields(expr, ctx), reads);
   return {
     ok: true,
     expr,

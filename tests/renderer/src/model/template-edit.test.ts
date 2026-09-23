@@ -12,9 +12,9 @@ import {
   nextLineId,
   withCardLine,
   withCriterion,
+  withCriterionField,
   withCriterionName,
   withCriterionStop,
-  withCriterionText,
   withCriterionWeight,
   withCriterionWhen,
   withDeckSize,
@@ -720,7 +720,7 @@ describe('withSuggestedLine', () => {
   });
 
   it('keeps the criteria, which is what asked for the line', () => {
-    const one = withCriterionText(withCriterion(EMPTY_TEMPLATE), 'c1', '1x monster');
+    const one = withCriterionField(withCriterion(EMPTY_TEMPLATE), 'c1', 'text', '1x monster');
     expect(withSuggestedLine(one, 'monster').criteria).toEqual(one.criteria);
   });
 });
@@ -780,15 +780,15 @@ describe('withoutCriterion', () => {
   });
 });
 
-describe('withCriterionText', () => {
+describe('withCriterionField', () => {
   it('replaces the text of that criterion and no other', () => {
-    const next = withCriterionText(EXAMPLE_TEMPLATE, 'c2', '1x trap');
+    const next = withCriterionField(EXAMPLE_TEMPLATE, 'c2', 'text', '1x trap');
     expect(criterionTextOf(next, 'c2')).toBe('1x trap');
     expect(criterionTextOf(next, 'c1')).toBe(criterionTextOf(EXAMPLE_TEMPLATE, 'c1'));
   });
 
   it('keeps the criterion in its place, and keeps its name', () => {
-    const next = withCriterionText(EXAMPLE_TEMPLATE, 'c1', '1x spell');
+    const next = withCriterionField(EXAMPLE_TEMPLATE, 'c1', 'text', '1x spell');
     expect(criterionIds(next)).toEqual(['c1', 'c2']);
     expect(next.criteria[0]).toMatchObject({ name: 'A, B and any monster' });
   });
@@ -798,11 +798,13 @@ describe('withCriterionText', () => {
       ...EMPTY_TEMPLATE,
       criteria: [{ id: 'c1', text: '1x monster', expr: { op: 'and', args: [] } as never }],
     };
-    expect(withCriterionText(stored, 'c1', '1x spell').criteria[0]).not.toHaveProperty('expr');
+    expect(withCriterionField(stored, 'c1', 'text', '1x spell').criteria[0]).not.toHaveProperty(
+      'expr',
+    );
   });
 
   it('leaves the template alone when the id is not there', () => {
-    expect(withCriterionText(EXAMPLE_TEMPLATE, 'c9', '1x trap')).toBe(EXAMPLE_TEMPLATE);
+    expect(withCriterionField(EXAMPLE_TEMPLATE, 'c9', 'text', '1x trap')).toBe(EXAMPLE_TEMPLATE);
   });
 });
 
@@ -827,7 +829,7 @@ describe('withCriterionName', () => {
   });
 
   it('keeps the text', () => {
-    const one = withCriterionText(EMPTY_TEMPLATE_WITH_C1, 'c1', '1x monster');
+    const one = withCriterionField(EMPTY_TEMPLATE_WITH_C1, 'c1', 'text', '1x monster');
     expect(withCriterionName(one, 'c1', 'a monster').criteria[0]).toMatchObject({
       text: '1x monster',
     });
@@ -937,9 +939,9 @@ describe('an edited template', () => {
     template = withHandSize(template, 6);
     template = withGroupCard(withGroup(template, 'starter'), 'g1', MAXX);
     template = withSuggestedLine(template, 'level 4 or lower monster');
-    template = withCriterionText(withCriterion(template), 'c1', '1x monster');
+    template = withCriterionField(withCriterion(template), 'c1', 'text', '1x monster');
     template = withCriterionName(template, 'c1', 'any monster');
-    template = withCriterionText(withCriterion(template), 'c2', '1x spell');
+    template = withCriterionField(withCriterion(template), 'c2', 'text', '1x spell');
     template = withMovedCriterion(template, 'c2', -1);
     expect(validateTemplate(template)).toMatchObject({ ok: true });
   });
@@ -1207,7 +1209,7 @@ describe('a criterion keeps everything but its parsed form', () => {
   };
 
   it('keeps the tag, the weight and the stop through a text edit, dropping only the AST', () => {
-    const next = withCriterionText(tagged, 'c1', '1x trap');
+    const next = withCriterionField(tagged, 'c1', 'text', '1x trap');
     expect(next.criteria[0]).toEqual({
       id: 'c1',
       text: '1x trap',
@@ -1240,10 +1242,10 @@ describe('a criterion keeps everything but its parsed form', () => {
   });
 
   /**
-   * THE SIXTH CARD lives inside the criterion's `text` and its `expr`, not in a
-   * field of its own, so these transforms carry it for the same reason they
-   * carry the tag — and `withCriterionText` drops it with the AST, which is
-   * right: the text being retyped is the new statement of the split.
+   * A SPLIT lives in the criterion's going-second fields (PRD §5.5) and its ONE
+   * `expr`, so these transforms carry the fields for the same reason they carry
+   * the tag — and `withCriterionField` drops the AST whichever field is typed
+   * into, which is right: the one expression covers all three.
    */
   describe('a split criterion', () => {
     const splitTagged: Template = {
@@ -1251,7 +1253,9 @@ describe('a criterion keeps everything but its parsed form', () => {
       criteria: [
         {
           ...tagged.criteria[0]!,
-          text: '1x {starter} then no trap',
+          opening: '1x {starter}',
+          drawn: 'no trap',
+          text: '',
           expr: {
             op: 'split',
             five: { op: 'req', n: 1, desc: { anyOf: [{ t: 'group', groupId: 'g1' }] } },
@@ -1270,16 +1274,35 @@ describe('a criterion keeps everything but its parsed form', () => {
       expect(next.criteria[0]).toEqual({ ...splitTagged.criteria[0], name: 'renamed' });
     });
 
-    it('keeps the text — the split included — through a text edit, and drops only the AST', () => {
-      const next = withCriterionText(splitTagged, 'c1', '1x monster then 1x trap');
+    it('keeps the other fields through an edit of one, and drops only the AST', () => {
+      const next = withCriterionField(splitTagged, 'c1', 'drawn', '1x trap');
       expect(next.criteria[0]).toEqual({
         id: 'c1',
-        text: '1x monster then 1x trap',
+        opening: '1x {starter}',
+        drawn: '1x trap',
+        text: '',
         name: 'the opener',
         when: 'second',
         weight: 6,
         stop: true,
       });
+      // The whole-hand field too: every field is text the ONE expression covers.
+      expect(withCriterionField(splitTagged, 'c1', 'text', 'no spell').criteria[0]).toEqual({
+        ...next.criteria[0],
+        drawn: 'no trap',
+        text: 'no spell',
+      });
+    });
+
+    it('stores an emptied opening-5 or drawn-cards field as no field at all', () => {
+      const next = withCriterionField(splitTagged, 'c1', 'opening', '  ');
+      expect(next.criteria[0]).not.toHaveProperty('opening');
+      expect(next.criteria[0]).toMatchObject({ drawn: 'no trap', text: '', when: 'second' });
+    });
+
+    it('keeps the text of every field through a change of tag: nothing typed is deleted', () => {
+      const next = withCriterionWhen(splitTagged, 'c1', 'first');
+      expect(next.criteria[0]).toMatchObject({ opening: '1x {starter}', drawn: 'no trap' });
     });
 
     it('drops the AST when a deleted group is named in the FIVE-card part', () => {
@@ -1296,7 +1319,8 @@ describe('a criterion keeps everything but its parsed form', () => {
         criteria: [
           {
             ...splitTagged.criteria[0]!,
-            text: '1x monster then 1x {starter}',
+            opening: '1x monster',
+            drawn: '1x {starter}',
             expr: {
               op: 'split',
               five: {
@@ -1334,7 +1358,7 @@ describe('a criterion keeps everything but its parsed form', () => {
 
 /**
  * THE SILENT REBUILD, on the editor side. A transform that lists the fields it
- * knows about drops the ones it does not — which is how `withCriterionText`
+ * knows about drops the ones it does not — which is how `withCriterionText`, as it was then,
  * once reset the `when` tag of any criterion whose text was typed into. `draw`
  * (PRD §5.7) is the newest field a line carries, and it is not text.
  */
@@ -1399,7 +1423,8 @@ describe('a criterion’s `stop` survives the edits that are not about it', () =
 
   it('survives typing over the text', () => {
     const id = toggled().criteria[0]!.id;
-    expect(stopOfId(withCriterionText(toggled(), id, '2x monster'), id)).toBe(true);
+    expect(stopOfId(withCriterionField(toggled(), id, 'text', '2x monster'), id)).toBe(true);
+    expect(stopOfId(withCriterionField(toggled(), id, 'opening', '1x monster'), id)).toBe(true);
   });
 
   it('survives naming it', () => {

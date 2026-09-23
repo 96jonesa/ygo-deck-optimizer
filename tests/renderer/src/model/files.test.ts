@@ -8,7 +8,7 @@ import {
 import type { Template } from '../../../../src/shared/types';
 
 const TEMPLATE: Template = {
-  version: 1,
+  version: 2,
   deckSize: 40,
   hand: { size: 5 },
   groups: [],

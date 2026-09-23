@@ -126,7 +126,7 @@ describe.skipIf(!EDOPRO_WORKDIR)(
   () => {
     /** Two criteria pulling opposite ways, and one that counts either way. */
     const SPLIT: Template = {
-      version: 1,
+      version: 2,
       deckSize: 40,
       hand: { size: 6 },
       mode: 'average',
@@ -352,7 +352,7 @@ describe.skipIf(!EDOPRO_WORKDIR)(
     function split(first: number, second: number): Template {
       const codes = codesOf(first + second);
       return {
-        version: 1,
+        version: 2,
         deckSize: 40,
         hand: { size: 6 },
         mode: 'average',

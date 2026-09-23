@@ -5,6 +5,7 @@ import type {
   Fact,
   FactSection,
 } from '../../../shared/syntax';
+import { FIELD_LABELS } from '../model/criterion-fields';
 import { textRuns } from '../model/syntax-view';
 
 // The in-app reference for every input format, as a disclosure inside the
@@ -45,6 +46,8 @@ function Row({ row }: { row: Example }) {
   return (
     <div className={failing ? 'syntax-row bad' : 'syntax-row'}>
       <dt>
+        {/* The field a criterion row is typed into, labelled as the editor labels it. */}
+        {row.field !== undefined && <span className="syntax-field">{FIELD_LABELS[row.field]}</span>}
         <code>{row.syntax}</code>
       </dt>
       <dd>
@@ -61,7 +64,7 @@ function Group({ group }: { group: ExampleGroup }) {
       <h4>{group.heading}</h4>
       <dl className="syntax-rows">
         {group.rows.map((row) => (
-          <Row key={row.syntax} row={row} />
+          <Row key={`${row.field ?? ''} ${row.syntax}`} row={row} />
         ))}
       </dl>
       {group.note !== undefined && (

@@ -19,7 +19,7 @@ combinatorial probability plus a card-database lookup layer.
 | Docs: [PRD](docs/PRD.md), [TDD](docs/TDD.md) | Done |
 | M0 — de-risk spike (headless) | **Done**: M0a–M0f (scaffold, card data, descriptions, implication, criteria, Monte Carlo oracle + CLI `estimate`) |
 | M1 — exact engine + optimizer (headless) | **Done**: M1a exact scorer, M1b compile + analyze, M1c optimizer + CLI `optimize` |
-| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), range requirements (`1-2x monster`: a ceiling that binds the cards it does not take, so the range means "in addition to the rest"), `exactly nx` for a range whose ends agree, the going-second split (`1x {starter} then 1x [Ash]`: what the opening five must hold, and what the cards you draw must be — one card on its own, or the whole drawn set where a line draws), inline name completion in both editors (`[card]`, `{group}`, `"archetype"`), M2g files (`.ydk` deck import, template open/save with `cardSnapshot`, CSV/JSON export of a run), three run modes (going first, going second, or their exact average, with each criterion tagged for the hand it is judged in), weighted criteria (rank by expected weight rather than success rate; a hand is worth the highest weight it meets), draw cards (a line whose copies are played and replaced by `n` fresh cards, so the hand is a prefix of the deck rather than a fixed size; exact per prefix length, with a per-criterion "stop here" that keeps an opening hand that already works — engine, CLI and editor, with the per-length breakdown, the lower-bound caveat and every refusal read where the user is), `then` beside draw cards (the split reads the whole drawn set — the card for turn and everything the draw cards fetched — which generalises the one-card reading bit for bit), a `finally` clause (a full criterion over all six cards standing beside one over the opening five: `1x {starter} finally at most 1x brick`, for requirements early and a limit late), `unique` requirements (`3 unique {Starter}`: three different cards, copies of one counting once; `exactly 2 unique` and `2-3 unique` cap how many different cards, a further copy of a counted card breaking nothing), group checkboxes under each card line (one per group, ticked iff the group holds the card — the group's card list is the only record, so removing a line never touches a group), no copy limit on a named card (a line holds as many copies as the deck has room for, and a `.ydk` import keeps every copy), and an in-app syntax reference whose every example is parsed by a test |
+| M2 — app MVP | **In progress**: M2a main process (EDOPro probe, settings, card service, parse/analyze services, the IPC contract), M2b optimizer worker (a warm `worker_threads` thread, `run:start` / `run:cancel` / `run:confirm`, progress and results pushed on `run:event`), M2c shell + card picker (first-run setup, status bar, settings, the reusable card picker), M2d template editor (lines, copy ranges, groups, parse echo, remainder and derived totals), M2e criteria editor (criterion rows, nested OR expansion preview, filled-by / near-miss / limit readouts), M2f results (best ratio, ranked table with exact ties, plateau with a live δ, copies-vs-odds sweep charts, per-criterion breakdown, irrelevant lines, the limits footnote), range requirements (`1-2x monster`: a ceiling that binds the cards it does not take, so the range means "in addition to the rest"), `exactly nx` for a range whose ends agree, the going-second split (`1x {starter} then 1x [Ash]`: what the opening five must hold, and what the cards you draw must be — one card on its own, or the whole drawn set where a line draws), inline name completion in both editors (`[card]`, `{group}`, `"archetype"`), M2g files (`.ydk` deck import, template open/save with `cardSnapshot`, CSV/JSON export of a run), three run modes (going first, going second, or their exact average, with each criterion tagged for the hand it is judged in), weighted criteria (rank by expected weight rather than success rate; a hand is worth the highest weight it meets), draw cards (a line whose copies are played and replaced by `n` fresh cards, so the hand is a prefix of the deck rather than a fixed size; exact per prefix length, with a per-criterion "stop here" that keeps an opening hand that already works — engine, CLI and editor, with the per-length breakdown, the lower-bound caveat and every refusal read where the user is), `then` beside draw cards (the split reads the whole drawn set — the card for turn and everything the draw cards fetched — which generalises the one-card reading bit for bit), a `finally` clause (a full criterion over all six cards standing beside one over the opening five: `1x {starter} finally at most 1x brick`, for requirements early and a limit late), `unique` requirements (`3 unique {Starter}`: three different cards, copies of one counting once; `exactly 2 unique` and `2-3 unique` cap how many different cards, a further copy of a counted card breaking nothing), group checkboxes under each card line (one per group, ticked iff the group holds the card — the group's card list is the only record, so removing a line never touches a group), no copy limit on a named card (a line holds as many copies as the deck has room for, and a `.ydk` import keeps every copy), three fields for a going-second criterion in place of `then` and `finally` (opening 5, the cards drawn, the whole hand — any combination; template files are now version 2, and a version 1 file converts on open), and an in-app syntax reference whose every example is parsed by a test |
 | M3 — polish | Not started |
 | M4 — release | **In progress**: installers for macOS (arm64 DMG) and Windows (x64 NSIS) built and attached by `.github/workflows/release.yml` on a `v*` tag; the suite also runs on Windows in CI. Unsigned, so each platform warns once. `v0.2.0` shipped both and the Windows build has been run on Windows |
 
@@ -119,44 +119,53 @@ also holds, and a criterion you ticked is still judged after drawing when your o
 you. Where a criterion counts the whole hand — a limit, or a range requirement's ceiling — the
 criteria panel says so beside the boxes: **drawing more cards can make a hand fail**, so copies of a
 draw card can *lower* the score, and this is the flag that stops it. Every refusal (the deck running
-out, the prefix cap, the build cap, a `then` asking for more cards than the draws can fetch) is shown
+out, the prefix cap, the build cap, a drawn-cards field asking for more cards than the draws can fetch) is shown
 whole under the lines, with the exact figure and the remedies the engine wrote.
 
-**Going second, you can ask what the card you draw has to be.** A going-second criterion may be
-**split** with `then`: `1x {starter} then 1x [Ash Blossom & Joyous Spring]` says the five cards you
-open on hold a starter **and** the card you draw is Ash Blossom. That is a different question from
-asking the same of all six cards together, and a harder one — it fixes *which* card is which, and
-it is the question to ask when the extra card has to be the answer. A leading `then` asks only
-about the card drawn. What follows `then` is about **one card**, so it takes one requirement at
-most (a limit is free: `then no trap` says the card drawn is not a trap), and `then 2x monster` is
-refused with the span of the thing that asked too much. The split is going-second only — going
-first nothing is drawn — so a criterion with a `then` in it must be tagged going second, and
-a template that says otherwise does not run. A criterion with no `then` is judged over all six
-cards exactly as before.
+**Going second, a criterion has three fields** — in the order the cards arrive:
 
-**And you can ask a second question of the whole hand.** A going-second criterion may carry a
-`finally` part: `1x {starter} finally at most 1x brick` says the five you open on hold a starter
-**and** all six hold at most one brick. Where `then` pins a window to the cards you drew, `finally`
-is a **full criterion** over the hand as a whole — requirements, ranges, limits, `or`, nesting, all
-of it — and it is what to write when you need something **early** and a limit **late**, because a
-limit over five does not give you that limit over six and the card you draw is exactly what breaks
-it. It stands with or without a `then`, and either way the part before it becomes a question about
-the opening five alone; `finally 2x monster` on its own asks only about the six. One card answers
-each part it fits: `1x monster finally 1x monster` is met by a single monster in the opening five,
-since each part is judged over its own cards. Like `then`, it is going-second only, and a criterion
-holds at most one.
+| field | what it asks about |
+| --- | --- |
+| **Opening 5** | the five cards you open on |
+| **Drawn cards** | the card drawn for turn, plus anything draw cards fetch |
+| **Whole hand** | all of it |
 
-**With draw cards, `then` is about everything you drew.** The card for turn *and* whatever the draw
-cards fetched, less any copy you played to draw with — so `1x {starter} then 2x monster` is a
-question you can now write, and it fails on every hand that drew nothing. The bound widens with the
-template: one card where nothing draws, and one plus what the draw cards can fetch where something
-does, capped by the hand itself (three Pots of Greed reach seven; six Upstart Goblins reach six,
-because the five you opened on cannot hold all six copies and the last resolves out of the drawn set).
-`finally` is then about the hand you **end up holding** — the five, the card for turn and everything
-fetched, less the copies you played — which makes it the place to put a limit that drawing can break.
-A criterion marked **Stop here** fetches nothing when it fires, so anything after its `then` that
-needs two cards can never hold in that branch — which the editor says rather than leaving it to
-score zero.
+Fill any of them, in any combination; an empty one shows *(anything)* and asks nothing, and every
+filled one must hold. `1x {starter}` in the opening 5 and `1x [Ash Blossom & Joyous Spring]` drawn
+says the five cards you open on hold a starter **and** the card you draw is Ash Blossom. That is a
+different question from asking the same of all six cards together, and a harder one — it fixes
+*which* card is which, and it is the question to ask when the extra card has to be the answer.
+Without draw cards the drawn field is about **one card**, so it takes one requirement at most (a
+limit is free: `no trap` there says the card drawn is not a trap), and `2x monster` there is
+refused with the span of the thing that asked too much. The whole-hand field is a **full
+criterion** over all six — requirements, ranges, limits, `or`, nesting — and beside the opening 5
+it is what to write when you need something **early** and a limit **late**, because a limit over
+five does not give you that limit over six and the card you draw is exactly what breaks it:
+`1x {starter}` opening, `at most 1x brick` whole. One card answers each field it fits:
+`1x monster` in the opening 5 and in the whole hand are both met by a single monster in the
+opening five, since each field is judged over its own cards.
+
+With only the whole hand filled, a going-second criterion is exactly the criterion it would be
+going first, over six cards. A going-first or either-hand criterion has that field alone; switch a
+row to going first with something in its opening-5 or drawn field and the text stays on screen
+with an error saying what to do with it — nothing typed is deleted. The fields replaced the
+`then` and `finally` keywords: typed into a field they are refused with a pointer at the right
+field, and a template file saved before (version 1) opens with its `then` / `finally` text laid
+out in the three fields.
+
+**With draw cards, the drawn field is everything you drew.** The card for turn *and* whatever the
+draw cards fetched, less any copy you played to draw with — so `2x monster` there is a question you
+can now write, and it fails on every hand that drew nothing. The field is labelled *Drawn cards*,
+with *the card drawn for turn, plus anything draw cards fetch* under it, whether or not a line
+draws — marking a draw card never relabels it under you. The bound widens with the template: one card where nothing draws, and one plus what the
+draw cards can fetch where something does, capped by the hand itself (three Pots of Greed reach
+seven; six Upstart Goblins reach six, because the five you opened on cannot hold all six copies and
+the last resolves out of the drawn set). The whole-hand field is then about the hand you **end up
+holding** — the five, the card for turn and everything fetched, less the copies you played — which
+makes it the place to put a limit that drawing can break. A criterion marked **Stop here** fetches
+nothing when it fires, so its drawn field is judged on the one card for turn and its whole hand on
+the six; anything in the drawn field that needs two cards can never hold in that branch — which the
+editor says rather than leaving it to score zero.
 
 Under them are the two readouts the tool exists for. **Per requirement**: the lines that fill it
 and — the point — the near misses, each with the dimension it leaves unsaid (`` `monster`:
@@ -247,21 +256,22 @@ A hand succeeds if it meets any one criterion (`src/core/criteria`: `parseCriter
 | `3 unique {Starter}` (or `3x unique`) | A requirement for three **different** cards: two copies of one card count once. It takes cards exactly as `3x` does, so `3 unique {Starter}, 1x {Extender}` needs four cards even when a starter is also an extender. `exactly 2 unique {Starter}` and `2-3 unique {Starter}` cap how many **different** cards: A A B meets `exactly 2 unique` — a second copy of A is no new card — and A B C does not, unless another requirement takes one of them. `at most` and `no` beside it are refused (`0-2 unique` says it). Every line that could fill one must name **one** card — a group line or an `or` line holds an unknown number of different cards and is an error on that line until it is split |
 | `at most 1x [Brick]`, `no trap` | A **limit**: a count over the whole hand, not an assignment |
 
-One thing is not a term but a **split** of the criterion: `then`, written once, between what the
-five cards you open on must hold and what the card you draw must be (`1x {starter} then 1x [Ash]`).
-It binds looser than `and` and `or` both, so neither side ever needs parentheses, and a leading
-`then` leaves the opening five unasked about. Its right-hand side is a criterion over the cards you
-**drew**: at most `largestDrawnSet` requirement slots (`slotsOf` counts them exactly as expansion
-would, so the parser refuses what asks too much with a span rather than leaving it to score zero),
-any number of limits, and a ceiling or a limit of that size or more dropped as something the drawn
-set can never break. Without draw cards that bound is **one card** and every one of those rules is
-the rule it always was; with them it is one plus what the draw cards fetch, so `then 2x monster`
-parses in one template and not in another. The bound is the template's, so it is passed to the
-parser (`maxDrawnSlots`) rather than guessed — and `validateExpr` does not check it at all, for the
-same reason it reads `stop` whether or not anything draws: what a file may *say* is a different
-question from what a template makes of it. A split criterion is judged only going second, and only
+A going-second criterion's three **fields** are not terms but **windows** of the hand, and each
+field is a criterion of its own over its window: the opening 5, the cards you **drew** (the one for
+turn, plus what draw cards fetch), and the whole hand. The drawn field takes at most
+`largestDrawnSet` requirement slots (`slotsOf` counts them exactly as expansion would, so the field
+refuses what asks too much with a span rather than leaving it to score zero), any number of limits,
+and a ceiling or a limit of that size or more is dropped as something the drawn set can never
+break. Without draw cards that bound is **one card**; with them it is one plus what the draw cards
+fetch, so `2x monster` in the drawn field parses in one template and not in another. The bound is
+the template's, so it is passed to the parser (`maxDrawnSlots`) rather than guessed — and
+`validateExpr` does not check it at all, for the same reason it reads `stop` whether or not
+anything draws: what a file may *say* is a different question from what a template makes of it. A
+criterion with anything in its opening-5 or drawn field is judged only going second, and only
 against a hand dealt in two pieces (`HandSize.drawn`); `resolveTemplate` and `analyze` both refuse
-one tagged otherwise, in the same words.
+one tagged otherwise, in the same words. Inside the engine the fields are one `split` node —
+`five`, `sixth`, `whole` — which a version 1 file wrote as `five then sixth finally whole`; the
+parser still reads that form, and only to convert such a file.
 
 The `x` may be left out wherever only a term can start (`1-2 monster`, `at most 2 trap`); the
 printer always writes it. `and` and `,` are the same and bind tighter than `or`; parentheses
@@ -432,7 +442,7 @@ ceiling makes a surplus card fatal, so more cards is not more chances: `exactly 
 Pot of Greed falls from 0.3734 to 0.3181, monotonically in the copies held — which is what `stop` is
 there to stop.
 
-**`then` beside draw cards means the whole drawn set**, and the same $`\psi`$ pays for it. Going
+**The drawn field beside draw cards means the whole drawn set**, and the same $`\psi`$ pays for it. Going
 second the hand is dealt in two pieces: positions $`0 \ldots H-2`$ are the cards you opened on and
 positions $`H-1 \ldots \ell-1`$ are everything you drew — the card for turn, and whatever the draw
 cards fetched, less any copy that resolved out of it. With no draw card $`\ell = H`$ and the drawn
@@ -464,8 +474,8 @@ so the lcm picks it up and the exactness check already there covers it.
 It belongs to the **hand** and not to the criteria, exactly as `HandSize.drawn` says: with nothing
 split, the value does not depend on $`d`$, the sum is $`H \cdot \text{value}`$, and the score is the
 undrawn one — which is what lets one criterion of a run be split and another not while every row of
-the readout sits over one denominator. Two consequences a writer meets: `then 2x monster` becomes
-writable, bounded by `largestDrawnSet` — the smaller of the positions there are and the whole hand,
+the readout sits over one denominator. Two consequences a writer meets: `2x monster` in the drawn
+field becomes writable, bounded by `largestDrawnSet` — the smaller of the positions there are and the whole hand,
 and neither dominates — and it can never hold on a hand that **stopped**, since a criterion that
 stops fetches nothing and the drawn set is then the one card.
 
@@ -473,6 +483,14 @@ stops fetches nothing and the drawn set is then the one card.
 
 A **template file** is versioned JSON holding the lines, the groups, the criteria, the deck size
 and the run. Three things in it are worth knowing.
+
+**A criterion's fields are stored apart**, and the file is `version` 2 because of it: `opening`
+and `drawn` for the going-second windows, written only when they say something, and `text` for the
+whole hand — the one field every criterion has. A version 1 file, whose going-second criteria wrote
+`then` and `finally` into one text, is converted when it is opened: the text before `then` goes to
+`opening`, after it to `drawn`, after `finally` to `text` — and a text with neither goes to
+`text`, because it was always about the whole hand. Saving writes version 2, which an older build
+refuses by name rather than misreading.
 
 **The stored AST is what runs.** Every line and criterion is written with its parsed form
 (`desc` / `expr`) beside the text you typed. The text is kept for editing, and the AST is what
@@ -730,6 +748,21 @@ It also decides what is runnable. A template with fifteen going-first criteria a
 going-second ones tells 16 classes apart in each single mode and 31 together: both single modes
 run, and only the average is refused for passing the engine's limit of 30.
 
+The fifth example, [`examples/going-second.json`](examples/going-second.json), fills all three
+fields of one going-second criterion — `1x level 4 monster` in the opening 5, `1x trap` drawn, `at
+most 1x level 8 monster` in the whole hand — on one pinned deck of three Level 4s, three Level 8s,
+eight traps and 26 other cards:
+
+```sh
+EDOPRO_WORKDIR=~/Applications/ProjectIgnis npm run -s cli -- optimize examples/going-second.json --top 1
+```
+
+It scores **1,548,888 / 23,030,280 = 6.7254%**, over the $`6 \cdot \binom{40}{6}`$ orderings of
+which card was drawn for turn. The opening and whole-hand fields alone score 7,464,666 over the
+same denominator, and the opening field alone 7,773,885 — which is
+$`1 - \binom{37}{5} / \binom{40}{5}`$ exactly, a question about the first five cards and nothing
+else. `tests/core/model/compile.test.ts` pins all three.
+
 The Monte Carlo engine is the project's independent oracle (TDD §10.4): it draws concrete cards
 tagged with their line and assigns them to requirement slots by brute force, sharing no code
 with the exact engine (`src/core/prob/scorer.ts`), which is tested against it. With `EDOPRO_WORKDIR` set,
@@ -811,7 +844,7 @@ BABELCDB_PATH=~/repos/deps/babelcdb/cards.cdb EDOPRO_WORKDIR=~/Applications/Proj
 | `src/renderer/` | React UI; sandboxed, talks only through `window.api`. Logic worth testing lives in pure functions under `src/renderer/src/model/` |
 | `src/shared/` | The IPC contract: channel names and `RendererApi` (`ipc.ts`), payload types (`types.ts`); and the in-app syntax reference (`syntax.ts`), which imports nothing at runtime because the renderer bundles it |
 | `src/cli/` | Development harness (`npm run cli`), not shipped |
-| `examples/` | Example templates; `motivating.json` is the PRD's motivating example, `first-and-second.json` the one where the three run modes disagree, `drawing.json` the one with draw cards |
+| `examples/` | Example templates; `motivating.json` is the PRD's motivating example, `first-and-second.json` the one where the three run modes disagree, `drawing.json` the one with draw cards, `going-second.json` the one using all three fields of a going-second criterion |
 | `tests/` | Mirrors `src/` |
 | `scripts/` | `check-licenses.mjs` |
 

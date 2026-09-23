@@ -1,3 +1,4 @@
+import { parseCriterionField } from '../../src/core/criteria/fields';
 import { parseCriterion } from '../../src/core/criteria/parser';
 import type { DescContext } from '../../src/core/desc/context';
 import { parse } from '../../src/core/desc/parser';
@@ -29,7 +30,11 @@ export function syntaxRows(): SyntaxRow[] {
  */
 export function checkExampleRow({ section, row }: SyntaxRow, ctx: DescContext): void {
   const result =
-    section.parses === 'description' ? parse(row.syntax, ctx) : parseCriterion(row.syntax, ctx);
+    section.parses === 'description'
+      ? parse(row.syntax, ctx)
+      : row.field !== undefined
+        ? parseCriterionField(row.field, row.syntax, ctx)
+        : parseCriterion(row.syntax, ctx);
   if (row.fails === undefined) {
     if (result.ok) return;
     throw new Error(`\`${row.syntax}\` must parse as a ${section.parses}: ${result.message}`);

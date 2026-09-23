@@ -1,7 +1,8 @@
 import type { CardRecord } from '../cards/record';
 import type { Expr, FlatCriterion } from '../criteria/ast';
 import { expand, expandAll } from '../criteria/expand';
-import { printCriterion } from '../criteria/print';
+import { FIELD_NAMES, labelledFields } from '../criteria/fields';
+import { printCriterionFields } from '../criteria/print';
 import type { Description } from '../desc/ast';
 import type { CardLookup, DescContext, GroupLookup, SetnameLookup } from '../desc/context';
 import { type Groups, matcher } from '../desc/evaluate';
@@ -164,6 +165,7 @@ export interface ResolvedFlat extends ResolvedSide {
 export interface ResolvedCriterion {
   id: string;
   name?: string;
+  /** What the user typed, its fields named where there is more than the whole hand (`labelledFields`). */
   text: string;
   expr: Expr;
   /** Which hand it is judged for, defaulted: `both` unless the template says otherwise. */
@@ -175,7 +177,7 @@ export interface ResolvedCriterion {
   weight: number;
   /** Whether the player would STOP for it, defaulted (`stopsFor`). */
   stop: boolean;
-  /** Canonical text of `expr`. */
+  /** Canonical text of `expr`, its fields named where it is split (`printCriterionFields`). */
   canonical: string;
   /** This criterion's own expansion, for the reader; `flat` is what is judged. */
   alternatives: ResolvedFlat[];
@@ -424,10 +426,16 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
   // Parsing may drop a criterion, so the weights are carried on the entries
   // that survive rather than looked up by position afterwards.
   template.criteria.forEach((criterion, at) => {
-    const { id, name, text } = criterion;
+    const { id, name } = criterion;
+    const text = labelledFields(criterion);
     const meant = criterionMeaning(criterion, descCtx, { maxDrawnSlots });
     if (!meant.ok) {
-      errors.push(`criterion ${JSON.stringify(id)}: ${located(meant.message, text, meant.span)}`);
+      // The span is inside ONE field, which is named unless it is the only one there is.
+      const field = meant.field === 'text' ? '' : ` (${FIELD_NAMES[meant.field]})`;
+      const typed = criterion[meant.field] ?? '';
+      errors.push(
+        `criterion ${JSON.stringify(id)}${field}: ${located(meant.message, typed, meant.span)}`,
+      );
       return;
     }
     if (meant.stale !== null) warnings.push(`criterion ${JSON.stringify(id)}: ${meant.stale}`);
@@ -486,7 +494,7 @@ export function resolveTemplate(template: Template, ctx: ResolveContext): Resolv
     }
     criteria.push({
       ...criterion,
-      canonical: printCriterion(criterion.expr, descCtx),
+      canonical: printCriterionFields(criterion.expr, descCtx),
       alternatives: indexed(expanded.flat, criterion.stop),
       dropped: expanded.dropped,
     });

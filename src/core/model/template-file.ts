@@ -1,4 +1,5 @@
 import type { Expr } from '../criteria/ast';
+import { fieldIsEmpty } from '../criteria/fields';
 import type { Description } from '../desc/ast';
 import type { CardLookup, DescContext } from '../desc/context';
 import { criterionMeaning, lineMeaning } from './meaning';
@@ -101,8 +102,15 @@ export function templateToFile(template: Template, ctx: DescContext): TemplateFi
 
   const criteria = template.criteria.map((criterion): TemplateCriterion => {
     const meant = criterionMeaning(criterion, ctx);
-    const out: TemplateCriterion = { id: criterion.id, text: criterion.text };
+    const out: TemplateCriterion = { id: criterion.id } as TemplateCriterion;
     if (criterion.name !== undefined) out.name = criterion.name;
+    // Each field apart, in the order the cards arrive (TDD §14): the whole hand
+    // is `text`, and is written always, since every criterion has it; the two
+    // going-second fields only where they say something, an empty one being
+    // "anything" and stored as no field at all.
+    if (!fieldIsEmpty(criterion.opening)) out.opening = criterion.opening!;
+    if (!fieldIsEmpty(criterion.drawn)) out.drawn = criterion.drawn!;
+    out.text = criterion.text;
     // Written out in full, `both` included: which hand a criterion is for is
     // the user's decision, and a file that leaves it to a default is a file
     // whose meaning changes if the default ever does.

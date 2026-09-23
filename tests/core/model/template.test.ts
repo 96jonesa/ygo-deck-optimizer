@@ -19,7 +19,7 @@ import { motivatingTemplate } from '../../helpers/motivating';
 /** A small valid template file, as parsed JSON; tests break one thing at a time. */
 function valid(): Record<string, unknown> {
   return {
-    version: 1,
+    version: 2,
     deckSize: 40,
     hand: { size: 5 },
     groups: [{ id: 'g1', name: 'starter', cards: [{ passcode: 14558127, name: 'Ash Blossom' }] }],
@@ -59,7 +59,7 @@ describe('validateTemplate', () => {
 
   it('accepts the template file of TDD §14, stored ASTs and card snapshot included', () => {
     const json = {
-      version: 1,
+      version: 2,
       deckSize: 40,
       hand: { size: 5 },
       groups: [
@@ -175,14 +175,15 @@ describe('validateTemplate', () => {
       expect(errorsOf(json)).toEqual([expect.stringMatching(/^a template is a JSON object/)]);
   });
 
-  it('refuses an unknown version, and says which it reads', () => {
-    expect(errorsOf(withField('version', 2))).toEqual([
-      'this file has `version` 2; this build reads version 1 templates',
+  it('refuses an unknown version, and says which it reads and which it converts', () => {
+    expect(errorsOf(withField('version', 3))).toEqual([
+      'this file has `version` 3; this build reads version 2 templates, and converts version 1',
     ]);
     expect(errorsOf(withField('version', '1'))).toHaveLength(1);
+    expect(errorsOf(withField('version', '2'))).toHaveLength(1);
     const { version: _version, ...unversioned } = valid();
     expect(errorsOf(unversioned)).toEqual([
-      'this file has no `version`; this build reads version 1 templates',
+      'this file has no `version`; this build reads version 2 templates, and converts version 1',
     ]);
   });
 
@@ -405,11 +406,13 @@ describe('modes and criterion tags', () => {
       expect(splitNeedsSecond('both')).toContain('this one is judged for both hands');
       for (const when of ['first', 'both'] as const) {
         expect(splitNeedsSecond(when), when).toContain(
-          '`then` and `finally` split the hand you draw going second',
+          'the opening-5 and drawn-cards fields split the hand you draw going second',
         );
         expect(splitNeedsSecond(when), when).toContain('tag it going second');
-        // Both ways out are named, because a criterion may hold either separator.
-        expect(splitNeedsSecond(when), when).toContain('drop the `then` or `finally`');
+        // Both ways out are named: the tag, or the text moved where this hand has a field for it.
+        expect(splitNeedsSecond(when), when).toContain(
+          'move what they say into the whole-hand field and empty them',
+        );
       }
     });
   });
@@ -679,5 +682,103 @@ describe('validateTemplate', () => {
       expect(result.template.lines.every((own) => !('draw' in own))).toBe(true);
       expect(result.template.criteria.every((own) => !('stop' in own))).toBe(true);
     }
+  });
+});
+
+/**
+ * A criterion's three fields in the file (TDD §14, PRD §5.5), and the
+ * conversion of a version 1 file, whose criteria wrote them with `then` and
+ * `finally` in one text.
+ */
+describe('validateTemplate and the criterion fields', () => {
+  const SPLIT = {
+    op: 'split',
+    five: { op: 'req', n: 1, desc: { anyOf: [{ t: 'group', groupId: 'g1' }] } },
+    sixth: { op: 'atMost', n: 0, desc: { anyOf: [{ t: 'clause', clause: { kinds: ['trap'] } }] } },
+  };
+
+  it('writes version 2, and still reads version 1', () => {
+    expect(TEMPLATE_VERSION).toBe(2);
+    expect(validateTemplate({ ...valid(), version: 1 })).toMatchObject({
+      ok: true,
+      template: { version: 2 },
+    });
+  });
+
+  it('reads the opening-5 and drawn-cards fields of a version 2 file', () => {
+    const criterion = { id: 'c1', opening: '1x {starter}', drawn: 'no trap', text: '' };
+    const result = validateTemplate(withField('criteria', [criterion]));
+    expect(result).toMatchObject({ ok: true, template: { criteria: [criterion] } });
+  });
+
+  it('reads an empty going-second field as no field at all', () => {
+    const result = validateTemplate(
+      withField('criteria', [{ id: 'c1', opening: '  ', drawn: '', text: '1x {starter}' }]),
+    );
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    expect(result.template.criteria[0]).toEqual({ id: 'c1', text: '1x {starter}' });
+  });
+
+  it('refuses a field that is not text', () => {
+    expect(errorsOf(withField('criteria', [{ id: 'c1', drawn: 3, text: '' }]))).toEqual([
+      'criteria[0] ("c1"): `drawn` must be text, not 3',
+    ]);
+  });
+
+  /**
+   * THE CONVERSION TABLE. The stored AST is the authority on what a criterion
+   * means (TDD §14), so it comes through untouched; only the TEXT is laid out.
+   * And a plain version 1 criterion is about the WHOLE hand, so it lands in the
+   * whole-hand field — never the opening-5 field, which would change what it
+   * means without a word.
+   */
+  describe('of a version 1 file', () => {
+    const v1 = (text: string, when: string, expr?: unknown) =>
+      validateTemplate({
+        ...valid(),
+        version: 1,
+        hand: { size: 6 },
+        criteria: [{ id: 'c1', text, when, ...(expr === undefined ? {} : { expr }) }],
+      });
+    const criterionOf = (result: ReturnType<typeof validateTemplate>) => {
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      return result.template.criteria[0]!;
+    };
+
+    it.each([
+      ['1x {starter}', 'second', { text: '1x {starter}' }],
+      [
+        '1x {starter} then no trap',
+        'second',
+        { opening: '1x {starter}', drawn: 'no trap', text: '' },
+      ],
+      ['1x {starter} finally no trap', 'second', { opening: '1x {starter}', text: 'no trap' }],
+      [
+        '1x {starter} then no trap finally 2x monster',
+        'second',
+        { opening: '1x {starter}', drawn: 'no trap', text: '2x monster' },
+      ],
+      ['then no trap', 'second', { drawn: 'no trap', text: '' }],
+      ['finally no trap', 'second', { text: 'no trap' }],
+      ['1x {starter}', 'first', { text: '1x {starter}' }],
+      ['1x {starter}', 'both', { text: '1x {starter}' }],
+    ])('converts `%s` (going %s) as the table says', (text, when, fields) => {
+      expect(criterionOf(v1(text, when))).toEqual({ id: 'c1', ...fields, when });
+    });
+
+    it('keeps the stored AST exactly as it was', () => {
+      const converted = criterionOf(v1('1x {starter} then no trap', 'second', SPLIT));
+      expect(converted.expr).toEqual(SPLIT);
+      expect(converted).toMatchObject({ opening: '1x {starter}', drawn: 'no trap', text: '' });
+    });
+
+    it('ignores going-second fields a version 1 file cannot have written', () => {
+      const result = validateTemplate({
+        ...valid(),
+        version: 1,
+        criteria: [{ id: 'c1', text: '1x {starter}', opening: '1x monster' }],
+      });
+      expect(criterionOf(result)).toEqual({ id: 'c1', text: '1x {starter}' });
+    });
   });
 });

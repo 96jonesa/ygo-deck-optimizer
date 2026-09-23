@@ -7,7 +7,7 @@ import type { Template } from '../../../shared/types';
  * where the repository put its `examples/` folder.
  */
 const MOTIVATING: Template = {
-  version: 1,
+  version: 2,
   deckSize: 40,
   hand: { size: 5 },
   groups: [],
