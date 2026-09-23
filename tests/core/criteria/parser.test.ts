@@ -372,6 +372,97 @@ describe('parseCriterion', () => {
     });
   });
 
+  describe('unique requirements', () => {
+    const unique = (n: number, desc: Description): Expr => ({ op: 'req', n, unique: true, desc });
+
+    it('reads `n unique D`, the x optional as everywhere', () => {
+      for (const count of ['3', '3x', '3X', '3×', '3 x'])
+        expectExpr(`${count} unique [C]`, unique(3, C));
+      expectExpr('2 UNIQUE monster', unique(2, d('monster')));
+      expectExpr('1 unique ([C] or [D])', unique(1, card(1, 2)));
+      // The description runs on after `or`, as it does after any count.
+      expectExpr('2x unique [C] or [D]', unique(2, card(1, 2)));
+    });
+
+    it('goes wherever a requirement goes, and is never merged into one by the parser', () => {
+      expectExpr('2 unique [C], 1x [D]', and(unique(2, C), req(1, D)));
+      expectExpr('1x [C] or 2x unique [D]', or(req(1, C), unique(2, D)));
+      expectExpr('2 unique [C] and 1 unique [C]', and(unique(2, C), unique(1, C)));
+      expectExpr(
+        '(2 unique [C] or no trap) and 1x [D]',
+        and(or(unique(2, C), atMost(0, d('trap'))), req(1, D)),
+      );
+    });
+
+    it('writes the key between the count and the description, and only when it is set', () => {
+      const parsed = parseCriterion('3x unique [C]', ctx);
+      expect(JSON.stringify(parsed)).toBe(
+        `{"ok":true,"expr":{"op":"req","n":3,"unique":true,"desc":${JSON.stringify(C)}}}`,
+      );
+      expect(JSON.stringify(parseCriterion('3x [C]', ctx))).toBe(
+        `{"ok":true,"expr":{"op":"req","n":3,"desc":${JSON.stringify(C)}}}`,
+      );
+    });
+
+    it('is a floor only: every ceiling beside it is refused with the span of the count and the word', () => {
+      expect(errorOf('exactly 3 unique [C]')).toMatchObject({
+        message: expect.stringContaining('takes no ceiling: write `3x unique …`'),
+        at: 'exactly 3 unique',
+      });
+      expect(errorOf('1x [D], exactly 2x unique [C]')).toMatchObject({ at: 'exactly 2x unique' });
+      expect(errorOf('1-3 unique [C]')).toMatchObject({
+        message: expect.stringContaining('takes no ceiling: write `1x unique …`'),
+        at: '1-3 unique',
+      });
+      expect(errorOf('1-3x unique [C]')).toMatchObject({ at: '1-3x unique' });
+      expect(errorOf('at most 2 unique [C]')).toMatchObject({
+        message: expect.stringContaining('a limit counts copies and takes no `unique`'),
+        at: 'at most 2 unique',
+      });
+      expect(errorOf('at most 2 unique [C]').message).toContain('`at most 2x …`');
+      expect(errorOf('no unique [C]')).toMatchObject({
+        message: expect.stringContaining('write `no …`'),
+        at: 'no unique',
+      });
+      expect(errorOf('1x [D] and no unique [C]')).toMatchObject({ at: 'no unique', start: 11 });
+    });
+
+    it('needs its count, and needs it straight before it', () => {
+      expect(errorOf('unique [C]')).toMatchObject({
+        message: expect.stringContaining('`unique` needs a count before it'),
+        at: 'unique',
+      });
+      expect(errorOf('1x [D] and unique [C]')).toMatchObject({ at: 'unique' });
+      expect(errorOf('3x [C] unique')).toMatchObject({
+        message: expect.stringContaining('`unique` goes straight after a count'),
+        at: 'unique',
+      });
+      expect(errorOf('3x unique unique [C]')).toMatchObject({ at: 'unique', start: 10 });
+      expect(errorOf('1x ([C] or unique [D])')).toMatchObject({ at: 'unique' });
+      expect(errorOf('3 unique')).toMatchObject({ at: '', start: 8 });
+    });
+
+    it('says a count after `or` keeps its x, when that is what went wrong', () => {
+      expect(errorOf('1x [C] or 2 unique [D]')).toMatchObject({
+        message: expect.stringContaining('`or 3x unique {starter}`'),
+        at: 'unique',
+      });
+      expectExpr('1x [C] or 2x unique [D]', or(req(1, C), unique(2, D)));
+    });
+
+    it('refuses 0, as any requirement without a ceiling does', () => {
+      expect(errorOf('0 unique [C]').message).toMatch(/at least 1/);
+    });
+
+    it('is a whole word: a card name holding it is only a name', () => {
+      const named = contextOf(new FakeCards([cardRecord({ code: 9, name: 'Unique Dragon' })]));
+      expect(parseCriterion('2x unique [Unique Dragon]', named)).toEqual({
+        ok: true,
+        expr: unique(2, card(9)),
+      });
+    });
+  });
+
   describe('a count without its x', () => {
     it('reads a plain integer where a term must start', () => {
       expectExpr('2 monsters', req(2, d('monster')));

@@ -27,6 +27,11 @@ function classesOf(mask: number, classCount: number): number[] {
  * requirement that is both contributes its slots and its ceiling separately,
  * and the search may put a card in either.
  *
+ * A `unique` requirement takes at most ONE card of each class — a class in its
+ * mask is one card, however many copies (`compileProblem` makes it so) — and is
+ * met by holding cards of `n` different classes. It is no ceiling: a card it
+ * could take is free to go unassigned.
+ *
  * It owes nothing to the matcher, which answers the same question by counting
  * classes against precomputed subset conditions and never searches.
  */
@@ -40,17 +45,24 @@ export function bruteForceMeets(criterion: CompiledCriterion, h: ArrayLike<numbe
   // A criterion without ceilings says everything in `slots`: one requirement
   // of exactly one card each, none of them capped.
   const reqs = criterion.reqs ?? criterion.slots.map((mask) => ({ mask, min: 1, max: null }));
+  const uniques = criterion.uniques ?? [];
   /** The cards the hand holds, one entry each, as the class they are of. */
   const cards = classesOf(2 ** classCount - 1, classCount).flatMap((cls) =>
     new Array<number>(h[cls]!).fill(cls),
   );
   const taken = reqs.map(() => 0);
+  /** The classes each `unique` requirement holds a card of: one card of each, never two. */
+  const holding = uniques.map(() => new Set<number>());
   /** A card of this class must go somewhere: some capped requirement would otherwise count it. */
   const trapped = (cls: number) =>
     reqs.some(({ mask, max }) => max !== null && (mask & (1 << cls)) !== 0);
 
   const place = (at: number): boolean => {
-    if (at === cards.length) return reqs.every(({ min }, req) => taken[req]! >= min);
+    if (at === cards.length)
+      return (
+        reqs.every(({ min }, req) => taken[req]! >= min) &&
+        uniques.every(({ n }, req) => holding[req]!.size >= n)
+      );
     const cls = cards[at]!;
     for (let req = 0; req < reqs.length; req++) {
       const { mask, max } = reqs[req]!;
@@ -58,6 +70,13 @@ export function bruteForceMeets(criterion: CompiledCriterion, h: ArrayLike<numbe
       taken[req]!++;
       const done = place(at + 1);
       taken[req]!--;
+      if (done) return true;
+    }
+    for (let req = 0; req < uniques.length; req++) {
+      if ((uniques[req]!.mask & (1 << cls)) === 0 || holding[req]!.has(cls)) continue;
+      holding[req]!.add(cls);
+      const done = place(at + 1);
+      holding[req]!.delete(cls);
       if (done) return true;
     }
     return !trapped(cls) && place(at + 1);

@@ -33,6 +33,25 @@ describe('lexCriterion', () => {
     });
   });
 
+  describe('unique', () => {
+    it('reads it as a word of its own, in any case, after a count with or without its x', () => {
+      for (const text of ['unique', 'UNIQUE', 'Unique'])
+        expect(bodies(text), text).toEqual([{ t: 'unique' }]);
+      expect(bodies('3x unique {Starter}')).toEqual([
+        { t: 'count', n: 3 },
+        { t: 'unique' },
+        { t: 'group', text: 'Starter' },
+      ]);
+      expect(spansOf('3 unique {Starter}')).toEqual(['3', 'unique', '{Starter}']);
+    });
+
+    it('leaves it alone inside a word, and inside a bracketed or quoted name', () => {
+      expect(bodies('[Unique Dragon]')).toEqual([{ t: 'cardName', text: 'Unique Dragon' }]);
+      expect(bodies('"Unique"')).toEqual([{ t: 'quoted', text: 'Unique' }]);
+      expect(bodies('uniqueness')).toEqual([{ t: 'word', text: 'uniqueness' }]);
+    });
+  });
+
   describe('finally', () => {
     it('reads it as a word of its own, in any case', () => {
       for (const text of ['finally', 'FINALLY', 'Finally'])

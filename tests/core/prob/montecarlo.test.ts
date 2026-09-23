@@ -303,6 +303,75 @@ describe('createJudge', () => {
   });
 
   /**
+   * `n× unique D` (PRD §5.3): lines are this judge's unit and two lines can name
+   * one passcode, so it tells cards apart by the passcode `lines` gives each one.
+   */
+  describe('a unique requirement', () => {
+    // Lines: 0 and 1 both name card 7, 2 names card 8, 3 is the remainder; column 0 is all three.
+    const uniqueMatrix = [[T], [T], [T], [F]];
+    const lines = [{ card: 7 }, { card: 7 }, { card: 8 }, {}];
+    const twoUnique = [{ reqs: [{ n: 2, unique: true as const, desc: 0 }], limits: [] }];
+
+    it('counts different CARDS, and two lines naming one passcode are one card', () => {
+      const judge = createJudge({ deckSize: 10, matrix: uniqueMatrix, flat: twoUnique, lines });
+      expect(judge([0, 2, 3])).toBe(true);
+      expect(judge([0, 0, 3])).toBe(false);
+      expect(judge([0, 1, 3])).toBe(false);
+    });
+
+    it('takes cards as any requirement does: one it holds is given to nothing else', () => {
+      const judge = createJudge({
+        deckSize: 10,
+        matrix: uniqueMatrix,
+        flat: [{ reqs: [...twoUnique[0]!.reqs, { n: 1, desc: 0 }], limits: [] }],
+        lines,
+      });
+      expect(judge([0, 2, 3])).toBe(false);
+      // The second copy of card 7 is the plain requirement's.
+      expect(judge([0, 1, 2])).toBe(true);
+    });
+
+    it('treats a line that names no card as a card of its own', () => {
+      const judge = createJudge({ deckSize: 10, matrix: uniqueMatrix, flat: twoUnique });
+      expect(judge([0, 1, 3])).toBe(true);
+      expect(judge([0, 0, 3])).toBe(false);
+    });
+
+    it('estimates `3 unique {Starter}` through a resolved template, one card split over two lines', async () => {
+      const starters = [STRATOS, 90000010, 90000020];
+      const template: Template = {
+        version: 1,
+        deckSize: 40,
+        hand: { size: 5 },
+        groups: [
+          {
+            id: 'g',
+            name: 'Starter',
+            cards: starters.map((passcode) => ({ passcode, name: `#${passcode}` })),
+          },
+        ],
+        lines: [
+          { id: 'a1', text: `#${STRATOS}`, min: 2, max: 2 },
+          { id: 'a2', text: `#${STRATOS}`, min: 1, max: 1 },
+          { id: 'b', text: '#90000010', min: 3, max: 3 },
+          { id: 'c', text: '#90000020', min: 3, max: 3 },
+        ],
+        remainder: { min: 0, max: null },
+        criteria: [{ id: 'c1', text: '3 unique {Starter}' }],
+      };
+      const result = resolveTemplate(template, motivatingContext(await initSqlJs()));
+      if (!result.ok) throw new Error(result.errors.join('\n'));
+      const { hits, samples } = estimate(result.resolved, [2, 1, 3, 3], {
+        handSize: 5,
+        samples: 200_000,
+        seed: 0x0d1e,
+      });
+      // The exact answer, computed before any code: C(40,5) − 3C(37,5) + 3C(34,5) − C(31,5).
+      expectWithinFiveSigma(hits, samples, 15_174 / 658_008, () => template);
+    });
+  });
+
+  /**
    * The SIXTH CARD (PRD §5.6). `drawHand` fills position `i` at step `i`, so
    * the LAST position of the hand is the card drawn last; a split criterion
    * judges its own part over the positions before it and its `sixth` part over

@@ -1658,3 +1658,96 @@ describe('a draw template too wide to analyse on a keystroke', () => {
     expect(a.work.hands).not.toBeNull();
   });
 });
+
+/**
+ * `n× unique D` as the editor sees it (PRD §5.3): the requirement's row says
+ * `unique`, and a line that could fill one without being ONE card is an error
+ * on that line — the thing to split — rather than somewhere else.
+ */
+describe('analyze of a unique requirement', () => {
+  const STARTER = [CODE.vanillaDragon, CODE.tunerFairy, CODE.ritualSoldier];
+  const groups: Template['groups'] = [
+    {
+      id: 'g-starter',
+      name: 'Starter',
+      cards: STARTER.map((passcode) => ({ passcode, name: `#${passcode}` })),
+    },
+  ];
+  const named = STARTER.map((passcode, at) => card(`s${at}`, passcode, 3, 3));
+  const analysed = (lines: TemplateLine[], criteria: string[]) =>
+    analyze(templateOf(lines, criteria, { groups }), ctx);
+
+  it('reads a template of one line per card as runnable, and marks the appearance', () => {
+    const a = analysed(named, ['3 unique {Starter}', '1x {Starter}']);
+    expect(a.ok).toBe(true);
+    expect(requirementOf(a, '{Starter}').appearsIn).toEqual([
+      { criterion: 'c1', alternative: 0, n: 3, unique: true },
+      { criterion: 'c2', alternative: 0, n: 1 },
+    ]);
+    expect(criterionOf(a, 'c1').parsed).toEqual({ ok: true, canonical: '3x unique {Starter}' });
+    expect(criterionOf(a, 'c1').alternatives).toEqual(['3x unique {Starter}']);
+    // Each starter is a class of its own: that is what telling cards apart takes.
+    expect(a.classes!.classes.map(({ lines }) => lines)).toEqual([
+      ['remainder'],
+      ['s0'],
+      ['s1'],
+      ['s2'],
+    ]);
+  });
+
+  it('puts the error on a group line that could fill it, and compiles nothing', () => {
+    const a = analysed([...named, line('more', '{Starter}')], ['2 unique {Starter}']);
+    expect(a.ok).toBe(false);
+    expect(lineOf(a, 'more').issues).toEqual([
+      {
+        severity: 'error',
+        code: 'not-one-card',
+        message:
+          'this line could be any of several cards, so how many different ones it holds is unknown — split it into one line per card to use it in a `unique` requirement (it could fill `2x unique {Starter}`)',
+      },
+    ]);
+    expect(named.every(({ id }) => lineOf(a, id).issues.length === 0)).toBe(true);
+    expect(a.classes).toBeNull();
+    // Said once, on the line, and not again as a compile error of the template.
+    expect(codes(allIssues(a)).filter((code) => code === '!compile')).toEqual([]);
+  });
+
+  it('puts it on an `or` line, and on the remainder when the remainder could fill one', () => {
+    const either = analysed(
+      [...named, line('either', `#${STARTER[0]} or #${STARTER[1]}`)],
+      ['2 unique {Starter}'],
+    );
+    expect(codes(lineOf(either, 'either').issues)).toEqual(['!not-one-card']);
+    const any = analysed(named, ['2 unique card']);
+    expect(codes(any.remainder.issues)).toEqual(['!not-one-card']);
+    expect(any.remainder.issues[0]!.message).toContain(
+      'the unspecified cards could be any cards at all',
+    );
+    expect(any.ok).toBe(false);
+  });
+
+  it('leaves a vague line alone when the requirements it fills are all plain', () => {
+    const a = analysed([...named, line('mon', 'monster')], ['2 unique {Starter}, 1x monster']);
+    expect(lineOf(a, 'mon').issues).toEqual([]);
+    expect(a.ok).toBe(true);
+  });
+
+  it('carries the parse errors of a ceiling beside it, with their spans', () => {
+    const a = analysed(named, ['exactly 3 unique {Starter}']);
+    expect(criterionOf(a, 'c1').parsed).toMatchObject({ ok: false, span: { start: 0, end: 16 } });
+    expect(codes(criterionOf(a, 'c1').issues)).toEqual(['!parse']);
+  });
+
+  it('agrees with compiling the template, run or refuse', () => {
+    for (const [lines, criteria] of [
+      [named, ['3 unique {Starter}']],
+      [[...named, line('more', '{Starter}')], ['2 unique {Starter}']],
+      [named, ['2 unique card']],
+    ] as const) {
+      const template = templateOf([...lines], [...criteria], { groups });
+      const resolvedTemplate = resolveTemplate(template, ctx);
+      if (!resolvedTemplate.ok) throw new Error(resolvedTemplate.errors.join('\n'));
+      same(analyze(template, ctx).ok, compileProblem(resolvedTemplate.resolved).ok, () => criteria);
+    }
+  });
+});

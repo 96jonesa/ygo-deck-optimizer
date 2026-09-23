@@ -316,6 +316,24 @@ describe('subsumes', () => {
       expect(findSubsumed(criteria, ctx)).toEqual([]);
     });
   });
+
+  describe('unique requirements', () => {
+    const uniqueFlat = (n: number, text: string): FlatCriterion => ({
+      reqs: [{ n, unique: true, desc: d(text) }],
+      limits: [],
+    });
+
+    it('claims nothing for a B with one: that its cards DIFFER is not something slots cover', () => {
+      // Two copies of one Level 4 monster meet `2x level 4 monster` and not `2x unique monster`.
+      expect(subsumes(uniqueFlat(2, 'monster'), flat([[2, 'level 4 monster']]), ctx)).toBe(false);
+      expect(subsumes(uniqueFlat(2, 'monster'), uniqueFlat(2, 'monster'), ctx)).toBe(false);
+    });
+
+    it('reads an A with one as the plain requirement inside it: its cards still fill B', () => {
+      expect(subsumes(flat([[2, 'monster']]), uniqueFlat(2, 'level 4 monster'), ctx)).toBe(true);
+      expect(subsumes(flat([[3, 'monster']]), uniqueFlat(2, 'level 4 monster'), ctx)).toBe(false);
+    });
+  });
 });
 
 describe('findSubsumed', () => {
@@ -473,6 +491,35 @@ describe('subsumption is sound against every small hand of lines (E2)', () => {
     expect(claimed).toBeGreaterThan(1500);
     expect(witnessed).toBeGreaterThan(250000);
     expect(vacuous).toBeGreaterThan(100);
+  });
+
+  /**
+   * The same, with `unique` requirements on either side — a hand's equal lines
+   * being copies of one card, which is what `unique` refuses twice. The claims
+   * that survive are A-side ones only, and each must still hold of every hand.
+   */
+  it('never claims a subsumption that some hand contradicts, with `unique` on either side', () => {
+    const rng = seededRng(0xe2e2d01e);
+    const uniquely = (criterion: FlatCriterion): FlatCriterion => ({
+      ...criterion,
+      reqs: criterion.reqs.map((req) => (rng.chance(0.4) ? { ...req, unique: true } : req)),
+    });
+    let claimed = 0;
+    let uniqueA = 0;
+    for (let i = 0; i < 3000; i++) {
+      const plainA = genFlat(rng);
+      const A = uniquely(plainA);
+      const B = uniquely(rng.chance(0.75) ? derive(rng, plainA) : genFlat(rng));
+      if (!subsumes(B, A, ctx, MAX_HAND)) continue;
+      claimed++;
+      expect(B.reqs.some((req) => req.unique === true)).toBe(false);
+      if (A.reqs.some((req) => req.unique === true)) uniqueA++;
+      for (const hand of HANDS)
+        if (satisfiesFlat(A, hand, fills))
+          same(satisfiesFlat(B, hand, fills), true, () => ({ A, B, hand }));
+    }
+    expect(claimed).toBeGreaterThan(300);
+    expect(uniqueA).toBeGreaterThan(150);
   });
 
   it('claims what the derivation guarantees', () => {

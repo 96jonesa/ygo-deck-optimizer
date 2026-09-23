@@ -1,5 +1,10 @@
 import initSqlJs from 'sql.js';
 import { describe, expect, it } from 'vitest';
+import type { Expr } from '../../../src/core/criteria/ast';
+import { printCriterion } from '../../../src/core/criteria/print';
+import { canonicalize, type Description } from '../../../src/core/desc/ast';
+import { implies } from '../../../src/core/desc/implies';
+import { parse } from '../../../src/core/desc/parser';
 import {
   type CompiledClassInfo,
   type CompileInput,
@@ -7,18 +12,24 @@ import {
   compileProblem,
   countRawRatios,
   expandClassVector,
+  groupLookupOf,
+  groupMembersOf,
   handSizesForMode,
   lineInterval,
   REMAINDER_ID,
   type ResolvedTemplate,
   resolveTemplate,
+  soleCard,
 } from '../../../src/core/model/compile';
 import { type DrawSpec, MAX_CLASSES, validateProblem } from '../../../src/core/model/problem';
 import type { Template, TemplateLine } from '../../../src/core/model/template';
 import { handSucceeds } from '../../../src/core/prob/matcher';
 import { createBlendScorer, createScorer } from '../../../src/core/prob/scorer';
 import { same } from '../../helpers/assert';
+import { cardLevelNumerator } from '../../helpers/card-oracle';
+import { choose } from '../../helpers/combinatorics';
 import { CODE } from '../../helpers/fixture-cards';
+import { genExpr } from '../../helpers/gen-criteria';
 import {
   genRangedProblem,
   lineIdOf,
@@ -2224,5 +2235,422 @@ describe('draw cards through resolve and compile', () => {
     expect(score.parts.map((part) => part.prefix)).toEqual([5, 7, 9, 11]);
     expect(score.pDisplay).toBeGreaterThanOrEqual(0);
     expect(score.pDisplay).toBeLessThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `n× unique D` through resolve and compile (PRD §5.3, TDD §8)
+// ---------------------------------------------------------------------------
+
+describe('unique requirements through resolve and compile', () => {
+  // Starters A, B and C; C is ALSO an extender, beside E.
+  const A = CODE.vanillaDragon;
+  const B = CODE.tunerFairy;
+  const C = CODE.ritualSoldier;
+  const E = STRATOS;
+  const cardOf = (passcode: number) => ({ passcode, name: `#${passcode}` });
+  const GROUPS: Template['groups'] = [
+    { id: 'g-starter', name: 'Starter', cards: [A, B, C].map(cardOf) },
+    { id: 'g-extender', name: 'Extender', cards: [C, E].map(cardOf) },
+    { id: 'g-harpies', name: 'Harpies', cards: [CODE.harpy, CODE.treatedAsHarpy].map(cardOf) },
+  ];
+  /** A line of exactly `copies` copies of the card with this passcode. */
+  const named = (id: string, passcode: number, copies: number): TemplateLine => ({
+    id,
+    text: `#${passcode}`,
+    min: copies,
+    max: copies,
+  });
+  const uniqueTemplate = (lines: TemplateLine[], criteria: string[], deckSize = 40): Template =>
+    templateOf(lines, criteria, { groups: GROUPS, deckSize });
+
+  /** Compiled going first, lines held at the counts they are pinned to. */
+  const compiledOf = (template: Template) => {
+    const result = compileProblem(resolved(template));
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    return result;
+  };
+  const compileErrorsOf = (template: Template) => {
+    const result = compileProblem(resolved(template));
+    return result.ok ? [] : result.errors;
+  };
+
+  /** The engine's exact numerator at a hand of five, every line at its pinned count. */
+  function numeratorOf(template: Template): { num: number; den: number } {
+    const c = compiledOf(template);
+    const totals = classTotalsOf(
+      c,
+      template.lines.map(({ min }) => min),
+      template.deckSize,
+    );
+    const { num, den } = createScorer(c.problem, 5).score(totals);
+    return { num, den };
+  }
+
+  const impliesCtx = { cards: ctx.cards, groups: groupMembersOf(GROUPS) };
+  /** What the card oracle is told of each line: its copies, and which CARD it is. */
+  function oracleNumerator(template: Template, identities: (string | number)[]): number {
+    const r = resolved(template);
+    const descOf = new Map<string | number, Description>();
+    r.lines.forEach((line, at) => {
+      descOf.set(at < identities.length ? identities[at]! : 'remainder', line.desc);
+    });
+    return cardLevelNumerator(
+      template.lines.map(({ min }, at) => ({ copies: min, identity: identities[at]! })),
+      { copies: 0, identity: 'remainder' },
+      template.deckSize,
+      5,
+      r.criteria.map(({ expr }) => expr),
+      (identity, desc) => implies(descOf.get(identity)!, desc, impliesCtx),
+    );
+  }
+
+  describe('the exact targets, computed before any code by an assignment search', () => {
+    const threeStarters = [named('a', A, 3), named('b', B, 3), named('c', C, 3)];
+    const withExtender = [...threeStarters, named('e', E, 3)];
+
+    it.each([
+      ['3 unique {Starter}', threeStarters, 15_174],
+      ['2 unique {Starter}', threeStarters, 163_062],
+      ['3x {Starter}', threeStarters, 43_092],
+      ['3 unique {Starter}, 1x {Extender}', withExtender, 3411],
+      ['3 unique {Starter}', withExtender, 15_174],
+    ] as const)('scores `%s` at exactly the target', (text, lines, target) => {
+      const template = uniqueTemplate([...lines], [text]);
+      expect(numeratorOf(template)).toEqual({ num: target, den: 658_008 });
+      // The card oracle agrees, by a route through none of classes, masks or Gale.
+      expect(
+        oracleNumerator(
+          template,
+          // Each line names its own card: its text is `#passcode`, one per card.
+          [...lines].map((l) => ('text' in l ? l.text : l.id)),
+        ),
+      ).toBe(target);
+    });
+
+    it('reads 15,174 as the inclusion–exclusion it is', () => {
+      expect(choose(40, 5) - 3 * choose(37, 5) + 3 * choose(34, 5) - choose(31, 5)).toBe(15_174);
+    });
+  });
+
+  it('compiles a unique requirement beside the slots, never into them', () => {
+    const c = compiledOf(
+      uniqueTemplate(
+        [named('a', A, 3), named('b', B, 3), named('c', C, 3), named('e', E, 3)],
+        ['3 unique {Starter}, 1x {Extender}'],
+      ),
+    );
+    expect(membersOf(c)).toEqual([['remainder'], ['a'], ['b'], ['c'], ['e']]);
+    expect(c.problem.criteria).toEqual([
+      { slots: [0b11000], limits: [], uniques: [{ mask: 0b01110, n: 3 }] },
+    ]);
+  });
+
+  describe('identity', () => {
+    it('gives every card a unique requirement can take a class of its own', () => {
+      // Without `unique` the three starters are one class; with it, three.
+      const lines = [named('a', A, 3), named('b', B, 3), named('c', C, 3)];
+      expect(membersOf(compiledOf(uniqueTemplate(lines, ['3x {Starter}'])))).toEqual([
+        ['remainder'],
+        ['a', 'b', 'c'],
+      ]);
+      expect(membersOf(compiledOf(uniqueTemplate(lines, ['3 unique {Starter}'])))).toEqual([
+        ['remainder'],
+        ['a'],
+        ['b'],
+        ['c'],
+      ]);
+    });
+
+    it('scores two lines naming ONE passcode as one card, and merges them into one class', () => {
+      const split = uniqueTemplate(
+        [named('a1', A, 2), named('a2', A, 1), named('b', B, 3), named('c', C, 3)],
+        ['3 unique {Starter}'],
+      );
+      const whole = uniqueTemplate(
+        [named('a', A, 3), named('b', B, 3), named('c', C, 3)],
+        ['3 unique {Starter}'],
+      );
+      expect(membersOf(compiledOf(split))).toEqual([['remainder'], ['a1', 'a2'], ['b'], ['c']]);
+      expect(numeratorOf(split)).toEqual(numeratorOf(whole));
+      expect(numeratorOf(split).num).toBe(15_174);
+      // Told the two lines are DIFFERENT cards, the oracle finds more hands: the
+      // merge is what keeps a second copy of A from passing for a fourth starter.
+      const distinct = oracleNumerator(split, ['a1', 'a2', 'b', 'c']);
+      expect(oracleNumerator(split, [A, A, B, C])).toBe(15_174);
+      expect(distinct).toBeGreaterThan(15_174);
+    });
+
+    it('counts an "always treated as" pair as TWO cards: they have passcodes of their own', () => {
+      const pair = uniqueTemplate(
+        [named('harpy', CODE.harpy, 1), named('cyber', CODE.treatedAsHarpy, 1)],
+        ['2 unique {Harpies}'],
+        12,
+      );
+      const c = compiledOf(pair);
+      expect(membersOf(c)).toEqual([['remainder'], ['harpy'], ['cyber']]);
+      const { num } = createScorer(c.problem, 5).score(classTotalsOf(c, [1, 1], 12));
+      // Both drawn: the other three of five from the ten others.
+      expect(num).toBe(choose(10, 3));
+      expect(oracleNumerator(pair, [CODE.harpy, CODE.treatedAsHarpy])).toBe(choose(10, 3));
+    });
+
+    it('splits nothing for a run that does not judge the unique requirement', () => {
+      const lines = [named('a', A, 3), named('b', B, 3), named('c', C, 3)];
+      const template: Template = {
+        ...uniqueTemplate(lines, ['1x {Starter}', '3 unique {Starter}']),
+        hand: { size: 6 },
+        mode: 'average',
+      };
+      template.criteria = [
+        { ...template.criteria[0]!, when: 'first' },
+        { ...template.criteria[1]!, when: 'second' },
+      ];
+      const r = resolved(template);
+      const going = (mode: 'first' | 'second') =>
+        membersOf(compiled(r, { handSizes: handSizesForMode(r, mode) }));
+      expect(going('first')).toEqual([['remainder'], ['a', 'b', 'c']]);
+      expect(going('second')).toEqual([['remainder'], ['a'], ['b'], ['c']]);
+    });
+
+    it('says `unique` is why when it takes the classes past the cap', () => {
+      const many = Array.from({ length: MAX_CLASSES }, (_, i) => 91_000_000 + i);
+      const template = templateOf(
+        many.map((passcode, i) => ({ id: `m${i}`, card: cardOf(passcode), min: 1, max: 1 })),
+        ['2 unique {Many}'],
+        { groups: [{ id: 'g-many', name: 'Many', cards: many.map(cardOf) }] },
+      );
+      const [message] = compileErrorsOf(template);
+      expect(message).toContain(`tell ${MAX_CLASSES + 1} classes of card apart`);
+      expect(message).toContain(
+        'a `unique` requirement makes every different card it can take a class of its own',
+      );
+      expect(message).toContain('without that it would be 2');
+      // Without `unique` the same template is two classes and compiles.
+      expect(compileErrorsOf({ ...template, criteria: [{ id: 'c1', text: '2x {Many}' }] })).toEqual(
+        [],
+      );
+    });
+  });
+
+  describe('a line that is not one card', () => {
+    const starters = [named('a', A, 3), named('b', B, 3)];
+
+    it.each([
+      ['a group', 'g', '{Starter}'],
+      ['an `or`', 'g', `#${A} or #${C}`],
+      ['a generic description', 'g', 'level 4 or lower monster'],
+    ])('refuses %s that could fill a unique requirement, naming the line', (_, id, text) => {
+      const template = uniqueTemplate(
+        [...starters, { id, text, min: 0, max: 3 }],
+        ['2 unique ({Starter} or level 4 or lower monster)'],
+      );
+      expect(compileErrorsOf(template)).toEqual([
+        `line "g" could be any of several cards, so how many different ones it holds is unknown — split it into one line per card to use it in a \`unique\` requirement`,
+      ]);
+    });
+
+    it('refuses the unspecified cards when they could fill one', () => {
+      expect(compileErrorsOf(uniqueTemplate(starters, ['2 unique card']))).toEqual([
+        'the unspecified cards could be any cards at all, so how many different ones they hold is unknown — a `unique` requirement cannot count them; give the cards it should count lines of their own, one line per card',
+      ]);
+    });
+
+    it('lets a vague line be, when no unique requirement is one it could fill', () => {
+      const template = uniqueTemplate(
+        [...starters, { id: 'mon', text: 'monster', min: 0, max: 3 }],
+        ['2 unique {Starter}, 1x monster'],
+      );
+      expect(compileErrorsOf(template)).toEqual([]);
+    });
+
+    it('refuses it whichever hand the unique requirement is for', () => {
+      const template: Template = {
+        ...uniqueTemplate(
+          [...starters, { id: 'g', text: '{Starter}', min: 0, max: 3 }],
+          ['1x monster', '2 unique {Starter}'],
+        ),
+        hand: { size: 6 },
+        mode: 'average',
+      };
+      template.criteria = [
+        { ...template.criteria[0]!, when: 'first' },
+        { ...template.criteria[1]!, when: 'second' },
+      ];
+      const r = resolved(template);
+      const result = compileProblem(r, { handSizes: handSizesForMode(r, 'first') });
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  /**
+   * Going second, every window: the identities have to reach a `then` and a
+   * `finally` part too, whose descriptions are columns like any other.
+   */
+  it('scores unique requirements after `then` and `finally` against the card-level oracle', () => {
+    const lines = [named('a1', A, 2), named('a2', A, 1), named('b', B, 1), named('c', C, 1)];
+    const identities = [A, A, B, C];
+    for (const text of [
+      'then 1 unique {Starter} finally 3 unique {Starter}',
+      '2 unique {Starter} then 1x {Starter}',
+      '1x {Starter} finally 2 unique {Starter} and at most 2x {Starter}',
+      '2 unique {Starter} finally 3 unique {Starter}',
+    ]) {
+      const template: Template = {
+        ...uniqueTemplate(lines, [text], 10),
+        hand: { size: 6 },
+        mode: 'second',
+      };
+      template.criteria = [{ ...template.criteria[0]!, when: 'second' }];
+      const r = resolved(template);
+      const c = compiled(r, { handSizes: [{ H: 6, weight: 1 }] });
+      const { num, den } = createScorer(c.problem, 6).score(classTotalsOf(c, [2, 1, 1, 1], 10));
+      expect(den, text).toBe(6 * choose(10, 6));
+      const descOf = new Map<string | number, Description>([
+        [A, r.lines[0]!.desc],
+        [B, r.lines[2]!.desc],
+        [C, r.lines[3]!.desc],
+        ['remainder', r.lines[4]!.desc],
+      ]);
+      const oracle = cardLevelNumerator(
+        lines.map(({ min }, at) => ({ copies: min, identity: identities[at]! })),
+        { copies: 0, identity: 'remainder' },
+        10,
+        6,
+        [r.criteria[0]!.expr],
+        (identity, desc) => implies(descOf.get(identity)!, desc, impliesCtx),
+        true,
+      );
+      expect(num, text).toBe(oracle);
+      expect(num, text).toBeGreaterThan(0);
+    }
+  });
+
+  /**
+   * O1: every hand of a small deck with DUPLICATE copies — two lines naming one
+   * card, an "always treated as" pair, a generic line beside them — dealt as
+   * concrete cards and judged off the criterion's tree, against the engine's
+   * exact numerator, for generated criteria with `unique` in them.
+   */
+  it('agrees with the card-level oracle on every hand of 150 generated criteria', () => {
+    const lines: TemplateLine[] = [
+      named('a1', A, 2),
+      named('a2', A, 1),
+      named('b', B, 2),
+      named('c', C, 1),
+      named('e', E, 1),
+      named('harpy', CODE.harpy, 1),
+      named('cyber', CODE.treatedAsHarpy, 1),
+      { id: 'mon', text: 'monster', min: 2, max: 2 },
+    ];
+    const identities = [A, A, B, C, E, CODE.harpy, CODE.treatedAsHarpy, 'mon'];
+    // What a `unique` requirement may ask for: descriptions only named lines fill.
+    const uniquePool = ['{Starter}', '{Extender}', '{Harpies}', `#${A} or #${B}`, `#${A}`].map(
+      (text) => descOfText(text),
+    );
+    const plainPool = [
+      ...uniquePool,
+      descOfText('monster'),
+      descOfText('level 4 or lower monster'),
+    ];
+    const rng = seededRng(0x0e1d01e);
+    let unique = 0;
+    let nonzero = 0;
+    for (let i = 0; i < 150; i++) {
+      const raw = genExpr(rng, {
+        desc: (r) => r.pick(plainPool),
+        maxDepth: 2,
+        maxArgs: 3,
+        limitChance: 0.2,
+        rangeChance: 0.15,
+        uniqueChance: 0.5,
+      });
+      const expr = withUniquePool(raw, () => rng.pick(uniquePool));
+      if (JSON.stringify(expr).includes('"unique":true')) unique++;
+      const text = printCriterion(expr, descCtx);
+      const template = uniqueTemplate(lines, [text], 14);
+      const engine = numeratorOf(template).num;
+      same(engine, oracleNumerator(template, identities), () => text);
+      if (engine > 0) nonzero++;
+    }
+    expect(unique).toBeGreaterThan(100);
+    expect(nonzero).toBeGreaterThan(75);
+  });
+
+  const descCtx = {
+    cards: ctx.cards,
+    setnames: ctx.setnames,
+    groups: groupLookupOf(GROUPS),
+  };
+  function descOfText(text: string): Description {
+    const result = parse(text, descCtx);
+    if (!result.ok) throw new Error(`${text}: ${result.message}`);
+    return canonicalize(result.desc);
+  }
+  /** `expr` with every `unique` requirement's description drawn from `pick` instead. */
+  function withUniquePool(expr: Expr, pick: () => Description): Expr {
+    if (expr.op === 'and' || expr.op === 'or')
+      return { op: expr.op, args: expr.args.map((arg) => withUniquePool(arg, pick)) };
+    if (expr.op === 'req' && expr.unique === true) return { ...expr, desc: pick() };
+    return expr;
+  }
+});
+
+/**
+ * I5: a template with no `unique` in it compiles to the problem it always did.
+ * Knowing which card a line is may change nothing until a `unique` requirement
+ * asks — the partition, the masks and every key of the problem are what they
+ * were without the field at all.
+ */
+describe('compiling without a unique requirement (I5)', () => {
+  it('is byte for byte the same problem whether or not the lines say which card they are', () => {
+    let merged = 0;
+    for (const { input } of rangedProblems()) {
+      const withCards: CompileInput = {
+        ...input,
+        lines: input.lines.map((l, at) => (l.isRemainder ? l : { ...l, card: 1_000 + (at % 3) })),
+      };
+      const before = compiled(input);
+      const after = compiled(withCards);
+      expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+      expect(JSON.stringify(after.problem)).not.toContain('uniques');
+      if (before.classes.slice(1).some((cls) => cls.lines.length > 1)) merged++;
+    }
+    // Lines that would part by card, were a `unique` requirement asking, stay merged.
+    expect(merged).toBeGreaterThanOrEqual(200);
+  });
+});
+
+describe('soleCard', () => {
+  const card = (passcode: number) => ({ t: 'card', passcode }) as const;
+
+  it('is the passcode of a description that names one card and nothing else', () => {
+    expect(soleCard({ anyOf: [card(CODE.harpy)] })).toBe(CODE.harpy);
+  });
+
+  it('is nothing for an `or`, a group — even of one member — or a clause', () => {
+    expect(soleCard({ anyOf: [card(1), card(2)] })).toBeUndefined();
+    expect(soleCard({ anyOf: [{ t: 'group', groupId: 'g-one' }] })).toBeUndefined();
+    expect(soleCard({ anyOf: [{ t: 'clause', clause: { kinds: ['monster'] } }] })).toBeUndefined();
+  });
+
+  it('is what resolving a template records on each line, and never on the remainder', () => {
+    const r = resolved(
+      templateOf(
+        [
+          line('named', `#${CODE.harpy}`),
+          { id: 'picked', card: { passcode: CODE.tunerFairy, name: 'x' }, min: 0, max: 3 },
+          line('generic', 'monster'),
+        ],
+        ['1x monster'],
+      ),
+    );
+    expect(r.lines.map(({ card: passcode }) => passcode)).toEqual([
+      CODE.harpy,
+      CODE.tunerFairy,
+      undefined,
+      undefined,
+    ]);
+    expect(Object.keys(r.lines[2]!)).not.toContain('card');
   });
 });

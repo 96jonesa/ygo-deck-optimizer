@@ -28,6 +28,11 @@ function range(n: number, max: number, desc: Description): Expr {
   return { op: 'req', n, max, desc };
 }
 
+/** `n× unique`: `n` DIFFERENT cards. */
+function unique(n: number, desc: Description): Expr {
+  return { op: 'req', n, unique: true, desc };
+}
+
 function atMost(n: number, desc: Description): Expr {
   return { op: 'atMost', n, desc };
 }
@@ -252,6 +257,57 @@ describe('expand', () => {
         limits: [{ n: 1, desc: D }],
       },
     ]);
+  });
+
+  describe('unique requirements', () => {
+    it('carries `unique` into the flat criterion, between the count and the description', () => {
+      const [flat] = flatOf(unique(3, A));
+      expect(JSON.stringify(flat)).toBe(
+        JSON.stringify({ reqs: [{ n: 3, unique: true, desc: A }], limits: [] }),
+      );
+    });
+
+    it('never merges two on one description: they are not one of their sum', () => {
+      // `2x unique A and 1x unique A` lets the second take another copy of a card
+      // the first holds, which `3x unique A` forbids.
+      expect(flatOf(and(unique(2, A), unique(1, A)))).toEqual([
+        {
+          reqs: [
+            { n: 2, unique: true, desc: A },
+            { n: 1, unique: true, desc: A },
+          ],
+          limits: [],
+        },
+      ]);
+    });
+
+    it('never merges one with a plain requirement on the same description, either way round', () => {
+      expect(flatOf(and(unique(2, A), req(1, A)))[0]!.reqs).toEqual([
+        { n: 2, unique: true, desc: A },
+        { n: 1, desc: A },
+      ]);
+      // The two plain ones still merge with each other, around it.
+      expect(flatOf(and(req(1, A), unique(2, A), req(1, A)))[0]!.reqs).toEqual([
+        { n: 2, desc: A },
+        { n: 2, unique: true, desc: A },
+      ]);
+    });
+
+    it('counts its cards toward what the hand must hold, and drops what cannot fit', () => {
+      expect(expand(and(unique(4, A), req(3, B)), { maxHandSize: 6 })).toMatchObject({
+        flat: [],
+        dropped: 1,
+      });
+      expect(flatOf(and(unique(3, A), req(3, B)))).toHaveLength(1);
+    });
+
+    it('is one alternative however its unique requirements were ordered, and two when they differ', () => {
+      expect(
+        flatOf(or(and(unique(1, A), unique(2, A)), and(unique(2, A), unique(1, A)))),
+      ).toHaveLength(1);
+      expect(flatOf(or(unique(2, A), req(2, A)))).toHaveLength(2);
+      expect(flatOf(or(and(unique(1, A), unique(1, A)), unique(2, A)))).toHaveLength(2);
+    });
   });
 
   describe('a split criterion', () => {
@@ -864,7 +920,7 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
   }
 
   /** A random table of which card type fills which description, and a hand drawn from the types. */
-  function genCase(rng: Rng, rangeChance = 0, splitChance = 0): Case {
+  function genCase(rng: Rng, rangeChance = 0, splitChance = 0, uniqueChance = 0): Case {
     const density = rng.pick([0.25, 0.4, 0.6]);
     const table = Array.from({ length: CARD_TYPES }, () =>
       DESCRIPTIONS.map(() => rng.chance(density)),
@@ -876,6 +932,7 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
       limitChance: 0.2,
       rangeChance,
       splitChance,
+      uniqueChance,
     });
     const hand = Array.from({ length: rng.int(0, 6) }, () => rng.int(0, CARD_TYPES - 1));
     return {
@@ -1025,6 +1082,38 @@ describe('expansion against the direct evaluator of the tree (E1)', () => {
     expect(sixthOnly).toBeGreaterThan(400);
     expect(satisfied / compared).toBeGreaterThan(0.05);
     expect(satisfied / compared).toBeLessThan(0.6);
+  });
+
+  /**
+   * Hands of card TYPES, where two equal entries are two copies of one card —
+   * so `unique` has copies to refuse. The tree evaluator never merges and
+   * `expand` never merges a `unique` requirement either; what this checks is
+   * that the plain requirements it DOES merge beside one still mean what they
+   * meant, ceilings included.
+   */
+  it('agrees on 6,000 generated criteria and hands WITH unique requirements', () => {
+    const rng = seededRng(0xe1e1d01e);
+    let compared = 0;
+    let satisfied = 0;
+    let uniques = 0;
+    let beside = 0;
+    for (let i = 0; i < 6000; i++) {
+      const { expr, hand, fills } = genCase(rng, 0.25, 0.2, 0.5);
+      const direct = satisfiesTree(expr, hand, fills);
+      const exact = expand(expr, { maxHandSize: Math.max(hand.length, 1) });
+      if (!exact.ok) continue;
+      compared++;
+      if (direct) satisfied++;
+      const flatUniques = exact.flat.filter((f) => f.reqs.some((r) => r.unique === true));
+      if (flatUniques.length > 0) uniques++;
+      if (flatUniques.some((f) => f.reqs.length > 1)) beside++;
+      same(satisfiesAnyFlat(exact.flat, hand, fills), direct, () => ({ expr, hand }));
+    }
+    expect(compared).toBeGreaterThan(5500);
+    expect(uniques).toBeGreaterThan(2500);
+    expect(beside).toBeGreaterThan(1000);
+    expect(satisfied / compared).toBeGreaterThan(0.1);
+    expect(satisfied / compared).toBeLessThan(0.7);
   });
 
   it('covers nested or-in-and-in-or, limits at every depth and repeated descriptions', () => {

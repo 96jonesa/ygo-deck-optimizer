@@ -11,6 +11,8 @@ export type CriterionTokenBody =
   | { t: 'no' }
   /** `exactly`: the count that follows is both ends of a range (TDD §7.1). */
   | { t: 'exactly' }
+  /** `unique`, after a count: the cards counted must be DIFFERENT cards (TDD §7.1). */
+  | { t: 'unique' }
   /** `then`: what comes after it is about the SIXTH CARD, the one you draw going second. */
   | { t: 'then' }
   /** `finally`: what comes after it is a full criterion over the WHOLE hand (TDD §7.1). */
@@ -43,6 +45,7 @@ const KEYWORDS: readonly [RegExp, CriterionTokenBody][] = [
   [new RegExp(`at\\s+most${NOT_IN_A_WORD}`, 'iuy'), { t: 'atMost' }],
   [new RegExp(`no${NOT_IN_A_WORD}`, 'iuy'), { t: 'no' }],
   [new RegExp(`exactly${NOT_IN_A_WORD}`, 'iuy'), { t: 'exactly' }],
+  [new RegExp(`unique${NOT_IN_A_WORD}`, 'iuy'), { t: 'unique' }],
   [new RegExp(`then${NOT_IN_A_WORD}`, 'iuy'), { t: 'then' }],
   [new RegExp(`finally${NOT_IN_A_WORD}`, 'iuy'), { t: 'finally' }],
   [new RegExp(`and${NOT_IN_A_WORD}`, 'iuy'), { t: 'and' }],
@@ -75,7 +78,7 @@ function keywordAt(text: string, pos: number): [CriterionTokenBody, number] | un
 
 /**
  * Split a criterion into tokens (TDD §7.1): the description lexer's, plus
- * counts, `at most`, `no`, `exactly`, `then`, `finally`, `and` and the comma,
+ * counts, `at most`, `no`, `exactly`, `unique`, `then`, `finally`, `and` and the comma,
  * which are
  * tried first wherever a token starts. They are whole words, so `non-tuner`,
  * `normal` and a name in brackets or quotes are never touched; `or` stays the

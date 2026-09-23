@@ -16,7 +16,7 @@
 //                         alternatives. Shown in the Template panel, and the
 //                         only place any of it is explained.
 //   `CRITERION_SYNTAX`    everything that WRAPS a description — counts,
-//                         ranges, `exactly`, `at most`, `no`, `and` / `,`,
+//                         ranges, `exactly`, `unique`, `at most`, `no`, `and` / `,`,
 //                         the criterion-level `or` and the one token that
 //                         tells the two `or`s apart, nesting. Shown in the
 //                         Criteria panel, which points at the other section
@@ -242,6 +242,31 @@ export const CRITERION_SYNTAX: ExampleSection = {
         { syntax: 'exactly 1x monster', means: 'both ends the same — identical to `1-1x monster`' },
       ],
       note: 'A range’s ceiling binds over the whole hand: a third matching card fails the criterion unless another requirement takes it.',
+    },
+    {
+      heading: 'Different cards',
+      rows: [
+        {
+          syntax: '3 unique {starter}',
+          means: 'three DIFFERENT starters — two copies of one card count once',
+        },
+        {
+          syntax: '3x unique {starter}, 1x {extender}',
+          means:
+            'four cards in all: a starter that is also an extender can be one or the other, never both',
+        },
+        {
+          syntax: 'exactly 3 unique {starter}',
+          means: 'an error — `unique` is a floor, at least that many different cards',
+          fails: 'takes no ceiling',
+        },
+        {
+          syntax: 'at most 2 unique {starter}',
+          means: 'an error — a limit counts copies; the message says what to write instead',
+          fails: 'a limit counts copies and takes no `unique`',
+        },
+      ],
+      note: 'Every line that could fill a `unique` requirement has to name ONE card — a card picked from the list, `[Ash Blossom & Joyous Spring]`, or `#14558127`. A group line or an `or` line could hold any mix of its cards, so how many different ones is unknown: it is an error until it is split into one line per card.',
     },
     {
       heading: 'Ruling cards out',

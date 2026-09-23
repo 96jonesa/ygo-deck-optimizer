@@ -20,8 +20,12 @@ function printCounted(prefix: string, { desc }: Counted, ctx: PrintContext): str
  * `2x` — one has a ceiling and the other has none — and `exactly 2x` says
  * which it is in words, which is the point of the shorthand: this text is what
  * every readout, every CLI report and every saved template shows.
+ *
+ * A `unique` requirement reads `3x unique`: the word after the count, where it
+ * was typed, and never beside a ceiling, which it cannot have.
  */
-export function countPrefix(n: number, max: number | undefined): string {
+export function countPrefix(n: number, max: number | undefined, unique?: boolean): string {
+  if (unique === true) return `${n}x unique`;
   if (max === undefined) return `${n}x`;
   return max === n ? `exactly ${n}x` : `${n}-${max}x`;
 }
@@ -29,7 +33,7 @@ export function countPrefix(n: number, max: number | undefined): string {
 function printExpr(expr: Expr, ctx: PrintContext): string {
   switch (expr.op) {
     case 'req':
-      return printCounted(countPrefix(expr.n, expr.max), expr, ctx);
+      return printCounted(countPrefix(expr.n, expr.max, expr.unique), expr, ctx);
     case 'atMost':
       return printCounted(expr.n === 0 ? 'no' : `at most ${expr.n}x`, expr, ctx);
     case 'or':

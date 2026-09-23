@@ -403,6 +403,22 @@ describe('requirementRows', () => {
       expect(row.heading).toBe('1-2x / 1x monster');
     });
 
+    it('writes a `unique` requirement as `nx unique`, apart from the plain count', () => {
+      const row = requirementRows(
+        analysisOf({
+          requirements: [
+            requirementOf('{Starter}', {
+              appearsIn: [
+                { criterion: 'c1', alternative: 0, n: 3, unique: true },
+                { criterion: 'c2', alternative: 0, n: 3 },
+              ],
+            }),
+          ],
+        }),
+      )[0]!;
+      expect(row.heading).toBe('3x / 3x unique {Starter}');
+    });
+
     it('writes a range whose ends agree as `exactly nx`, as the criterion text does', () => {
       const row = requirementRows(
         analysisOf({

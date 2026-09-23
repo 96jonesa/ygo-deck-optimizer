@@ -17,6 +17,7 @@ import {
   outcomesOf,
   type Problem,
   partProblem,
+  slotCount,
   validateProblem,
 } from '../../../src/core/model/problem';
 
@@ -349,6 +350,60 @@ describe('validateProblem', () => {
  * ONE part of a blend as a problem of its own (PRD §5.5): the same deck, the
  * SAME classes, and only the criteria that part is judged against.
  */
+describe('validateProblem', () => {
+  describe('unique requirements', () => {
+    const withUniques = (uniques: unknown): Problem => ({
+      ...valid(),
+      criteria: [{ slots: [], limits: [], uniques } as Problem['criteria'][number]],
+    });
+
+    it('accepts one, a mask of 0 included: nothing fills it, and it scores 0', () => {
+      expect(() => validateProblem(withUniques([{ mask: 0b110, n: 2 }]))).not.toThrow();
+      expect(() => validateProblem(withUniques([{ mask: 0, n: 1 }]))).not.toThrow();
+    });
+
+    it('refuses an empty list, a count that is not positive, and the blank class', () => {
+      expect(() => validateProblem(withUniques([]))).toThrow(/`uniques` is left out/);
+      expect(() => validateProblem(withUniques([{ mask: 0b110, n: 0 }]))).toThrow(
+        /criterion 0, unique requirement 0: it asks for a positive whole number of cards, not 0/,
+      );
+      expect(() => validateProblem(withUniques([{ mask: 0b111, n: 1 }]))).toThrow(/blank class/);
+    });
+
+    it('counts its cards against what the card drawn can hold', () => {
+      const problem: Problem = {
+        ...valid(),
+        handSizes: [{ H: 5, weight: 1, drawn: true }],
+        criteria: [
+          {
+            slots: [],
+            limits: [],
+            sixth: { slots: [], limits: [], uniques: [{ mask: 0b110, n: 2 }] },
+          },
+        ],
+      };
+      expect(() => validateProblem(problem)).toThrow(
+        /the card you draw is one card, and its part asks for 2/,
+      );
+    });
+  });
+});
+
+describe('slotCount', () => {
+  it("is the slots, and every unique requirement's count", () => {
+    expect(slotCount({ slots: [2, 4] })).toBe(2);
+    expect(
+      slotCount({
+        slots: [2],
+        uniques: [
+          { mask: 6, n: 3 },
+          { mask: 2, n: 1 },
+        ],
+      }),
+    ).toBe(5);
+  });
+});
+
 describe('checkWeightBound', () => {
   it('lets every weight the editor allows through, drawn or not', () => {
     for (const outcomes of [1, 6])

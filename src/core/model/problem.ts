@@ -400,6 +400,25 @@ export interface CompiledRequirement {
 }
 
 /**
+ * A `unique` requirement (`3x unique {Starter}`): `n` cards of the classes in
+ * `mask`, no two of them of the same class.
+ *
+ * That is "no two the same CARD" because `compileProblem` gives every card a
+ * `unique` requirement can take a class of its own — the identity columns of
+ * TDD §8 — so a class in this mask is one card, however many copies of it the
+ * deck holds. The engine cannot check that and does not try: a `Problem` has no
+ * cards in it, only classes, and a hand-built one that merged two cards into a
+ * class would simply be asking "no two of the same class".
+ *
+ * It is NOT in `slots`, whose Hall condition would let one class fill all `n`;
+ * the matcher reads it beside them (`src/core/prob/matcher.ts`).
+ */
+export interface CompiledUnique {
+  mask: number;
+  n: number;
+}
+
+/**
  * THE DRAWN SET's part of a split criterion: the same three fields, judged
  * against what the player DREW (PRD §5.6, §5.7).
  *
@@ -415,6 +434,7 @@ export interface SixthCard {
   slots: number[];
   limits: CompiledLimit[];
   reqs?: CompiledRequirement[];
+  uniques?: CompiledUnique[];
 }
 
 export interface CompiledCriterion {
@@ -436,6 +456,14 @@ export interface CompiledCriterion {
    * slot and two more under its ceiling.
    */
   reqs?: CompiledRequirement[];
+  /**
+   * The `unique` requirements (`CompiledUnique`), present only when there is
+   * one, so that every criterion without them is byte for byte what it was.
+   * They are NOT in `slots` or `reqs`: those are the plain requirements, and
+   * the matcher judges these beside them, a card given to one being given to
+   * nothing else.
+   */
+  uniques?: CompiledUnique[];
   /**
    * What a hand meeting it is WORTH (PRD §5.6, weighted criteria). A positive
    * whole number; absent is 1, which is every criterion of an unweighted run
@@ -733,11 +761,12 @@ export function validateProblem(problem: Problem): void {
     if (whole !== undefined)
       checkPart(whole, classes.length, `criterion ${criterion}, the whole hand`);
     if (sixth === undefined) return;
-    if (sixth.slots.length > drawnRoom)
+    const asked = slotCount(sixth);
+    if (asked > drawnRoom)
       throw new RangeError(
         drawnRoom === 1
-          ? `criterion ${criterion}: the card you draw is one card, and its part asks for ${sixth.slots.length}`
-          : `criterion ${criterion}: the cards you draw are at most ${drawnRoom}, and this part asks for ${sixth.slots.length}`,
+          ? `criterion ${criterion}: the card you draw is one card, and its part asks for ${asked}`
+          : `criterion ${criterion}: the cards you draw are at most ${drawnRoom}, and this part asks for ${asked}`,
       );
     checkPart(sixth, classes.length, `criterion ${criterion}, the cards you draw`);
   });
@@ -831,8 +860,17 @@ function remedies({ criteria }: Problem): string[] {
   return out;
 }
 
+/** The cards one window's requirements ask for: its slots, and every `unique` requirement's `n`. */
+export function slotCount({ slots, uniques }: Pick<SixthCard, 'slots' | 'uniques'>): number {
+  return slots.length + (uniques ?? []).reduce((sum, { n }) => sum + n, 0);
+}
+
 /** The slots, limits and ranges of one window: a whole hand, or the card drawn. */
-function checkPart({ slots, limits, reqs }: SixthCard, classCount: number, where: string): void {
+function checkPart(
+  { slots, limits, reqs, uniques }: SixthCard,
+  classCount: number,
+  where: string,
+): void {
   slots.forEach((mask, slot) => {
     checkMask(mask, classCount, `${where}, slot ${slot}`, 'fill a requirement');
   });
@@ -842,6 +880,17 @@ function checkPart({ slots, limits, reqs }: SixthCard, classCount: number, where
     if (!isCount(n)) throw new RangeError(`${at}: a limit's count is a whole number, not ${n}`);
   });
   if (reqs !== undefined) checkRequirements(reqs, slots, classCount, where);
+  if (uniques === undefined) return;
+  // Absent rather than empty, for the reason `reqs` is: a criterion without one
+  // is the criterion it always was.
+  if (uniques.length === 0)
+    throw new RangeError(`${where}: with no \`unique\` requirement, \`uniques\` is left out`);
+  uniques.forEach(({ mask, n }, at) => {
+    const unique = `${where}, unique requirement ${at}`;
+    checkMask(mask, classCount, unique, 'fill a requirement');
+    if (!Number.isInteger(n) || n < 1)
+      throw new RangeError(`${unique}: it asks for a positive whole number of cards, not ${n}`);
+  });
 }
 
 /**

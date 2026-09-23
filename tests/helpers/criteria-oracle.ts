@@ -9,6 +9,9 @@ import type { Description } from '../../src/core/desc/ast';
  * it: a random table for the expansion oracle, `implies` from a line for the
  * subsumption oracle.
  *
+ * Two EQUAL entries of a hand are two copies of ONE card, which is what a
+ * `unique` requirement tells apart: it takes at most one entry of each value.
+ *
  * The two evaluators share no code with `expand`, nor with each other:
  * `satisfiesTree` walks the expression over bitmasks of hand positions, and
  * `satisfiesFlat` assigns cards to slots one at a time.
@@ -61,7 +64,11 @@ function outcomesOf<C>(
       const out: Outcome[] = [];
       for (let taken = fillers; ; taken = (taken - 1) & fillers) {
         const count = popcount(taken);
-        if (count >= expr.n && count <= (expr.max ?? hand.length))
+        if (
+          count >= expr.n &&
+          count <= (expr.max ?? hand.length) &&
+          (expr.unique !== true || allDifferent(taken, hand))
+        )
           out.push({ available: available & ~taken, capped });
         if (taken === 0) break;
       }
@@ -107,6 +114,21 @@ function windows<C>(hand: readonly C[]): {
   whole: readonly C[];
 } {
   return { opening: hand.slice(0, -1), drawn: hand.slice(-1), whole: hand };
+}
+
+/**
+ * Whether the hand positions in `taken` hold pairwise DIFFERENT cards — what a
+ * `unique` requirement asks of the cards it takes. Equal entries of a hand are
+ * copies of one card, so this is plain equality and nothing else.
+ */
+function allDifferent<C>(taken: number, hand: readonly C[]): boolean {
+  const seen = new Set<C>();
+  for (let position = 0; position < hand.length; position++) {
+    if ((taken & (1 << position)) === 0) continue;
+    if (seen.has(hand[position]!)) return false;
+    seen.add(hand[position]!);
+  }
+  return true;
 }
 
 function popcount(mask: number): number {
@@ -178,6 +200,8 @@ export function satisfiesFlat<C>(
     if (hand.filter((card) => fills(card, desc)).length > n) return false;
 
   const taken = flat.reqs.map(() => 0);
+  /** The cards each requirement holds, for a `unique` one: it may not take a second copy of any. */
+  const holding = flat.reqs.map(() => [] as C[]);
   const capped = flat.reqs.filter(({ max }) => max !== undefined);
   const assign = (position: number): boolean => {
     if (position === hand.length) return flat.reqs.every(({ n }, at) => taken[at]! >= n);
@@ -185,8 +209,11 @@ export function satisfiesFlat<C>(
     for (let at = 0; at < flat.reqs.length; at++) {
       const req = flat.reqs[at]!;
       if (taken[at]! >= (req.max ?? hand.length) || !fills(card, req.desc)) continue;
+      if (req.unique === true && holding[at]!.includes(card)) continue;
       taken[at]!++;
+      holding[at]!.push(card);
       const done = assign(position + 1);
+      holding[at]!.pop();
       taken[at]!--;
       if (done) return true;
     }

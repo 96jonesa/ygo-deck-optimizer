@@ -88,17 +88,25 @@ const WINDOW_SUFFIX = ['', ' drawn', ' in the whole hand'] as const;
 
 function countsOf(
   appearsIn: readonly Appearance[],
-  say: (n: number, max: number | undefined) => string,
+  say: (n: number, max: number | undefined, unique: boolean) => string,
 ): string {
   const seen = new Map<string, Appearance>();
   for (const appearance of appearsIn)
-    seen.set(`${appearance.n}-${appearance.max ?? ''}-${windowOf(appearance)}`, appearance);
+    seen.set(
+      `${appearance.n}-${appearance.max ?? ''}-${appearance.unique === true ? 'u' : ''}-${windowOf(appearance)}`,
+      appearance,
+    );
   return [...seen.values()]
     .sort(
-      (a, b) => windowOf(a) - windowOf(b) || a.n - b.n || (a.max ?? Infinity) - (b.max ?? Infinity),
+      (a, b) =>
+        windowOf(a) - windowOf(b) ||
+        a.n - b.n ||
+        (a.max ?? Infinity) - (b.max ?? Infinity) ||
+        Number(a.unique === true) - Number(b.unique === true),
     )
     .map(
-      (appearance) => `${say(appearance.n, appearance.max)}${WINDOW_SUFFIX[windowOf(appearance)]}`,
+      (appearance) =>
+        `${say(appearance.n, appearance.max, appearance.unique === true)}${WINDOW_SUFFIX[windowOf(appearance)]}`,
     )
     .join(' / ');
 }
@@ -195,12 +203,13 @@ export function requirementRows(analysis: Analysis | null): RequirementRow[] {
 }
 
 /**
- * `1x`, `1-2x` for a range, `exactly 2x` when its ends agree: what `analyze`
- * and the criterion text both call it. Core says the same thing in
- * `countPrefix`, which the renderer may not import; the two are kept in step
- * by tests on either side, not by sharing.
+ * `1x`, `1-2x` for a range, `exactly 2x` when its ends agree, `3x unique` for
+ * different cards: what `analyze` and the criterion text both call it. Core
+ * says the same thing in `countPrefix`, which the renderer may not import; the
+ * two are kept in step by tests on either side, not by sharing.
  */
-function countLabel(n: number, max: number | undefined): string {
+function countLabel(n: number, max: number | undefined, unique: boolean): string {
+  if (unique) return `${n}x unique`;
   if (max === undefined) return `${n}x`;
   return max === n ? `exactly ${n}x` : `${n}-${max}x`;
 }

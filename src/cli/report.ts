@@ -112,7 +112,8 @@ const WINDOW_SUFFIX = ['', ' drawn', ' in the whole hand'] as const;
  * The counts a requirement or a limit appears under, as the criteria editor
  * writes them: distinct counts joined by `/`, and a range kept apart from the
  * plain count it would otherwise read as — `1x monster` and `1-2x monster` are
- * different criteria and must not print alike.
+ * different criteria and must not print alike — and so is `3x unique monster`
+ * kept apart from `3x monster`.
  *
  * An appearance asked of the SIXTH CARD, or of the WHOLE HAND by a `finally`
  * part, is kept apart from the same count asked of the criterion's own window,
@@ -126,13 +127,17 @@ function countsOf(
 ): string {
   const seen = new Map<string, Appearance>();
   for (const appearance of appearsIn)
-    seen.set(`${appearance.n}-${appearance.max ?? ''}-${windowOf(appearance)}`, appearance);
+    seen.set(
+      `${appearance.n}-${appearance.max ?? ''}-${appearance.unique === true ? 'u' : ''}-${windowOf(appearance)}`,
+      appearance,
+    );
   return [...seen.values()]
     .sort(
       (x, y) =>
         windowOf(x) - windowOf(y) ||
         x.n - y.n ||
-        (x.max ?? Number.POSITIVE_INFINITY) - (y.max ?? Number.POSITIVE_INFINITY),
+        (x.max ?? Number.POSITIVE_INFINITY) - (y.max ?? Number.POSITIVE_INFINITY) ||
+        Number(x.unique === true) - Number(y.unique === true),
     )
     .map((appearance) => `${say(appearance)}${WINDOW_SUFFIX[windowOf(appearance)]}`)
     .join(' / ');
@@ -146,7 +151,7 @@ export function matchingSection(a: Analysis): string {
   const rows = [
     ...a.requirements.map((r) => [
       'requirement',
-      `${countsOf(r.appearsIn, ({ n, max }) => countPrefix(n, max))} ${r.text}`,
+      `${countsOf(r.appearsIn, ({ n, max, unique }) => countPrefix(n, max, unique))} ${r.text}`,
       `[${r.echo}]`,
       `filled by: ${namesOf(r.filledBy)}`,
     ]),
