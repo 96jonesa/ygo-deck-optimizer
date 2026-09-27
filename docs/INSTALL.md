@@ -15,7 +15,7 @@ The app is **not distributed to anyone** (PRD §13, F2). It is built for Andy's 
 
 ### From a release
 
-Releases live on this repository, which is private — so you can download them while signed in to GitHub, and nobody else can. Take the file for your platform from the [latest release](https://github.com/96jonesa/ygo-deck-optimizer/releases):
+Releases live on this repository — anyone can download them. Take the file for your platform from the [latest release](https://github.com/96jonesa/ygo-deck-optimizer/releases):
 
 | Platform | File | What to do with it |
 | --- | --- | --- |

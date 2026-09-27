@@ -16,7 +16,18 @@ files:
   - out/**
   - package.json
   - LICENSE
+# Beside the app rather than only inside app.asar, where nobody can read them:
+# the AGPL text of the app itself, and the licenses of the third-party packages
+# bundled into it (`npm run notices`, which `package:*` runs first).
+extraResources:
+  - from: LICENSE
+    to: LICENSE
+  - from: out/THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
 npmRebuild: false
+# Puts Electron's and Chromium's licenses inside the macOS app before signing;
+# on macOS electron-builder unpacks only `Electron.app` and would drop them.
+afterPack: scripts/after-pack.cjs
 # The release workflow owns publishing; electron-builder must never try, which
 # it otherwise attempts on CI and fails wanting a token.
 publish: null

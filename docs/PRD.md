@@ -10,7 +10,7 @@ Yu-Gi-Oh! theorycrafters tune deck ratios ("how many copies of this combo enable
 
 **ygo-deck-optimizer** is a concept-aware layer on top of hypergeometric calculation. The user writes a **deck template** once — lines that are either a literal card name or a Yu-Gi-Oh! description ("level 4 monster", "FIRE Beast-Warrior monster", "normal spell"), each with a min/max copy count — plus one or more opening-hand **success criteria**. The tool looks up what every named card actually is, works out which lines can satisfy which requirements, enumerates every valid deck ratio totalling the deck size, and reports the ratios with the best probability that the opening hand satisfies at least one criterion.
 
-It is a standalone desktop app (Electron, macOS and Windows) that reads card data from the user's EDOPro install: **no game engine, no replays, no combo solver** — combinatorial probability plus a card-database lookup layer. It is **proprietary** for now (§4.4).
+It is a standalone desktop app (Electron, macOS and Windows) that reads card data from the user's EDOPro install: **no game engine, no replays, no combo solver** — combinatorial probability plus a card-database lookup layer. It is free software under the **GNU AGPL v3 or later** (§4.4).
 
 ## 2. Goals and non-goals
 
@@ -98,13 +98,14 @@ Monte Carlo still earns its place — as an **independent oracle** in the test s
 
 ### 4.4 License
 
-**Proprietary — all rights reserved, for now** (Andy, 2026-09-17), conditional on no dependency forcing otherwise. None does:
+**GNU AGPL v3 or later** (Andy, 2026-09-26), matching the sibling repo, as part of making the repository public. It was proprietary before that — "all rights reserved, for now" (Andy, 2026-09-17) — and nothing below changed with the license except its conclusion:
 
 - The sibling toolchain's full installed tree (390 packages) was scanned: MIT, ISC, BSD-2/3-Clause, Apache-2.0, BlueOak-1.0.0, 0BSD, WTFPL, Python-2.0, CC-BY-4.0 — **no GPL/AGPL/LGPL/MPL or other copyleft**. The runtime dependencies that actually ship (`react`, `react-dom`, `sql.js`, `zustand`) are all MIT, as is Electron.
-- The only obligation permissive licenses impose is **attribution**: distributed builds carry a generated third-party-notices file for bundled npm packages, alongside the Electron/Chromium notices electron-builder already ships.
+- Every dependency license on the allowlist is **compatible with the AGPL**. The only obligation they impose is **attribution**: the installers ship `THIRD_PARTY_NOTICES.md`, generated from the production dependency tree at package time, beside the app's own `LICENSE`, and Electron's and Chromium's licenses (`LICENSE.electron.txt`, `LICENSES.chromium.html`). Those two were believed to ship already and did not on macOS, where electron-builder unpacks only `Electron.app` from Electron's zip; an `afterPack` hook now copies them in before signing. (This was written as a plan in 2026-09 and first actually implemented with the license change; until then the builds carried no notices.)
+- Distributing builds under the AGPL means offering the **corresponding source**: the repository is public, and each release names its tag.
 - The code lifted from the sibling repo is AGPL *there*, but every commit in that repo — including `carddb.ts` — is Andy's, so as sole copyright holder he can reuse it here under any terms. The AGPL solver binary is not used.
 - Card data is read from the user's own EDOPro install and never redistributed (§7), so it raises no licensing question.
-- In practice: `"private": true` and `"license": "UNLICENSED"` in `package.json`, a short all-rights-reserved `LICENSE`, and a CI license check that fails on any copyleft dependency so the condition stays true.
+- In practice: `"license": "AGPL-3.0-or-later"` in `package.json` (`"private": true` stays — it only stops publishing to npm), the full AGPL text in `LICENSE`, a copyright and license line in the app's footer, and a CI license check that keeps dependencies permissive — narrower than the AGPL requires, so admitting copyleft is a deliberate decision.
 
 ## 5. The model
 
@@ -421,7 +422,7 @@ The check is built before the thing it checks; each novel layer gets an independ
 | Exact scorer subtly wrong | Confidently wrong numbers, invisible by inspection | Independent Monte Carlo differential gate in CI (§10) |
 | EDOPro requirement excludes paper / Master Duel-only players | Smaller audience | Accepted (D3/D4); EDOPro is free and the setup step is one folder pick |
 | `strings.conf` missing or in an unexpected place | Archetype descriptions unavailable | Degrade gracefully with a visible "archetype names not found" state; everything else works |
-| Proprietary app in a private repo has no obvious download/update channel | Users cannot get builds; the sibling's update flow assumes public releases | Follow-up F2 — decide before M4 |
+| App with no download/update channel | Users cannot get builds; the sibling's update flow assumes public releases | Follow-up F2 — releases on the repository; public since 2026-09-26 |
 
 ## 12. Milestones
 
@@ -433,7 +434,7 @@ One PR per slice (M0a, M0b, …) as in the sibling project, stacked where slices
 | M1 | Exact engine + optimizer (headless) | Exact scorer; exhaustive optimizer with reductions, progress and cancel; `optimize template.json` in the harness; differential gate vs Monte Carlo and the lower-bound property test in CI | The harness reproduces the motivating example end to end with exact numbers; all §10 oracles green |
 | M2 | App MVP | EDOPro first-run setup; typed IPC + worker; card picker; template and criteria editors with parse echo, "filled by" / near-miss readouts, warnings; ranked table, plateau, sweep chart; template save/load; CSV/JSON export | The originator can answer their real "how many copies?" question in the app without help |
 | M3 | Polish | `.ydk` import/export; going-first/second blend; `docs/GUIDE.md` | A template file reproduces a result exactly on another machine |
-| M4 | A build Andy can run | electron-builder config, `npm run package:mac`, a release workflow that attaches the DMG to a release on this private repo, `docs/INSTALL.md`. Signing, notarization, an update channel and generated notices are all deferred with F2 | Andy can download a release and open the app without a terminal |
+| M4 | A build Andy can run | electron-builder config, `npm run package:mac`, a release workflow that attaches the DMG to a release on this repo (private then, public since 2026-09-26), `docs/INSTALL.md`. Signing, notarization, an update channel and generated notices were deferred with F2; notices shipped with the AGPL change | Andy can download a release and open the app without a terminal |
 | Later | Scale and depth | §9, driven by what M2–M3 users actually ask for | — |
 
 ## 13. Decisions
@@ -448,13 +449,13 @@ One PR per slice (M0a, M0b, …) as in the sibling project, stacked where slices
 | **D5** | Limits (`at most n×`) and user-defined groups in the MVP | **Resolved: yes to both** |
 | **D6** | Objective | **Resolved: single objective** $`P(\text{success})`$ + plateau + sweep; multi-objective later |
 | **D7** | Exact scoring as the engine, Monte Carlo as the test oracle | **Resolved: yes** |
-| — | License | **Resolved: proprietary for now** (§4.4); no dependency forces otherwise |
+| — | License | **Resolved: AGPL-3.0-or-later** (Andy, 2026-09-26; §4.4), replacing "proprietary for now" |
 
 Open follow-up:
 
 | # | Question | Recommendation |
 | --- | --- | --- |
-| **F2** | How do users get builds and updates of a proprietary app from a private repo? | **Resolved (Andy, 2026-09-19): descoped — nobody else gets builds yet.** The app only has to be runnable by Andy, so releases on this private repo are the whole channel: he is authenticated, so he can download his own assets, while the token problem that rules the GitHub provider out for *public* distribution never arises. No signing, no notarization, no updater, no third-party-notices obligation (nothing is distributed). All of that returns the day the tool is given to someone else; the Apple enrolment is the long-lead item |
+| **F2** | How do users get builds and updates of a proprietary app from a private repo? | **Resolved (Andy, 2026-09-19): descoped — nobody else gets builds yet.** The app only has to be runnable by Andy, so releases on this private repo are the whole channel: he is authenticated, so he can download his own assets, while the token problem that rules the GitHub provider out for *public* distribution never arises. No signing, no notarization, no updater, no third-party-notices obligation (nothing is distributed). All of that returns the day the tool is given to someone else; the Apple enrolment is the long-lead item. **Update 2026-09-26:** the repository is now public under the AGPL, so releases are downloadable by anyone and the builds ship third-party notices; signing and an updater remain deferred |
 
 ## 14. Success criteria
 

@@ -859,10 +859,20 @@ Use **npm 11 or newer** for anything that changes the dependency tree
 (`Cannot read properties of null (reading 'edgesOut')`). `npm ci` from the
 lockfile works on any npm, which is what CI and day-to-day installs use.
 
-Every new dependency must pass `npm run check:licenses`: the project is
-proprietary on the condition that nothing in the tree is copyleft, and CI fails
-on any license outside the allowlist in `scripts/check-licenses.mjs`.
+Every new dependency must pass `npm run check:licenses`: CI fails on any license
+outside the allowlist in `scripts/check-licenses.mjs`, which admits only
+permissive licenses — all compatible with the AGPL, and deliberately narrower
+than it requires. The packaged app ships the licenses of the third-party
+packages bundled into it as `THIRD_PARTY_NOTICES.md` (`npm run notices`, run by
+`package:mac` and `package:win`).
 
 ## License
 
-Proprietary — all rights reserved. See [LICENSE](LICENSE).
+Copyright © 2026 Andrew Jones.
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. It is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See [LICENSE](LICENSE) for the full text.

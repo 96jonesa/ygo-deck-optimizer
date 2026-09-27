@@ -362,12 +362,18 @@ code,
 
 .footer {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-3);
   padding: var(--sp-2) var(--sp-4);
   border-top: 1px solid var(--line);
   background: var(--bg-panel);
   color: var(--text-dim);
   font-size: var(--fs-sm);
+}
+
+/* The license notice sits at the far end, away from the version it is not about. */
+.footer-legal {
+  margin-left: auto;
 }
 
 /* --- forms -------------------------------------------------------------- */

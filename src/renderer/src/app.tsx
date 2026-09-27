@@ -99,6 +99,13 @@ function Footer() {
           Electron {info.electron} · Node {info.node} · Chromium {info.chrome}
         </span>
       )}
+      {/* The AGPL's "Appropriate Legal Notices" (§0, §5d): copyright, that it
+          comes with no warranty, the license, and where the source is. Plain
+          text, not a link, so it needs no path out to the system browser. */}
+      <span className="footer-legal" data-testid="footer-legal">
+        © 2026 Andrew Jones · Free software under the GNU AGPL v3 or later, with no warranty ·
+        Source: github.com/96jonesa/ygo-deck-optimizer
+      </span>
     </footer>
   );
 }

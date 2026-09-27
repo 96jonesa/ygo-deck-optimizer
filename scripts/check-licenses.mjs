@@ -1,7 +1,10 @@
-// License gate (TDD §17, PRD §4.4). The project is proprietary on the condition
-// that no dependency forces otherwise, so CI fails on any installed package
-// whose license is not on this ALLOWLIST. An allowlist, not a denylist: a
-// denylist passes anything it has never heard of.
+// License gate (TDD §17, PRD §4.4). The project is AGPL-3.0-or-later, and CI
+// fails on any installed package whose license is not on this ALLOWLIST. Every
+// license here is compatible with the AGPL. The list is deliberately NARROWER
+// than compatibility requires — GPL-3.0, LGPL-3.0 and MPL-2.0 dependencies
+// would be lawful too — so admitting copyleft is a decision made on purpose,
+// not something a new dependency does by accident. An allowlist, not a
+// denylist: a denylist passes anything it has never heard of.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
