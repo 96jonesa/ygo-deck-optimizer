@@ -53,7 +53,7 @@ npm run package:win      # → dist/YGO Deck Optimizer-Setup-<version>.exe   (ru
 
 Each platform builds its own installer; neither cross-compiles the other.
 
-Use **npm 11 or newer** if you change dependencies (`npx npm@11 install …`); `npm ci` itself works on any npm. See the README.
+Use **npm 11 or newer** if you change dependencies (`npx npm@11 install …`); `npm ci` itself works on any npm. See [Development](DEVELOPMENT.md#adding-or-upgrading-dependencies).
 
 ### Cutting a release
 
