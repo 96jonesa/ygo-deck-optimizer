@@ -1,7 +1,6 @@
 # Builds double-clickable apps for macOS and Windows and attaches them to a
-# release on this (private) repo — which is all the distribution F2 asks for:
-# Andy is authenticated, so he can download his own release assets. Nothing
-# here signs or notarizes.
+# release on this repo (public, AGPL-3.0-or-later). The macOS app is ad-hoc
+# signed and gated by a signature check below; nothing here notarizes.
 #
 # Push a tag to publish:      git tag v0.2.0 && git push origin v0.2.0
 # Or run it by hand for a dry run: both installers land as workflow artifacts
@@ -46,6 +45,8 @@ jobs:
           - **Windows (x64)** — `.exe`. SmartScreen says "Windows protected your PC": **More info** → **Run anyway**.
 
           [EDOPro](https://projectignis.github.io/) must be installed; the app reads its card data and never uploads anything. See `docs/INSTALL.md`.
+
+          Free software under the GNU AGPL v3 or later. Source: this repository at this release's tag. Third-party licenses ship inside the app as `THIRD_PARTY_NOTICES.md`.
           NOTES
           )"
 

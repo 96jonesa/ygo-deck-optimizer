@@ -15,11 +15,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check:licenses": "node scripts/check-licenses.mjs",
+    "notices": "node scripts/third-party-notices.mjs out/THIRD_PARTY_NOTICES.md",
     "cli": "tsx src/cli/index.ts",
-    "package:mac": "electron-vite build && electron-builder --mac",
-    "package:win": "electron-vite build && electron-builder --win"
+    "package:mac": "electron-vite build && npm run notices && electron-builder --mac",
+    "package:win": "electron-vite build && npm run notices && electron-builder --win"
   },
-  "license": "UNLICENSED",
+  "license": "AGPL-3.0-or-later",
   "author": "Andrew Jones",
   "repository": {
     "type": "git",
